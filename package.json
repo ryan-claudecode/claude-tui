@@ -2,7 +2,7 @@
   "name": "claude-tui-app",
   "version": "0.1.0",
   "description": "Cross-platform terminal multiplexer for Claude Code sessions",
-  "main": "./out/main/index.js",
+  "main": "./out/main/main.mjs",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
