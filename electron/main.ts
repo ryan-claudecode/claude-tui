@@ -13,7 +13,7 @@ function createWindow() {
     title: "ClaudeTUI",
     backgroundColor: "#0d1117",
     webPreferences: {
-      preload: join(__dirname, "../preload/preload.mjs"),
+      preload: join(__dirname, "../preload/index.js"),
       nodeIntegration: false,
       contextIsolation: true,
     },
