@@ -45,7 +45,7 @@ export interface SessionServiceOpts {
 export interface TerminalLike {
   create(name?: string, cwd?: string, sessionId?: string): { id: string; name: string; cwd: string; state: string }
   kill(id: string): boolean
-  onEvent(cb: (e: { type: "created" | "state" | "exit"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string } }) => void): () => void
+  onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string }) => void): () => void
 }
 
 interface MainWinLike {
@@ -71,6 +71,9 @@ export class SessionService {
     terminals.onEvent((e) => {
       if (e.type === "state" && e.id && e.state) this.reconcile(e.id, e.state)
       else if (e.type === "exit" && e.id) this.reconcile(e.id, "dead")
+      else if (e.type === "convo" && e.id && e.ccConversationId) {
+        this.recordConversationId(e.id, e.ccConversationId)
+      }
     })
   }
 
@@ -83,6 +86,16 @@ export class SessionService {
   /** Find the session owning a live terminal id. */
   private sessionOf(terminalId: string): WorkSession | undefined {
     return [...this.sessions.values()].find((s) => s.terminals.some((t) => t.id === terminalId))
+  }
+
+  /** Persist Claude Code's conversation id onto the terminal ref for --resume. */
+  private recordConversationId(terminalId: string, ccConversationId: string): void {
+    const s = this.sessionOf(terminalId)
+    if (!s) return
+    const t = s.terminals.find((x) => x.id === terminalId)
+    if (!t || t.ccConversationId === ccConversationId) return
+    t.ccConversationId = ccConversationId
+    this.persist(s)
   }
 
   /** Fold a live terminal's state into its ref + recompute session status; persist + emit. */

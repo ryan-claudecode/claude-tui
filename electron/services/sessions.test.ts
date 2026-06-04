@@ -346,6 +346,20 @@ describe("SessionService orchestration", () => {
   })
 })
 
+describe("SessionService convo recording", () => {
+  it("records ccConversationId when the terminal emits a convo event", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+
+    term.emit({ type: "convo", id: terminalId, ccConversationId: "abc-123" })
+
+    const ref = svc.get(session.id)!.terminals.find((t) => t.id === terminalId)
+    expect(ref?.ccConversationId).toBe("abc-123")
+  })
+})
+
 describe("SessionService identity-bound spawn", () => {
   it("spawns terminals with their work-session id (for identity-bound MCP) and pastes nothing", () => {
     const term = new FakeTerminals()

@@ -1,7 +1,7 @@
 import * as pty from "node-pty"
 import { existsSync, writeFileSync, mkdirSync, readdirSync, statSync } from "fs"
 import { join } from "path"
-import { tmpdir } from "os"
+import { tmpdir, homedir } from "os"
 import { BrowserWindow } from "electron"
 
 /**
@@ -80,6 +80,7 @@ export type TerminalEvent =
   | { type: "created"; info: TerminalInfo }
   | { type: "state"; id: string; state: "active" | "idle" | "dead" }
   | { type: "exit"; id: string }
+  | { type: "convo"; id: string; ccConversationId: string }
 
 /** Wrap a command in a shell so PATH resolution works reliably in Electron */
 function shellWrap(command: string, args: string[]): { shell: string; shellArgs: string[] } {
@@ -120,6 +121,7 @@ export class TerminalService {
   private mainWin: BrowserWindow | null = null
   private mcpConfigPath: string | null = null
   private mcpServerUrl: string | null = null
+  private ccProjectsRoot = join(homedir(), ".claude", "projects")
   private defaultCommand = "claude"
   private defaultArgs = ["--dangerously-skip-permissions"]
   /** Quiet period after which a live session is considered idle (waiting). */
@@ -308,7 +310,28 @@ export class TerminalService {
     const info: TerminalInfo = { id, name: sessionName, cwd: sessionCwd, state: "active" }
     this.sendToRenderer("session:created", info)
     this.emitEvent({ type: "created", info })
+    this.captureConversationId(id, sessionCwd, Date.now())
     return info
+  }
+
+  /**
+   * Poll briefly for the Claude Code transcript this terminal just started
+   * writing, and emit a `convo` event once found so the container can record
+   * ccConversationId for --resume. Best-effort: gives up after a few seconds
+   * (the durable session record, not CC internals, is the source of truth).
+   */
+  private captureConversationId(id: string, cwd: string, spawnedAt: number): void {
+    let attempts = 0
+    const timer = setInterval(() => {
+      attempts++
+      const convoId = resolveTranscriptId(this.ccProjectsRoot, cwd, spawnedAt)
+      if (convoId) {
+        this.emitEvent({ type: "convo", id, ccConversationId: convoId })
+        clearInterval(timer)
+      } else if (attempts >= 10 || !this.sessions.has(id)) {
+        clearInterval(timer)
+      }
+    }, 1000)
   }
 
   kill(id: string): boolean {
