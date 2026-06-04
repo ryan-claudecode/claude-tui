@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, protocol } from "electron"
 import { join } from "path"
 import { setupIpc } from "./ipc"
 
@@ -16,8 +16,8 @@ function createWindow() {
       preload: join(__dirname, "../preload/index.js"),
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: false,
     },
-    // frameless for custom title bar later, but keep frame for now
     frame: true,
   })
 
@@ -26,8 +26,13 @@ function createWindow() {
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
+    const rendererPath = join(__dirname, "../renderer/index.html")
+    console.log("Loading renderer from:", rendererPath)
+    mainWindow.loadFile(rendererPath)
   }
+
+  // Open DevTools in dev for debugging
+  mainWindow.webContents.openDevTools()
 }
 
 app.whenReady().then(createWindow)
