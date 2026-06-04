@@ -2475,3 +2475,109 @@ body {
   color: var(--text-2);
   line-height: 1.45;
 }
+
+/* ── Notes panel ─────────────────────────────────────────── */
+.notes-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.notes-header {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-4) var(--s-4) var(--s-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.notes-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text-0);
+}
+.notes-count {
+  margin-left: auto;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--bg-4);
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.notes-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s-3) var(--s-4) var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.note-card {
+  background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-lg);
+  padding: var(--s-3);
+  box-shadow: var(--shadow-1);
+  transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease),
+    border-color var(--fast) var(--ease);
+}
+.note-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-2);
+  border-color: var(--border-strong);
+}
+.note-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+.note-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-0);
+  line-height: 1.35;
+}
+.note-card-when {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.note-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1);
+  margin-top: var(--s-2);
+}
+.note-scope {
+  font-size: 10px;
+  font-family: var(--mono, monospace);
+  color: var(--text-2);
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm, 4px);
+  padding: 1px 6px;
+}
+.note-tag {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-bright);
+  border: 1px solid var(--accent-dim);
+  border-radius: 999px;
+  padding: 1px 7px;
+  letter-spacing: 0.02em;
+}
+.note-card-body {
+  margin-top: var(--s-2);
+  font-size: 12.5px;
+  color: var(--text-1);
+}
+.note-card-body > *:first-child { margin-top: 0; }
+.note-card-body > *:last-child { margin-bottom: 0; }
