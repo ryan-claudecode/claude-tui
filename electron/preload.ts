@@ -6,8 +6,12 @@ contextBridge.exposeInMainWorld("api", {
   killSession: (id: string) => ipcRenderer.invoke("session:kill", id),
   focusSession: (id: string) => ipcRenderer.invoke("session:focus", id),
   getSessions: () => ipcRenderer.invoke("session:list"),
+  getSessionActivity: () => ipcRenderer.invoke("session:activity"),
   writeToSession: (id: string, data: string) => ipcRenderer.send("session:write", id, data),
   resizeSession: (id: string, cols: number, rows: number) => ipcRenderer.send("session:resize", id, cols, rows),
+  getSessionOutput: (id: string, maxChars?: number) => ipcRenderer.invoke("session:get-output", id, maxChars),
+  searchSessionOutput: (query: string, sessionId?: string, limit?: number) =>
+    ipcRenderer.invoke("session:search-output", query, sessionId, limit),
 
   // Workspace management
   getWorkspaces: () => ipcRenderer.invoke("workspace:list"),
@@ -60,6 +64,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("session:exit", (_e, id) => callback(id)),
   onSessionCreated: (callback: (session: any) => void) =>
     ipcRenderer.on("session:created", (_e, session) => callback(session)),
+  onSessionState: (callback: (id: string, state: string) => void) =>
+    ipcRenderer.on("session:state", (_e, id, state) => callback(id, state)),
 
   // Split pane events from main (triggered by MCP tools)
   onSplitSet: (callback: (leftId: string, rightId: string) => void) =>

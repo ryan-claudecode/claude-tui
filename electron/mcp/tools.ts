@@ -619,4 +619,16 @@ export function registerTools(
       }
     },
   )
+
+  server.tool(
+    "get_session_activity",
+    "Report per-session activity: which sessions are actively working (producing output) vs. idle (gone quiet, likely waiting for input), and how many milliseconds each has been idle. Use this to tell which background session needs attention without watching every terminal.",
+    {},
+    async () => {
+      const activity = sessions.getActivity()
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(activity, null, 2) }],
+      }
+    },
+  )
 }

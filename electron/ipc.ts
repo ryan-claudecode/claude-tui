@@ -69,6 +69,7 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("session:kill", (_e, id: string) => sessionService.kill(id))
   ipcMain.handle("session:focus", (_e, id: string) => sessionService.focus(id))
   ipcMain.handle("session:list", () => sessionService.list())
+  ipcMain.handle("session:activity", () => sessionService.getActivity())
   ipcMain.handle("session:rename", (_e, id: string, newName: string) =>
     sessionService.rename(id, newName),
   )
@@ -78,6 +79,14 @@ export async function setupIpc(win: BrowserWindow) {
   )
   ipcMain.on("session:resize", (_e, id: string, cols: number, rows: number) =>
     sessionService.resize(id, cols, rows),
+  )
+  ipcMain.handle("session:get-output", (_e, id: string, maxChars?: number) =>
+    sessionService.getOutput(id, maxChars),
+  )
+  ipcMain.handle(
+    "session:search-output",
+    (_e, query: string, sessionId?: string, limit?: number) =>
+      sessionService.searchOutput(query, sessionId, limit),
   )
 
   // Workspace IPC

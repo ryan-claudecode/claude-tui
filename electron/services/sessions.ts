@@ -16,6 +16,17 @@ interface Session {
   cwd: string
   pty: pty.IPty
   state: "active" | "idle" | "dead"
+  /** Epoch ms of the last terminal output — drives idle detection. */
+  lastActivity: number
+}
+
+/** Per-session activity snapshot for the "which session needs me?" view. */
+export interface SessionActivity {
+  id: string
+  name: string
+  state: "active" | "idle" | "dead"
+  /** Milliseconds since the session last produced output. */
+  idleMs: number
 }
 
 /** Wrap a command in a shell so PATH resolution works reliably in Electron */
@@ -58,9 +69,39 @@ export class SessionService {
   private mcpConfigPath: string | null = null
   private defaultCommand = "claude"
   private defaultArgs = ["--dangerously-skip-permissions"]
+  /** Quiet period after which a live session is considered idle (waiting). */
+  private readonly idleThresholdMs = 1500
+  private idleTimer: ReturnType<typeof setInterval> | null = null
 
   setMainWindow(win: BrowserWindow) {
     this.mainWin = win
+    this.startIdleMonitor()
+  }
+
+  /**
+   * Poll for sessions that have gone quiet and flip them active → idle. A single
+   * shared timer covers every session, so cost is O(sessions) once per second.
+   */
+  private startIdleMonitor() {
+    if (this.idleTimer) return
+    this.idleTimer = setInterval(() => {
+      const now = Date.now()
+      for (const session of this.sessions.values()) {
+        if (session.state === "active" && now - session.lastActivity > this.idleThresholdMs) {
+          session.state = "idle"
+          this.sendToRenderer("session:state", session.id, "idle")
+        }
+      }
+    }, 1000)
+  }
+
+  /** Record output activity and flip a session back to active if it was idle. */
+  private markActive(session: Session) {
+    session.lastActivity = Date.now()
+    if (session.state === "idle") {
+      session.state = "active"
+      this.sendToRenderer("session:state", session.id, "active")
+    }
   }
 
   setMcpConfigPath(path: string) {
@@ -82,6 +123,7 @@ export class SessionService {
     session.pty.onData((data) => {
       this.sendToRenderer("session:data", session.id, data)
       this.captureOutput(session.id, data)
+      this.markActive(session)
     })
 
     session.pty.onExit(() => {
@@ -111,6 +153,7 @@ export class SessionService {
 
           session.pty = newProc
           session.state = "active"
+          session.lastActivity = Date.now()
           this.attachPtyListeners(session)
 
           this.sendToRenderer("session:created", {
@@ -153,6 +196,7 @@ export class SessionService {
       cwd: sessionCwd,
       pty: proc,
       state: "active",
+      lastActivity: Date.now(),
     }
 
     this.sessions.set(id, session)
@@ -224,6 +268,21 @@ export class SessionService {
     }))
   }
 
+  /**
+   * Per-session activity snapshot: which sessions are actively working vs. idle
+   * (waiting for input), and how long each has been quiet. Lets a user — or
+   * Claude itself — tell at a glance which background session needs attention.
+   */
+  getActivity(): SessionActivity[] {
+    const now = Date.now()
+    return Array.from(this.sessions.values()).map((s) => ({
+      id: s.id,
+      name: s.name,
+      state: s.state,
+      idleMs: now - s.lastActivity,
+    }))
+  }
+
   rename(id: string, newName: string): boolean {
     const session = this.sessions.get(id)
     if (!session) return false
@@ -275,5 +334,9 @@ export class SessionService {
     }
     this.sessions.clear()
     this.outputBuffers.clear()
+    if (this.idleTimer) {
+      clearInterval(this.idleTimer)
+      this.idleTimer = null
+    }
   }
 }
