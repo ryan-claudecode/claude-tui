@@ -457,6 +457,8 @@ export function registerTools(
     },
     async ({ session_id, terminal_id, name, cwd }) => {
       workSessions.addTerminal(session_id, { id: terminal_id, name, cwd, lastState: "active" })
+      // Seed the session name from the first terminal while it's still a placeholder.
+      workSessions.nameTerminal(session_id, terminal_id, name)
       const s = workSessions.get(session_id)
       return { content: [{ type: "text" as const, text: s ? JSON.stringify(s, null, 2) : "Work session not found" }] }
     },
