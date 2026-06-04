@@ -16,6 +16,7 @@ import LogPanel from "./panels/LogPanel"
 import ProgressPanel from "./panels/ProgressPanel"
 import CodePanel from "./panels/CodePanel"
 import HeatmapPanel from "./panels/HeatmapPanel"
+import MissionPanel from "./panels/MissionPanel"
 
 export interface PanelState {
   id: string
@@ -32,6 +33,8 @@ interface Props {
   onClose: (id: string) => void
   // Sends text into the active session (used by the diff panel's review button).
   onSendToSession?: (text: string) => boolean
+  onMissionStop?: (id: string) => void
+  onMissionPause?: (id: string) => void
 }
 
 const PANEL_LABELS: Record<string, string> = {
@@ -52,9 +55,10 @@ const PANEL_LABELS: Record<string, string> = {
   progress: "Progress",
   code: "Code",
   heatmap: "Heatmap",
+  mission: "Mission",
 }
 
-export default function PanelDrawer({ panels, onClose, onSendToSession }: Props) {
+export default function PanelDrawer({ panels, onClose, onSendToSession, onMissionStop, onMissionPause }: Props) {
   const visiblePanels = panels.filter((p) => p.visible)
   const [activeIdx, setActiveIdx] = useState(0)
 
@@ -137,7 +141,7 @@ export default function PanelDrawer({ panels, onClose, onSendToSession }: Props)
         </div>
       </div>
       <div className="panel-body">
-        <PanelContent panel={panel} onSendToSession={onSendToSession} />
+        <PanelContent panel={panel} onSendToSession={onSendToSession} onMissionStop={onMissionStop} onMissionPause={onMissionPause} />
       </div>
     </div>
   )
@@ -146,9 +150,13 @@ export default function PanelDrawer({ panels, onClose, onSendToSession }: Props)
 function PanelContent({
   panel,
   onSendToSession,
+  onMissionStop,
+  onMissionPause,
 }: {
   panel: PanelState
   onSendToSession?: (text: string) => boolean
+  onMissionStop?: (id: string) => void
+  onMissionPause?: (id: string) => void
 }) {
   switch (panel.type) {
     case "diff":
@@ -185,6 +193,8 @@ function PanelContent({
       return <CodePanel {...panel.props} />
     case "heatmap":
       return <HeatmapPanel {...panel.props} />
+    case "mission":
+      return <MissionPanel {...panel.props} onStop={onMissionStop} onPause={onMissionPause} />
     default:
       return <pre className="panel-raw">{JSON.stringify(panel.props, null, 2)}</pre>
   }
