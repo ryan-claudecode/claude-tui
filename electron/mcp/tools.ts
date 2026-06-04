@@ -216,9 +216,9 @@ export function registerTools(
 
   server.tool(
     "show_panel",
-    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, or test). For interactive forms that return user input, use show_form instead.",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, or chart). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }.",
     {
-      type: z.enum(["diff", "image", "markdown", "table", "test"]).describe("Panel type"),
+      type: z.enum(["diff", "image", "markdown", "table", "test", "chart"]).describe("Panel type"),
       props: z.record(z.any()).describe("Panel-specific data"),
       position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
     },

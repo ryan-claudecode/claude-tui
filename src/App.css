@@ -1874,3 +1874,112 @@ body {
 .app.zen .tab-bar {
   display: none;
 }
+
+/* ============================================================
+   Chart panel — dependency-free SVG bar / line / pie charts
+   ============================================================ */
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--s-4);
+  gap: var(--s-3);
+  overflow: auto;
+}
+.chart-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text-0);
+}
+.chart-canvas {
+  flex: 1;
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chart-svg {
+  width: 100%;
+  height: 100%;
+  max-height: 420px;
+}
+.chart-svg.chart-pie { max-width: 360px; }
+
+.chart-grid { stroke: var(--border-subtle); stroke-width: 1; }
+.chart-axis-label {
+  fill: var(--text-3);
+  font-size: 11px;
+  font-family: var(--mono);
+}
+.chart-value {
+  fill: var(--text-0);
+  font-size: 12px;
+  font-weight: 650;
+  font-family: var(--mono);
+}
+
+.chart-bar {
+  transition: opacity var(--fast) var(--ease), filter var(--med) var(--ease);
+}
+.chart-bar-group:hover .chart-bar { filter: brightness(1.15); }
+
+.chart-line {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  filter: drop-shadow(0 2px 6px var(--accent-glow));
+}
+.chart-dot {
+  fill: var(--bg-1);
+  stroke: var(--accent);
+  stroke-width: 2;
+  transition: r var(--fast) var(--ease);
+}
+
+.chart-slice {
+  stroke: var(--bg-1);
+  stroke-width: 2;
+  transition: opacity var(--fast) var(--ease), filter var(--med) var(--ease);
+  cursor: default;
+}
+.chart-slice:hover { filter: brightness(1.12); }
+.chart-pie-total {
+  fill: var(--text-0);
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.chart-pie-sub {
+  fill: var(--text-2);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--border-subtle);
+}
+.chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: 12px;
+  color: var(--text-1);
+}
+.chart-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.chart-legend-label { color: var(--text-1); }
+.chart-legend-value {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
