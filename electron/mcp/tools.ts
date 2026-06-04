@@ -1278,6 +1278,59 @@ export function registerTools(
     },
   )
 
+  // Show a diff of two files (or a file vs proposed content) in the interactive
+  // review-enabled diff panel. Reads via FileService and hands the contents to
+  // the existing DiffPanel — distinct from git_diff (which only diffs tracked
+  // working-tree changes): this compares arbitrary files (two config versions,
+  // a backup vs current, generated output vs expected, or a preview of a write).
+  server.tool(
+    "diff_files",
+    "Open an interactive diff panel comparing two files (or a file vs inline content). Provide old_path + new_path to diff two files on disk, old_path + new_content to preview a proposed rewrite, or just new_path/new_content to show its lines as all additions. Paths resolve against a session's working dir (or absolute). Unlike git_diff (tracked changes only) this compares any files. Renders the same review-enabled panel as show_panel, so the user can select hunks and send you a review request. Returns the created panel.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      old_path: z.string().optional().describe("Path to the 'before' file, relative to the working dir or absolute"),
+      new_path: z.string().optional().describe("Path to the 'after' file, relative to the working dir or absolute"),
+      new_content: z.string().optional().describe("Inline 'after' content — alternative to new_path"),
+      label: z.string().optional().describe("File label shown above the diff (defaults to the new/old path)"),
+      position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
+    },
+    async ({ session_id, old_path, new_path, new_content, label, position }) => {
+      try {
+        if (!old_path && !new_path && new_content === undefined) {
+          return { content: [{ type: "text" as const, text: "diff_files failed: provide old_path and/or new_path (or new_content)" }] }
+        }
+        if (new_path && new_content !== undefined) {
+          return { content: [{ type: "text" as const, text: "diff_files failed: provide either new_path or new_content, not both" }] }
+        }
+        const cwd = resolveCwd(session_id)
+
+        let oldContent = ""
+        let oldResolved: string | undefined
+        if (old_path) {
+          const r = files.read(cwd, old_path)
+          oldContent = r.content
+          oldResolved = r.path
+        }
+
+        let newContent = ""
+        let newResolved: string | undefined
+        if (new_content !== undefined) {
+          newContent = new_content
+        } else if (new_path) {
+          const r = files.read(cwd, new_path)
+          newContent = r.content
+          newResolved = r.path
+        }
+
+        const filePath = label ?? newResolved ?? oldResolved ?? "diff"
+        const panel = panels.show("diff", { files: [{ path: filePath, oldContent, newContent }] }, position)
+        return { content: [{ type: "text" as const, text: JSON.stringify(panel, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `diff_files failed: ${e.message}` }] }
+      }
+    },
+  )
+
   // Surgical edits — the middle ground between read_file and write_file. Change
   // a precise string or insert at a line without rewriting (and risking
   // clobbering) the whole file.
