@@ -2657,3 +2657,65 @@ body {
   font-size: 11px;
   color: var(--text-3);
 }
+
+/* ── Log panel ───────────────────────────────────────────── */
+.log-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.log-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text-0);
+  padding: var(--s-4) var(--s-4) var(--s-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.log-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s-2) 0;
+  font-family: var(--mono, "Cascadia Code", monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.log-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: 1px var(--s-4);
+  border-left: 2px solid transparent;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-line:hover { background: var(--bg-3); }
+.log-time {
+  flex-shrink: 0;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+}
+.log-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0 5px;
+  border-radius: var(--r-sm, 4px);
+  align-self: center;
+}
+.log-text { flex: 1; min-width: 0; color: var(--text-1); }
+
+.log-line.level-info .log-badge { background: var(--bg-4); color: var(--text-2); }
+.log-line.level-debug { border-left-color: var(--border-strong); }
+.log-line.level-debug .log-badge { background: var(--bg-4); color: var(--text-3); }
+.log-line.level-debug .log-text { color: var(--text-2); }
+.log-line.level-warn { border-left-color: var(--yellow); }
+.log-line.level-warn .log-badge { background: rgba(227, 179, 65, 0.16); color: var(--yellow); }
+.log-line.level-error { border-left-color: var(--red); }
+.log-line.level-error .log-badge { background: var(--red-soft); color: var(--red); }
+.log-line.level-error .log-text { color: #ffb3ae; }
+.log-line.level-success { border-left-color: var(--green); }
+.log-line.level-success .log-badge { background: var(--green-soft); color: var(--green); }

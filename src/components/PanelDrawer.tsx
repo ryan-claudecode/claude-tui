@@ -12,6 +12,7 @@ import GitPanel from "./panels/GitPanel"
 import KanbanPanel from "./panels/KanbanPanel"
 import NotesPanel from "./panels/NotesPanel"
 import StatPanel from "./panels/StatPanel"
+import LogPanel from "./panels/LogPanel"
 
 export interface PanelState {
   id: string
@@ -42,6 +43,7 @@ const PANEL_LABELS: Record<string, string> = {
   kanban: "Kanban",
   notes: "Notes",
   stat: "Stats",
+  log: "Log",
 }
 
 export default function PanelDrawer({ panels, onClose }: Props) {
@@ -161,6 +163,8 @@ function PanelContent({ panel }: { panel: PanelState }) {
       return <NotesPanel {...panel.props} />
     case "stat":
       return <StatPanel {...panel.props} />
+    case "log":
+      return <LogPanel {...panel.props} />
     default:
       return <pre className="panel-raw">{JSON.stringify(panel.props, null, 2)}</pre>
   }
