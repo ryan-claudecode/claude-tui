@@ -1983,3 +1983,60 @@ body {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+
+/* ============================================================
+   Tree panel — collapsible JSON / structured-data viewer
+   ============================================================ */
+.tree-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--s-3) var(--s-4);
+  gap: var(--s-2);
+  overflow: auto;
+}
+.tree-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text-0);
+}
+.tree-root {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.tree-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  border-radius: var(--r-sm);
+}
+.tree-toggle { cursor: pointer; }
+.tree-toggle:hover { background: var(--bg-3); }
+.tree-gutter { display: inline-block; width: 12px; }
+.tree-caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-3);
+  transition: transform var(--fast) var(--ease);
+  font-size: 10px;
+}
+.tree-caret.open { transform: rotate(90deg); }
+.tree-key { color: var(--accent-bright); }
+.tree-colon { color: var(--text-3); margin-right: 2px; }
+.tree-bracket { color: var(--text-3); }
+.tree-count {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-4);
+  color: var(--text-3);
+  font-size: 10px;
+}
+.tree-value { font-variant-numeric: tabular-nums; }
+.tree-string { color: var(--green); }
+.tree-number { color: var(--yellow); }
+.tree-boolean { color: var(--purple); }
+.tree-null { color: var(--text-3); font-style: italic; }
