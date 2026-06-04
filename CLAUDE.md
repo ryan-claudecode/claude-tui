@@ -190,6 +190,11 @@ Structured read/write scoped to a session's working dir (relative paths resolve 
 - `read_file` — read a file (optionally a 1-based inclusive `start_line`/`end_line` slice); returns the slice plus `totalLines` for paging. Refuses files > 2MB.
 - `write_file` — write content to a file, creating parent dirs; overwrites if present. Returns resolved path, bytes written, and whether it was newly `created`.
 
+**File editing** (`EditService`):
+Surgical, in-place edits scoped to a session's working dir — the middle ground between `read_file` (whole-file read) and `write_file` (whole-file overwrite), so a small change doesn't risk clobbering the rest of the file. Same path resolution as the file-search/IO tools; no shell, no persistence; refuses files > 2MB.
+- `replace_in_file` — exact-string replacement. By default `old_string` must occur exactly once (unambiguous); set `replace_all` to change every occurrence. Fails if `old_string` is missing, not unique (without `replace_all`), or equal to `new_string`. Returns resolved path, `replacements` count, and bytes written.
+- `insert_in_file` — insert `content` before a 1-based `line` (a `line` <= 0 or past EOF appends at the end). Returns resolved path, the `line` inserted at, and bytes written.
+
 **Network** (`HttpService` + `PortService`):
 Probe the network without spawning `curl`/`netstat` and scraping output — structured JSON results. The dev-server workflow trio with `run_command`/`open_external`: launch a server, wait for its port, then hit it.
 - `http_request` — make an HTTP(S) request (`method`/`headers`/`body`/`timeout_ms`) and get back `status`, `statusText`, `headers`, `contentType`, `body` (UTF-8, capped at 1MB), `bodyBytes`, `truncated`, and `durationMs`. Only http/https URLs; follows redirects.
