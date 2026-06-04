@@ -30,6 +30,7 @@ import type { CsvService } from "../services/csv"
 import type { RegexService } from "../services/regex"
 import type { TextService } from "../services/text"
 import type { ColorService } from "../services/color"
+import type { MathService } from "../services/math"
 import { isAbsolute, join } from "path"
 
 export function registerTools(
@@ -64,6 +65,7 @@ export function registerTools(
   regex: RegexService,
   text: TextService,
   color: ColorService,
+  math: MathService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -2018,6 +2020,43 @@ export function registerTools(
     },
     async ({ input }) => {
       const result = color.convert(input)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "math_eval",
+    "Evaluate an arithmetic expression without spawning a shell or `eval` (a safe hand-written parser). Supports + - * / % and ^ / ** (exponent), unary minus, parentheses, the constants pi/e/tau, and single-arg functions (sqrt, cbrt, abs, ln, log, log2, exp, sin, cos, tan, asin, acos, atan, floor, ceil, round, sign). Returns { result, expression }. Throws a clear error on malformed input.",
+    {
+      expression: z.string().describe("The arithmetic expression, e.g. '2 * (3 + 4) ^ 2'"),
+    },
+    async ({ expression }) => {
+      const result = math.evaluate(expression)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "math_base",
+    "Convert an integer from one base to all the common ones — the no-shell base converter. `from_base` is 2–36 (a leading 0x/0b/0o is stripped). Returns { decimal, binary, octal, hex }. Throws if the value isn't valid in that base.",
+    {
+      value: z.string().describe("The integer as a string, e.g. 'ff' or '1010'"),
+      from_base: z.number().describe("The base of the input value (2–36)"),
+    },
+    async ({ value, from_base }) => {
+      const result = math.convertBase(value, from_base)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "math_stats",
+    "Summary statistics over a list of numbers, no shell required: returns { count, sum, mean, median, min, max, range, variance, stddev } (population variance/stddev). Throws on an empty list.",
+    {
+      numbers: z.array(z.number()).describe("The list of numbers to summarize"),
+    },
+    async ({ numbers }) => {
+      const result = math.stats(numbers)
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )

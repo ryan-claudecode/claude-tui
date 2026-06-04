@@ -30,6 +30,7 @@ import { CsvService } from "./services/csv"
 import { RegexService } from "./services/regex"
 import { TextService } from "./services/text"
 import { ColorService } from "./services/color"
+import { MathService } from "./services/math"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -63,6 +64,7 @@ export const csvService = new CsvService()
 export const regexService = new RegexService()
 export const textService = new TextService()
 export const colorService = new ColorService()
+export const mathService = new MathService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -113,6 +115,7 @@ export async function setupIpc(win: BrowserWindow) {
     regexService,
     textService,
     colorService,
+    mathService,
   )
   sessionService.setMcpConfigPath(configPath)
 
