@@ -34,6 +34,7 @@ import type { MathService } from "../services/math"
 import type { UrlService } from "../services/url"
 import type { UiService } from "../services/ui"
 import type { MissionService } from "../services/mission"
+import type { SessionService } from "../services/sessions"
 import { loadConfig } from "../config"
 import { isAbsolute, join } from "path"
 
@@ -73,6 +74,7 @@ export function registerTools(
   url: UrlService,
   ui: UiService,
   mission: MissionService,
+  workSessions: SessionService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.

@@ -34,6 +34,7 @@ import { MathService } from "./services/math"
 import { UrlService } from "./services/url"
 import { UiService } from "./services/ui"
 import { MissionService } from "./services/mission"
+import { SessionService } from "./services/sessions"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -73,6 +74,7 @@ export const uiService = new UiService()
 export const missionService = new MissionService(sessionService, {
   notify: (text, level) => notificationService.notify(text, level as any),
 })
+export const workSessionService = new SessionService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -91,6 +93,7 @@ export async function setupIpc(win: BrowserWindow) {
   uiService.setMainWindow(win)
 
   workspaceService.discover(config.workspaceScanPaths)
+  workSessionService.load()
 
   // Start MCP server and configure sessions to auto-connect
   const { configPath } = await startMcpServer(
@@ -128,6 +131,7 @@ export async function setupIpc(win: BrowserWindow) {
     urlService,
     uiService,
     missionService,
+    workSessionService,
   )
   sessionService.setMcpConfigPath(configPath)
 

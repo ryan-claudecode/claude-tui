@@ -35,6 +35,7 @@ import type { MathService } from "../services/math"
 import type { UrlService } from "../services/url"
 import type { UiService } from "../services/ui"
 import type { MissionService } from "../services/mission"
+import type { SessionService } from "../services/sessions"
 import { registerTools } from "./tools"
 
 // Injected into every connecting session's context via the MCP initialize
@@ -93,6 +94,7 @@ export async function startMcpServer(
   urlService: UrlService,
   uiService: UiService,
   missionService: MissionService,
+  workSessionService: SessionService,
 ): Promise<{ port: number; configPath: string }> {
   // A single McpServer can only be bound to one transport at a time, so we
   // build a fresh server (with all tools registered) PER SSE connection. The
@@ -143,6 +145,7 @@ export async function startMcpServer(
       urlService,
       uiService,
       missionService,
+      workSessionService,
     )
     return server
   }
