@@ -132,3 +132,33 @@ describe("SessionService notes", () => {
     expect(notes.find((x) => x.id === second.id)!.status).toBe("active")
   })
 })
+
+describe("SessionService.getContext", () => {
+  it("orders summary first, then active notes, then a ruled-out section with corrections", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    svc.setSummary(s.id, "Goal: fix the auth race. Currently patching middleware.")
+    const wrong = svc.addNote(s.id, "bug is in auth")!
+    svc.addNote(s.id, "actually it's the list endpoint", { corrects: wrong.id })
+    svc.addNote(s.id, "tests live in mission.test.ts")
+    const ctx = svc.getContext(s.id)!
+    // summary leads
+    expect(ctx.indexOf("Goal: fix the auth race")).toBeGreaterThanOrEqual(0)
+    // active notes present
+    expect(ctx).toContain("actually it's the list endpoint")
+    expect(ctx).toContain("tests live in mission.test.ts")
+    // ruled-out section present and shows the superseded note with its correction
+    expect(ctx).toContain("Ruled out")
+    expect(ctx).toContain("bug is in auth")
+    // ordering: summary before active before ruled-out
+    expect(ctx.indexOf("Goal:")).toBeLessThan(ctx.indexOf("actually it's the list endpoint"))
+    expect(ctx.indexOf("actually it's the list endpoint")).toBeLessThan(ctx.indexOf("Ruled out"))
+  })
+
+  it("omits the ruled-out section when nothing is superseded", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    svc.addNote(s.id, "only a live note")
+    expect(svc.getContext(s.id)!).not.toContain("Ruled out")
+  })
+})

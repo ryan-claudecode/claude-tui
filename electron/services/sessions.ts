@@ -145,6 +145,37 @@ export class SessionService {
     return note
   }
 
+  setSummary(sessionId: string, summary: string): void {
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    s.summary = summary
+    this.persist(s)
+  }
+
+  /** The primer a terminal pulls: summary, then active notes, then ruled-out (with corrections). */
+  getContext(sessionId: string): string | undefined {
+    const s = this.sessions.get(sessionId)
+    if (!s) return undefined
+    const parts: string[] = []
+    parts.push(`# Session: ${s.name}`)
+    if (s.summary.trim()) parts.push(`## Summary\n${s.summary.trim()}`)
+
+    const active = s.notes.filter((n) => n.status === "active")
+    if (active.length) {
+      parts.push(`## Findings\n` + active.map((n) => `- ${n.text}`).join("\n"))
+    }
+
+    const superseded = s.notes.filter((n) => n.status === "superseded")
+    if (superseded.length) {
+      const lines = superseded.map((n) => {
+        const correction = s.notes.find((c) => c.id === n.supersededBy)
+        return correction ? `- ~~${n.text}~~ → ${correction.text}` : `- ~~${n.text}~~`
+      })
+      parts.push(`## Ruled out / corrected\n` + lines.join("\n"))
+    }
+    return parts.join("\n\n")
+  }
+
   private persist(s: WorkSession): void {
     s.updatedAt = this.now()
     mkdirSync(this.dir, { recursive: true })
