@@ -26,6 +26,7 @@ import type { ProcessService } from "../services/process"
 import type { EncodeService } from "../services/encode"
 import type { JsonService } from "../services/json"
 import type { TimeService } from "../services/time"
+import type { CsvService } from "../services/csv"
 import { isAbsolute, join } from "path"
 
 export function registerTools(
@@ -56,6 +57,7 @@ export function registerTools(
   encode: EncodeService,
   json: JsonService,
   time: TimeService,
+  csv: CsvService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1864,6 +1866,49 @@ export function registerTools(
     },
     async ({ from, to }) => {
       const result = time.diff(from, to)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "csv_to_json",
+    "Parse a CSV string into JSON — the no-shell CSV→JSON bridge. With has_header (default true) the first row names the columns and each row becomes an object; otherwise rows are arrays of strings. RFC-4180-aware (quoted fields, embedded delimiters/newlines, escaped quotes). Returns { rows, rowCount, columns }.",
+    {
+      text: z.string().describe("The CSV string to parse"),
+      delimiter: z.string().optional().describe("Field delimiter (default ',')"),
+      has_header: z.boolean().optional().describe("Treat the first row as column names (default true)"),
+    },
+    async ({ text, delimiter, has_header }) => {
+      const result = csv.toJson(text, { delimiter, hasHeader: has_header })
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "json_to_csv",
+    "Serialize JSON into a CSV string — the JSON→CSV counterpart of csv_to_json. Accepts an array of objects (keys become the header, or pass an explicit `columns` order) or an array of arrays (emitted as-is, no header). Fields are quoted only when they contain the delimiter, a quote, or a newline. Returns { csv, rowCount, columns }.",
+    {
+      text: z.string().describe("JSON array (of objects or of arrays) to serialize"),
+      delimiter: z.string().optional().describe("Field delimiter (default ',')"),
+      columns: z.array(z.string()).optional().describe("Explicit column order for arrays of objects"),
+    },
+    async ({ text, delimiter, columns }) => {
+      const result = csv.fromJson(text, { delimiter, columns })
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "csv_preview",
+    "Probe a CSV's shape without converting the whole thing: returns column names, total rowCount, and the first `limit` rows (default 10) as objects. The CSV sibling of json_keys.",
+    {
+      text: z.string().describe("The CSV string to inspect"),
+      delimiter: z.string().optional().describe("Field delimiter (default ',')"),
+      has_header: z.boolean().optional().describe("Treat the first row as column names (default true)"),
+      limit: z.number().optional().describe("How many rows to sample (default 10)"),
+    },
+    async ({ text, delimiter, has_header, limit }) => {
+      const result = csv.preview(text, { delimiter, hasHeader: has_header, limit })
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
