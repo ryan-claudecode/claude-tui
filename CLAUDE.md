@@ -134,7 +134,7 @@ Session/workspace tools map 1:1 to `SessionService` / `WorkspaceService` methods
 Additional tool groups:
 
 **Panels** (`PanelService`):
-- `show_panel` — show a `diff`, `image`, `markdown`, `table`, `test`, `chart`, `tree`, `timeline`, `git`, `kanban`, or `notes` panel. `git` renders a `git_status` result (branch, ahead/behind, staged/unstaged files) plus optional `git_log` commits; `kanban` renders `{ columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] }` — grouped cards for status buckets / parallel workstreams; `notes` renders `{ title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] }` (markdown bodies) — but prefer the `show_notes` tool, which loads saved notes for you.
+- `show_panel` — show a `diff`, `image`, `markdown`, `table`, `test`, `chart`, `tree`, `timeline`, `git`, `kanban`, `notes`, or `stat` panel. `git` renders a `git_status` result (branch, ahead/behind, staged/unstaged files) plus optional `git_log` commits; `kanban` renders `{ columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] }` — grouped cards for status buckets / parallel workstreams; `notes` renders `{ title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] }` (markdown bodies) — but prefer the `show_notes` tool, which loads saved notes for you; `stat` renders `{ title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] }` — a dashboard of big-number KPI cards (distinct from `chart`, which is for series viz).
 - `show_form` — show an interactive form and **wait** for the user to submit; returns the field values (or `{ cancelled: true }`)
 - `update_panel` / `hide_panel` / `hide_all_panels` / `list_panels`
 
