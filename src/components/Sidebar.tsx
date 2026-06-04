@@ -1,17 +1,21 @@
+interface TerminalRow { id: string; name: string; lastState: string; activity?: string }
+interface SessionRow { id: string; name: string; status: string; terminals: TerminalRow[] }
+
 interface Props {
-  sessions: Array<{ id: string; name: string; state: string }>
-  activeId: string | null
+  sessions: SessionRow[]
+  activeSessionId: string | null
+  activeTerminalId: string | null
   workspaces: Array<{ name: string }>
   onNewSession: () => void
   onKillSession: () => void
-  onHandoff: () => void
   onSelectSession: (id: string) => void
+  onSelectTerminal: (sessionId: string, terminalId: string) => void
   onSelectWorkspace?: (index: number) => void
 }
 
 export default function Sidebar({
-  sessions, activeId, workspaces,
-  onNewSession, onKillSession, onHandoff, onSelectSession, onSelectWorkspace,
+  sessions, activeSessionId, activeTerminalId, workspaces,
+  onNewSession, onKillSession, onSelectSession, onSelectTerminal, onSelectWorkspace,
 }: Props) {
   return (
     <div className="sidebar">
@@ -41,16 +45,48 @@ export default function Sidebar({
         {sessions.length === 0 && (
           <div className="sidebar-empty">(no sessions)</div>
         )}
-        {sessions.map((s) => (
-          <div
-            key={s.id}
-            className={`sidebar-item session-item ${s.id === activeId ? "active" : ""}`}
-            onClick={() => onSelectSession(s.id)}
-          >
-            <span className={`status-dot ${s.state}`}>●</span>
-            <span>{s.name}</span>
-          </div>
-        ))}
+        {sessions.map((s) => {
+          const working = s.terminals.filter((t) => t.lastState === "active").length
+          const dot = s.status === "stopped" ? "dead" : working > 0 ? "active" : "idle"
+          const label =
+            s.terminals.length === 0 ? "Empty"
+            : s.status === "stopped" ? "Stopped"
+            : working > 0 ? `${working} Terminal${working === 1 ? "" : "s"} Working`
+            : "Idle"
+          const expandable = s.terminals.length >= 2
+          const [busy] = [...s.terminals].sort(
+            (a, b) => (b.lastState === "active" ? 1 : 0) - (a.lastState === "active" ? 1 : 0),
+          )
+          return (
+            <div key={s.id} className="session-group">
+              <div
+                className={`session-item ${activeSessionId === s.id ? "active" : ""}`}
+                onClick={() => onSelectSession(s.id)}
+              >
+                {expandable && <span className="tree-caret">▾</span>}
+                <span className={`status-dot ${dot}`} />
+                <span className="session-name">{s.name}</span>
+                <span className="session-label">{label}</span>
+              </div>
+              {!expandable && busy?.activity && s.status !== "stopped" && (
+                <div className="activity-line">{busy.activity}</div>
+              )}
+              {expandable && s.terminals.map((t) => (
+                <div
+                  key={t.id}
+                  className={`terminal-item ${activeTerminalId === t.id ? "active" : ""}`}
+                  onClick={(e) => { e.stopPropagation(); onSelectTerminal(s.id, t.id) }}
+                >
+                  <span className={`status-dot ${t.lastState}`} />
+                  <span className="terminal-name">{t.name}</span>
+                  <span className="activity-inline">
+                    {t.lastState === "active" ? (t.activity ?? "") : "Idle"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )
+        })}
       </div>
 
       <div className="sidebar-actions">
@@ -61,10 +97,6 @@ export default function Sidebar({
         <div className="sidebar-hint kill" onClick={onKillSession}>
           <span className="shortcut-key">Ctrl+K</span>
           <span className="shortcut-desc">Kill session</span>
-        </div>
-        <div className="sidebar-hint handoff" onClick={onHandoff}>
-          <span className="shortcut-key">Ctrl+H</span>
-          <span className="shortcut-desc">Handoff</span>
         </div>
       </div>
     </div>

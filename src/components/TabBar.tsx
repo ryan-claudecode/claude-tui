@@ -1,43 +1,43 @@
 import { useState, useCallback } from "react"
 
 interface Props {
-  sessions: Array<{ id: string; name: string }>
-  activeId: string | null
+  terminals: Array<{ id: string; name: string; lastState: string }>
+  activeTerminalId: string | null
   splitId: string | null
-  onSelectSession: (id: string) => void
-  onKillSession: (id: string) => void
-  onRenameSession: (id: string, newName: string) => void
+  onSelectTerminal: (id: string) => void
+  onCloseTerminal: (id: string) => void
+  onRenameTerminal: (id: string, newName: string) => void
 }
 
 export default function TabBar({
-  sessions,
-  activeId,
+  terminals,
+  activeTerminalId,
   splitId,
-  onSelectSession,
-  onKillSession,
-  onRenameSession,
+  onSelectTerminal,
+  onCloseTerminal,
+  onRenameTerminal,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState("")
 
   const commitRename = useCallback(() => {
     if (editingId && editValue.trim()) {
-      onRenameSession(editingId, editValue.trim())
+      onRenameTerminal(editingId, editValue.trim())
     }
     setEditingId(null)
-  }, [editingId, editValue, onRenameSession])
+  }, [editingId, editValue, onRenameTerminal])
 
-  if (sessions.length === 0) return <div className="tab-bar" />
+  if (terminals.length === 0) return <div className="tab-bar" />
 
   return (
     <div className="tab-bar">
-      {sessions.map((s) => (
+      {terminals.map((t) => (
         <div
-          key={s.id}
-          className={`tab ${s.id === activeId ? "active" : ""} ${s.id === splitId ? "split" : ""}`}
-          onClick={() => onSelectSession(s.id)}
+          key={t.id}
+          className={`tab ${t.id === activeTerminalId ? "active" : ""} ${t.id === splitId ? "split" : ""}`}
+          onClick={() => onSelectTerminal(t.id)}
         >
-          {editingId === s.id ? (
+          {editingId === t.id ? (
             <input
               className="tab-rename-input"
               value={editValue}
@@ -57,18 +57,18 @@ export default function TabBar({
           ) : (
             <span
               onDoubleClick={() => {
-                setEditingId(s.id)
-                setEditValue(s.name)
+                setEditingId(t.id)
+                setEditValue(t.name)
               }}
             >
-              {s.name}
+              {t.name}
             </span>
           )}
           <span
             className="tab-close"
             onClick={(e) => {
               e.stopPropagation()
-              onKillSession(s.id)
+              onCloseTerminal(t.id)
             }}
           >
             &times;

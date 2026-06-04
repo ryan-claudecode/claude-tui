@@ -17,42 +17,49 @@ import MissionsList, { Mission } from "./components/MissionsList"
 declare global {
   interface Window {
     api: {
-      createSession: (name: string, cwd: string) => Promise<any>
-      killSession: (id: string) => Promise<boolean>
-      focusSession: (id: string) => Promise<boolean>
-      getSessions: () => Promise<any[]>
+      // Terminal-tier transport (xterm I/O) — keyed by live PTY id
       writeToSession: (id: string, data: string) => void
       resizeSession: (id: string, cols: number, rows: number) => void
+      renameSession: (id: string, newName: string) => Promise<boolean>
+      getSessionOutput: (id: string, maxChars?: number) => Promise<string | null>
+      searchSessionOutput: (query: string, sessionId?: string, limit?: number) => Promise<
+        { sessionId: string; name: string; line: number; text: string }[]
+      >
+      onSessionData: (callback: (id: string, data: string) => void) => void
+      onSessionFocus: (callback: (id: string) => void) => void
+      // Work-session (container) tier
+      listWorkSessions: () => Promise<any[]>
+      openWorkSession: (cwd?: string) => Promise<{ session: any; terminalId: string }>
+      addTerminal: (sessionId: string, cwd?: string) => Promise<{ terminalId: string } | undefined>
+      reopenTerminal: (sessionId: string, terminalId: string) => Promise<{ terminalId: string } | undefined>
+      closeTerminal: (sessionId: string, terminalId: string) => Promise<void>
+      killWorkSession: (sessionId: string) => Promise<void>
+      getWorkSessionContext: (sessionId: string) => Promise<string | undefined>
+      onWorkSessionUpdated: (callback: (session: any) => void) => void
+      onWorkSessionRemoved: (callback: (id: string) => void) => void
+      // Workspaces / config
       getWorkspaces: () => Promise<any[]>
       activateWorkspace: (index: number) => Promise<any>
-      triggerHandoff: (id: string) => Promise<boolean>
-      onSessionData: (callback: (id: string, data: string) => void) => void
-      onSessionExit: (callback: (id: string) => void) => void
-      onSessionCreated: (callback: (session: any) => void) => void
-      onSessionState: (callback: (id: string, state: string) => void) => void
-      onSessionRenamed: (callback: (id: string, newName: string) => void) => void
-      getSessionActivity: () => Promise<any[]>
-      onSessionFocus: (callback: (id: string) => void) => void
+      getConfig: () => Promise<any>
+      // Split panes (terminal ids)
       onSplitSet: (callback: (leftId: string, rightId: string) => void) => void
       onSplitClose: (callback: () => void) => void
+      // UI control events from MCP tools
       onUiFocusMode: (callback: (enabled?: boolean) => void) => void
       onUiDrawer: (callback: (collapsed?: boolean) => void) => void
       onUiCommandPalette: (callback: (open?: boolean) => void) => void
       onUiShortcutsHelp: (callback: (open?: boolean) => void) => void
       onUiHistorySearch: (callback: (open?: boolean) => void) => void
       onUiExportLog: (callback: (sessionId: string | null) => void) => void
-      renameSession: (id: string, newName: string) => Promise<boolean>
-      getConfig: () => Promise<any>
-      getSessionOutput: (id: string, maxChars?: number) => Promise<string | null>
-      searchSessionOutput: (query: string, sessionId?: string, limit?: number) => Promise<
-        { sessionId: string; name: string; line: number; text: string }[]
-      >
+      // App testing / drops
       saveDroppedImage: (base64: string, filename: string) => Promise<string>
+      // Panels
       showPanel: (type: string, props: Record<string, any>, position?: string) => Promise<PanelState>
       listPanels: () => Promise<PanelState[]>
       hidePanel: (id: string) => Promise<boolean>
       hideAllPanels: () => Promise<void>
       submitForm: (id: string, data: Record<string, any>) => void
+      // Notifications
       listNotifications: () => Promise<any[]>
       dismissNotification: (id: string) => Promise<boolean>
       onNotificationShow: (callback: (notification: any) => void) => void
@@ -61,6 +68,7 @@ declare global {
       onPanelUpdate: (callback: (payload: { id: string; props: any }) => void) => void
       onPanelHide: (callback: (id: string) => void) => void
       onPanelHideAll: (callback: () => void) => void
+      // Missions
       createMission: (goal: string, cwd: string, autonomy?: string) => Promise<any>
       listMissions: () => Promise<any[]>
       getMissionStatus: (id?: string) => Promise<any>
@@ -72,16 +80,26 @@ declare global {
   }
 }
 
-interface Session {
+interface Terminal {
   id: string
   name: string
   cwd: string
-  state: string
+  lastState: "active" | "idle" | "dead"
+  activity?: string
+}
+
+interface WorkSession {
+  id: string
+  name: string
+  status: "active" | "stopped"
+  summary: string
+  terminals: Terminal[]
 }
 
 export default function App() {
-  const [sessions, setSessions] = useState<Session[]>([])
-  const [activeId, setActiveId] = useState<string | null>(null)
+  const [sessions, setSessions] = useState<WorkSession[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
   const [workspaces, setWorkspaces] = useState<any[]>([])
   const [splitLeft, setSplitLeft] = useState<string | null>(null)
   const [splitRight, setSplitRight] = useState<string | null>(null)
@@ -97,45 +115,42 @@ export default function App() {
   const [missions, setMissions] = useState<Mission[]>([])
   const [zenMode, setZenMode] = useState(false)
 
-  // Load workspaces and config on mount
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
+  const activeTerminals = activeSession?.terminals ?? []
+  const activeTerminal = activeTerminals.find((t) => t.id === activeTerminalId) ?? null
+
+  // Load workspaces, config, and existing session records on mount (no spawn).
   useEffect(() => {
     window.api.getWorkspaces().then(setWorkspaces)
     window.api.getConfig().then(setConfig)
+    window.api.listWorkSessions().then((list: WorkSession[]) => {
+      setSessions(list)
+      if (list.length) {
+        setActiveSessionId(list[0].id)
+        setActiveTerminalId(list[0].terminals[0]?.id ?? null)
+      }
+    })
   }, [])
 
-  // Listen for session events from main process
+  // Listen for container + terminal events from the main process
   useEffect(() => {
-    window.api.onSessionCreated((session) => {
+    window.api.onWorkSessionUpdated((updated: WorkSession) => {
       setSessions((prev) => {
-        if (prev.find((s) => s.id === session.id)) return prev
-        return [...prev, session]
+        const i = prev.findIndex((s) => s.id === updated.id)
+        if (i === -1) return [...prev, updated]
+        const next = [...prev]
+        next[i] = updated
+        return next
       })
-      setActiveId(session.id)
+      setActiveSessionId((cur) => cur ?? updated.id)
+      setActiveTerminalId(
+        (cur) => cur ?? updated.terminals[updated.terminals.length - 1]?.id ?? null,
+      )
     })
 
-    window.api.onSessionExit((id) => {
+    window.api.onWorkSessionRemoved((id: string) => {
       setSessions((prev) => prev.filter((s) => s.id !== id))
-      setActiveId((prev) => {
-        if (prev === id) {
-          // Focus next available session
-          return null // will be set by effect below
-        }
-        return prev
-      })
-    })
-
-    // Live activity state (active = working, idle = waiting for input)
-    window.api.onSessionState((id, state) => {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, state } : s))
-      )
-    })
-
-    // Rename event from main (triggered by the rename_session MCP tool)
-    window.api.onSessionRenamed((id, newName) => {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, name: newName } : s))
-      )
+      setActiveSessionId((cur) => (cur === id ? null : cur))
     })
 
     // Split pane events from main process (triggered by MCP tools)
@@ -149,8 +164,8 @@ export default function App() {
       setSplitRight(null)
     })
 
-    // Switch the visible tab when the focus_session MCP tool fires.
-    window.api.onSessionFocus((id) => setActiveId(id))
+    // Switch the visible terminal when the focus_session MCP tool fires.
+    window.api.onSessionFocus((id) => setActiveTerminalId(id))
 
     // UI control events from MCP tools. A boolean payload sets the state
     // explicitly; undefined toggles it (functional updates keep this correct
@@ -163,9 +178,8 @@ export default function App() {
     window.api.onUiCommandPalette(setOrToggle(setPaletteOpen))
     window.api.onUiShortcutsHelp(setOrToggle(setHelpOpen))
     window.api.onUiHistorySearch(setOrToggle(setHistoryOpen))
-    // Drawer only toggles meaningfully when a panel exists; mirror the keybind.
     window.api.onUiDrawer((collapsed) =>
-      setDrawerCollapsed((cur) => (typeof collapsed === "boolean" ? collapsed : !cur))
+      setDrawerCollapsed((cur) => (typeof collapsed === "boolean" ? collapsed : !cur)),
     )
     window.api.onUiExportLog((id) => exportLogRef.current(id ?? undefined))
 
@@ -175,9 +189,7 @@ export default function App() {
     })
 
     window.api.onPanelUpdate(({ id, props }) => {
-      setPanels((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, props } : p))
-      )
+      setPanels((prev) => prev.map((p) => (p.id === id ? { ...p, props } : p)))
     })
 
     window.api.onPanelHide((id) => {
@@ -189,10 +201,8 @@ export default function App() {
     })
 
     return () => {
-      window.api.removeAllListeners("session:created")
-      window.api.removeAllListeners("session:exit")
-      window.api.removeAllListeners("session:state")
-      window.api.removeAllListeners("session:renamed")
+      window.api.removeAllListeners("worksession:updated")
+      window.api.removeAllListeners("worksession:removed")
       window.api.removeAllListeners("split:set")
       window.api.removeAllListeners("split:close")
       window.api.removeAllListeners("session:focus")
@@ -226,7 +236,6 @@ export default function App() {
   }, [])
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    // Only clear when leaving the window entirely
     if (e.relatedTarget === null) setDragActive(false)
   }, [])
 
@@ -235,7 +244,7 @@ export default function App() {
       e.preventDefault()
       setDragActive(false)
       const file = Array.from(e.dataTransfer.files).find((f) =>
-        f.type.startsWith("image/")
+        f.type.startsWith("image/"),
       )
       if (!file) return
       const base64 = await new Promise<string>((resolve) => {
@@ -245,105 +254,110 @@ export default function App() {
       })
       const path = await window.api.saveDroppedImage(base64, file.name)
       await window.api.showPanel("image", { src: path, alt: file.name })
-      if (activeId) {
-        window.api.writeToSession(activeId, `"${path}" `)
+      if (activeTerminalId) {
+        window.api.writeToSession(activeTerminalId, `"${path}" `)
       }
     },
-    [activeId]
+    [activeTerminalId],
   )
 
-  // Send text straight into the active session (used by the diff review button).
-  // Wrapped in bracketed-paste markers so a multi-line block is inserted as one
-  // paste, then submitted with Enter. Returns false when no session is active.
+  // Send text straight into the active terminal (used by the diff review button).
   const sendToActiveSession = useCallback(
     (text: string): boolean => {
-      if (!activeId) return false
-      window.api.writeToSession(activeId, `\x1b[200~${text}\x1b[201~\r`)
+      if (!activeTerminalId) return false
+      window.api.writeToSession(activeTerminalId, `\x1b[200~${text}\x1b[201~\r`)
       return true
     },
-    [activeId]
+    [activeTerminalId],
   )
 
-  // Auto-focus first session if active was removed
-  useEffect(() => {
-    if (!activeId && sessions.length > 0) {
-      setActiveId(sessions[0].id)
-    }
-  }, [activeId, sessions])
-
-  const handleNewSession = useCallback(async () => {
-    const name = `session-${sessions.length + 1}`
-    await window.api.createSession(name, "")
-  }, [sessions.length])
-
-  const handleKillSession = useCallback(async () => {
-    if (activeId) {
-      await window.api.killSession(activeId)
-    }
-  }, [activeId])
-
-  const handleKillSessionById = useCallback(async (id: string) => {
-    await window.api.killSession(id)
-    if (id === splitLeft || id === splitRight) {
-      setSplitLeft(null)
-      setSplitRight(null)
-    }
-  }, [splitLeft, splitRight])
-
-  const handleRenameSession = useCallback(async (id: string, newName: string) => {
-    await window.api.renameSession(id, newName)
-    setSessions((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, name: newName } : s))
-    )
+  const handleNewSession = useCallback(() => {
+    window.api.openWorkSession("")
   }, [])
 
-  const handleHandoff = useCallback(async () => {
-    if (activeId) {
-      await window.api.triggerHandoff(activeId)
-    }
-  }, [activeId])
+  const handleNewTerminal = useCallback(() => {
+    if (activeSessionId) window.api.addTerminal(activeSessionId, "")
+    else window.api.openWorkSession("")
+  }, [activeSessionId])
 
-  const handleSelectSession = useCallback((id: string) => {
-    setActiveId(id)
+  const handleCloseTerminal = useCallback(() => {
+    if (activeSessionId && activeTerminalId) {
+      window.api.closeTerminal(activeSessionId, activeTerminalId)
+    }
+  }, [activeSessionId, activeTerminalId])
+
+  const handleKillSession = useCallback(() => {
+    if (!activeSessionId) return
+    if (window.confirm("Kill this session and all its terminals? This deletes its record.")) {
+      window.api.killWorkSession(activeSessionId)
+    }
+  }, [activeSessionId])
+
+  const handleRenameTerminal = useCallback((id: string, newName: string) => {
+    window.api.renameSession(id, newName)
   }, [])
+
+  const handleSelectSession = useCallback(
+    (id: string) => {
+      setActiveSessionId(id)
+      const s = sessions.find((x) => x.id === id)
+      setActiveTerminalId(s?.terminals[0]?.id ?? null)
+    },
+    [sessions],
+  )
+
+  const handleSelectTerminal = useCallback(
+    async (sessionId: string, terminalId: string) => {
+      setActiveSessionId(sessionId)
+      const s = sessions.find((x) => x.id === sessionId)
+      const ref = s?.terminals.find((t) => t.id === terminalId)
+      if (ref && ref.lastState === "dead") {
+        const r = await window.api.reopenTerminal(sessionId, terminalId) // 3a: fresh primed reopen
+        if (r?.terminalId) setActiveTerminalId(r.terminalId)
+      } else {
+        setActiveTerminalId(terminalId)
+      }
+    },
+    [sessions],
+  )
 
   const toggleSplit = useCallback(() => {
     if (splitLeft) {
       setSplitLeft(null)
       setSplitRight(null)
-    } else if (sessions.length >= 2 && activeId) {
-      const other = sessions.find((s) => s.id !== activeId)
+    } else if (activeTerminals.length >= 2 && activeTerminalId) {
+      const other = activeTerminals.find((t) => t.id !== activeTerminalId)
       if (other) {
-        setSplitLeft(activeId)
+        setSplitLeft(activeTerminalId)
         setSplitRight(other.id)
       }
     }
-  }, [splitLeft, sessions, activeId])
+  }, [splitLeft, activeTerminals, activeTerminalId])
 
   const toggleDrawer = useCallback(() => {
     if (panels.some((p) => p.visible)) setDrawerCollapsed((c) => !c)
   }, [panels])
 
-  // Save the active session's captured scrollback to a downloaded .txt file —
-  // a quick way to keep a record of what Claude did in a session.
-  const handleExportLog = useCallback(async (id?: string) => {
-    const target = id ?? activeId
-    if (!target) return
-    const text = await window.api.getSessionOutput(target, 100000)
-    if (text == null) return
-    const name = sessions.find((s) => s.id === target)?.name ?? target
-    const blob = new Blob([text], { type: "text/plain" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `${name}-output.txt`
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [activeId, sessions])
+  // Save a terminal's captured scrollback to a downloaded .txt file.
+  const handleExportLog = useCallback(
+    async (id?: string) => {
+      const target = id ?? activeTerminalId
+      if (!target) return
+      const text = await window.api.getSessionOutput(target, 100000)
+      if (text == null) return
+      const name =
+        sessions.flatMap((s) => s.terminals).find((t) => t.id === target)?.name ?? target
+      const blob = new Blob([text], { type: "text/plain" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${name}-output.txt`
+      a.click()
+      URL.revokeObjectURL(url)
+    },
+    [activeTerminalId, sessions],
+  )
 
-  // The mount-time MCP listener for ui:export-log needs the latest closure of
-  // handleExportLog (which closes over activeId/sessions). Keep it in a ref so
-  // the once-registered listener always calls the current version.
   const exportLogRef = useRef(handleExportLog)
   useEffect(() => {
     exportLogRef.current = handleExportLog
@@ -365,20 +379,18 @@ export default function App() {
   // Create a mission from the prompt overlay, then open its dashboard panel.
   const createMission = useCallback(
     async (goal: string, autonomy: Autonomy) => {
-      const cwd = sessions.find((s) => s.id === activeId)?.cwd ?? ""
+      const cwd = activeSession?.terminals[0]?.cwd ?? ""
       const m = await window.api.createMission(goal, cwd, autonomy)
       openMission(m)
     },
-    [sessions, activeId, openMission],
+    [activeSession, openMission],
   )
 
-  // Missions don't push updates, so poll while the list overlay or a still-live
-  // mission panel is open and refresh both from the same listMissions() result.
-  // Terminal missions (done/stopped) won't change, so once every visible panel
-  // is terminal we stop polling — the refresh that set the terminal status was
-  // the last tick, so the final state is already captured.
   const hasLiveMissionPanel = panels.some(
-    (p) => p.type === "mission" && p.visible && !["done", "stopped"].includes((p.props as { status?: string })?.status ?? ""),
+    (p) =>
+      p.type === "mission" &&
+      p.visible &&
+      !["done", "stopped"].includes((p.props as { status?: string })?.status ?? ""),
   )
   useEffect(() => {
     if (!missionsListOpen && !hasLiveMissionPanel) return
@@ -403,18 +415,18 @@ export default function App() {
     }
   }, [missionsListOpen, hasLiveMissionPanel])
 
-  // Commands surfaced in the Ctrl+Shift+P command palette. Static app actions
-  // plus a dynamic "Switch to…" entry per open session.
+  // Commands surfaced in the Ctrl+Shift+P command palette.
   const commands = useMemo<Command[]>(() => {
     const base: Command[] = [
       { id: "new", label: "New Session", hint: "Ctrl+N", run: handleNewSession },
+      { id: "new-terminal", label: "New Terminal", hint: "Ctrl+T", run: handleNewTerminal },
+      { id: "close-terminal", label: "Close Active Terminal", hint: "Ctrl+W", run: handleCloseTerminal },
       { id: "kill", label: "Kill Active Session", hint: "Ctrl+K", run: handleKillSession },
-      { id: "handoff", label: "Trigger Handoff", hint: "Ctrl+H", run: handleHandoff },
       { id: "split", label: splitLeft ? "Close Split View" : "Split Panes", hint: "Ctrl+\\", run: toggleSplit },
       { id: "drawer", label: "Toggle Panel Drawer", hint: "Ctrl+P", run: toggleDrawer },
       { id: "hide-panels", label: "Close All Panels", keywords: "hide clear", run: () => { setPanels([]); window.api.hideAllPanels() } },
       { id: "history", label: "Search Session History", hint: "Ctrl+Shift+F", keywords: "find output log scrollback", run: () => setHistoryOpen(true) },
-      { id: "export-log", label: "Export Active Session Log", keywords: "save download output history file", run: handleExportLog },
+      { id: "export-log", label: "Export Active Terminal Log", keywords: "save download output history file", run: () => handleExportLog() },
       { id: "zen", label: zenMode ? "Exit Focus Mode" : "Enter Focus Mode", hint: "Ctrl+Shift+Z", keywords: "zen distraction free hide sidebar fullscreen", run: () => setZenMode((z) => !z) },
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
       { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: () => setMissionPromptOpen(true) },
@@ -425,93 +437,84 @@ export default function App() {
       label: `Switch to: ${s.name}`,
       hint: i < 9 ? `Ctrl+${i + 1}` : undefined,
       keywords: "session focus",
-      run: () => setActiveId(s.id),
+      run: () => handleSelectSession(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, zenMode, splitLeft, sessions])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, toggleSplit, toggleDrawer, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "p") {
-        // Command palette — checked before the bare Ctrl+P drawer toggle.
-        e.preventDefault()
-        e.stopPropagation()
+        e.preventDefault(); e.stopPropagation()
         setPaletteOpen((o) => !o)
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
-        // Session history search overlay.
-        e.preventDefault()
-        e.stopPropagation()
+        e.preventDefault(); e.stopPropagation()
         setHistoryOpen((o) => !o)
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "z") {
-        // Toggle distraction-free focus mode (hides sidebar + tab bar).
-        e.preventDefault()
-        e.stopPropagation()
+        e.preventDefault(); e.stopPropagation()
         setZenMode((z) => !z)
       } else if (e.ctrlKey && e.key === "/") {
-        // Toggle the keyboard shortcuts cheat sheet.
-        e.preventDefault()
-        e.stopPropagation()
+        e.preventDefault(); e.stopPropagation()
         setHelpOpen((o) => !o)
-      } else if (e.ctrlKey && e.key === "n") {
-        e.preventDefault()
-        e.stopPropagation()
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+        // Ctrl+N — new session
+        e.preventDefault(); e.stopPropagation()
         handleNewSession()
-      } else if (e.ctrlKey && e.key === "k") {
-        e.preventDefault()
-        e.stopPropagation()
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "t") {
+        // Ctrl+T — new terminal in the active session (or a new session if none)
+        e.preventDefault(); e.stopPropagation()
+        handleNewTerminal()
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "w") {
+        // Ctrl+W — close the active terminal (session stays alive if it was the last)
+        e.preventDefault(); e.stopPropagation()
+        handleCloseTerminal()
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+        // Ctrl+K — kill the active session (confirm)
+        e.preventDefault(); e.stopPropagation()
         handleKillSession()
-      } else if (e.ctrlKey && e.key === "h") {
-        e.preventDefault()
-        e.stopPropagation()
-        handleHandoff()
       } else if (e.ctrlKey && e.key === "\\") {
-        e.preventDefault()
-        e.stopPropagation()
-        if (splitLeft) {
-          // Close split
-          setSplitLeft(null)
-          setSplitRight(null)
-        } else if (sessions.length >= 2 && activeId) {
-          // Open split: active session on left, next session on right
-          const other = sessions.find(s => s.id !== activeId)
-          if (other) {
-            setSplitLeft(activeId)
-            setSplitRight(other.id)
-          }
+        e.preventDefault(); e.stopPropagation()
+        toggleSplit()
+      } else if (e.ctrlKey && e.key === "Tab") {
+        // Ctrl+Tab / Ctrl+Shift+Tab — cycle terminals within the active session
+        e.preventDefault(); e.stopPropagation()
+        if (activeTerminals.length) {
+          const i = Math.max(0, activeTerminals.findIndex((t) => t.id === activeTerminalId))
+          const next = e.shiftKey
+            ? (i - 1 + activeTerminals.length) % activeTerminals.length
+            : (i + 1) % activeTerminals.length
+          setActiveTerminalId(activeTerminals[next].id)
         }
       } else if (e.ctrlKey && e.key === "p") {
-        // Toggle the panel drawer (only meaningful when panels exist)
-        e.preventDefault()
-        e.stopPropagation()
+        e.preventDefault(); e.stopPropagation()
         if (panels.some((p) => p.visible)) {
           setDrawerCollapsed((c) => !c)
         }
       } else if (e.key === "Escape" && helpOpen) {
-        // Close the shortcuts cheat sheet first if it's open.
-        e.preventDefault()
-        e.stopPropagation()
+        e.preventDefault(); e.stopPropagation()
         setHelpOpen(false)
       } else if (e.key === "Escape") {
-        // Close the most recently shown visible panel
         const visible = panels.filter((p) => p.visible)
         if (visible.length > 0 && !drawerCollapsed) {
-          e.preventDefault()
-          e.stopPropagation()
+          e.preventDefault(); e.stopPropagation()
           handleClosePanel(visible[visible.length - 1].id)
         }
-      } else if (e.ctrlKey && e.key >= "1" && e.key <= "9") {
-        e.preventDefault()
-        e.stopPropagation()
-        const idx = parseInt(e.key) - 1
-        if (idx < sessions.length) {
-          setActiveId(sessions[idx].id)
-        }
+      } else if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key >= "1" && e.key <= "9") {
+        // Alt+1–9 — switch terminal within the active session
+        e.preventDefault(); e.stopPropagation()
+        const t = activeTerminals[parseInt(e.key) - 1]
+        if (t) setActiveTerminalId(t.id)
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= "1" && e.key <= "9") {
+        // Ctrl+1–9 — switch session
+        e.preventDefault(); e.stopPropagation()
+        const s = sessions[parseInt(e.key) - 1]
+        if (s) handleSelectSession(s.id)
       }
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleKillSession, handleHandoff, sessions, splitLeft, activeId, panels, drawerCollapsed, handleClosePanel, helpOpen])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, panels, drawerCollapsed, handleClosePanel, helpOpen])
 
   return (
     <div
@@ -527,7 +530,7 @@ export default function App() {
       <HistorySearch
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
-        onSelectSession={handleSelectSession}
+        onSelectSession={(id) => setActiveTerminalId(id)}
       />
       <MissionPrompt
         open={missionPromptOpen}
@@ -548,22 +551,23 @@ export default function App() {
       />
       <Sidebar
         sessions={sessions}
-        activeId={activeId}
+        activeSessionId={activeSessionId}
+        activeTerminalId={activeTerminalId}
         workspaces={workspaces}
         onNewSession={handleNewSession}
         onKillSession={handleKillSession}
-        onHandoff={handleHandoff}
         onSelectSession={handleSelectSession}
+        onSelectTerminal={handleSelectTerminal}
         onSelectWorkspace={(index) => window.api.activateWorkspace(index)}
       />
       <div className="main-area">
         <TabBar
-          sessions={sessions}
-          activeId={activeId}
+          terminals={activeTerminals}
+          activeTerminalId={activeTerminalId}
           splitId={splitRight}
-          onSelectSession={handleSelectSession}
-          onKillSession={handleKillSessionById}
-          onRenameSession={handleRenameSession}
+          onSelectTerminal={(id) => setActiveTerminalId(id)}
+          onCloseTerminal={(id) => activeSessionId && window.api.closeTerminal(activeSessionId, id)}
+          onRenameTerminal={handleRenameTerminal}
         />
         <div
           className={`workspace-body ${
@@ -577,43 +581,43 @@ export default function App() {
             <SplitView
               leftId={splitLeft}
               rightId={splitRight}
-              activeId={activeId ?? splitLeft}
-              onSelectSession={handleSelectSession}
+              activeId={activeTerminalId ?? splitLeft}
+              onSelectSession={(id) => setActiveTerminalId(id)}
               theme={config?.theme}
               fontFamily={config?.fontFamily}
               fontSize={config?.fontSize}
             />
           ) : (
             <>
-              {sessions.map((session) => (
+              {activeTerminals.map((t) => (
                 <TerminalPane
-                  key={session.id}
-                  sessionId={session.id}
-                  active={session.id === activeId}
+                  key={t.id}
+                  sessionId={t.id}
+                  active={t.id === activeTerminalId}
                   theme={config?.theme}
                   fontFamily={config?.fontFamily}
                   fontSize={config?.fontSize}
                 />
               ))}
-              {sessions.length === 0 && (
+              {activeTerminals.length === 0 && (
                 <div className="empty-state">
-                  <p>No active session.</p>
+                  <p>No active terminal.</p>
                   <p>Create a session to get started.</p>
                   <div className="shortcut-hints">
                     <span className="shortcut-key">Ctrl+N</span>
                     <span className="shortcut-desc">New session</span>
+                    <span className="shortcut-key">Ctrl+T</span>
+                    <span className="shortcut-desc">New terminal</span>
+                    <span className="shortcut-key">Ctrl+W</span>
+                    <span className="shortcut-desc">Close terminal</span>
                     <span className="shortcut-key">Ctrl+K</span>
                     <span className="shortcut-desc">Kill session</span>
-                    <span className="shortcut-key">Ctrl+H</span>
-                    <span className="shortcut-desc">Handoff</span>
                     <span className="shortcut-key">Ctrl+\</span>
                     <span className="shortcut-desc">Split panes</span>
                     <span className="shortcut-key">Ctrl+1-9</span>
                     <span className="shortcut-desc">Switch session</span>
-                    <span className="shortcut-key">Ctrl+P</span>
-                    <span className="shortcut-desc">Toggle panel drawer</span>
-                    <span className="shortcut-key">Esc</span>
-                    <span className="shortcut-desc">Close panel</span>
+                    <span className="shortcut-key">Alt+1-9</span>
+                    <span className="shortcut-desc">Switch terminal</span>
                     <span className="shortcut-key">Ctrl+Shift+P</span>
                     <span className="shortcut-desc">Command palette</span>
                   </div>
@@ -633,7 +637,7 @@ export default function App() {
           )}
         </div>
         <StatusBar
-          session={sessions.find((s) => s.id === activeId) ?? null}
+          session={activeTerminal ? { id: activeTerminal.id, name: activeTerminal.name, state: activeTerminal.lastState } : null}
           sessionCount={sessions.length}
         />
       </div>
