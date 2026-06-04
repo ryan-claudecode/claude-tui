@@ -33,6 +33,7 @@ import type { ColorService } from "../services/color"
 import type { MathService } from "../services/math"
 import type { UrlService } from "../services/url"
 import type { UiService } from "../services/ui"
+import type { MissionService } from "../services/mission"
 import { loadConfig } from "../config"
 import { isAbsolute, join } from "path"
 
@@ -71,6 +72,7 @@ export function registerTools(
   math: MathService,
   url: UrlService,
   ui: UiService,
+  mission: MissionService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -329,6 +331,85 @@ export function registerTools(
       return { content: [{ type: "text" as const, text: JSON.stringify(config, null, 2) }] }
     },
   )
+
+  // Mission orchestration — durable, on-disk missions driven by a Conductor.
+  server.tool("mission_create", "Start a new orchestration mission. Returns the mission (status 'planning'); decompose its goal with mission_plan, then dispatch workers.", {
+    goal: z.string().describe("The mission's north-star goal"),
+    cwd: z.string().describe("Absolute path of the repo/dir the mission operates on"),
+    autonomy: z.enum(["hands-off", "checkpoints", "supervised"]).optional().describe("How hands-on the user is (default hands-off)"),
+  }, async ({ goal, cwd, autonomy }) => {
+    const m = mission.create(goal, cwd, autonomy)
+    return { content: [{ type: "text" as const, text: JSON.stringify(m, null, 2) }] }
+  })
+
+  server.tool("mission_status", "Load a mission's full durable state — the resume entry point. Omit mission_id for the most-recently-updated active mission.", {
+    mission_id: z.string().optional(),
+  }, async ({ mission_id }) => {
+    const m = mission.status(mission_id)
+    return { content: [{ type: "text" as const, text: m ? JSON.stringify(m, null, 2) : "No active mission" }] }
+  })
+
+  server.tool("mission_list", "List all missions, newest-updated first.", {}, async () => {
+    return { content: [{ type: "text" as const, text: JSON.stringify(mission.list(), null, 2) }] }
+  })
+
+  server.tool("mission_plan", "Set a mission's task list (decomposition) and start it running.", {
+    mission_id: z.string(),
+    tasks: z.array(z.object({ title: z.string(), detail: z.string().optional() })).describe("Ordered task list"),
+  }, async ({ mission_id, tasks }) => {
+    const m = mission.plan(mission_id, tasks)
+    return { content: [{ type: "text" as const, text: m ? JSON.stringify(m, null, 2) : "Mission not found" }] }
+  })
+
+  server.tool("mission_dispatch", "Spawn/reuse a worker session for a task, inject its prompt, mark it in-progress. Returns the worker session id.", {
+    mission_id: z.string(), task_id: z.string(), prompt: z.string().describe("The full task prompt for the worker"),
+  }, async ({ mission_id, task_id, prompt }) => {
+    const r = mission.dispatch(mission_id, task_id, prompt)
+    return { content: [{ type: "text" as const, text: r ? JSON.stringify(r) : "Mission/task not found" }] }
+  })
+
+  server.tool("mission_await", "Block until a task's worker goes idle (finished), then return its recent output for review.", {
+    mission_id: z.string(), task_id: z.string(), timeout_ms: z.number().optional(),
+  }, async ({ mission_id, task_id, timeout_ms }) => {
+    const r = await mission.await(mission_id, task_id, timeout_ms)
+    return { content: [{ type: "text" as const, text: r ? JSON.stringify(r, null, 2) : "Mission/task/worker not found" }] }
+  })
+
+  server.tool("mission_resolve", "Record a task's review outcome (done/failed) and free its worker.", {
+    mission_id: z.string(), task_id: z.string(), status: z.enum(["done", "failed"]), result: z.string().optional(),
+  }, async ({ mission_id, task_id, status, result }) => {
+    const m = mission.resolve(mission_id, task_id, status, result)
+    return { content: [{ type: "text" as const, text: m ? JSON.stringify(m, null, 2) : "Mission/task not found" }] }
+  })
+
+  server.tool("mission_log", "Append an event to a mission's audit trail.", {
+    mission_id: z.string(), kind: z.enum(["info", "task", "worker", "review", "commit", "pause", "error"]), text: z.string(),
+  }, async ({ mission_id, kind, text }) => {
+    const m = mission.logEvent(mission_id, kind, text)
+    return { content: [{ type: "text" as const, text: m ? "logged" : "Mission not found" }] }
+  })
+
+  server.tool("mission_pause", "Pause a mission (e.g. on a usage limit). Optionally set resume_at (epoch ms) for auto-resume.", {
+    mission_id: z.string(), resume_at: z.number().optional(),
+  }, async ({ mission_id, resume_at }) => {
+    const m = mission.pause(mission_id, resume_at)
+    return { content: [{ type: "text" as const, text: m ? JSON.stringify(m, null, 2) : "Mission not found" }] }
+  })
+
+  server.tool("mission_resume", "Resume a paused mission immediately.", { mission_id: z.string() }, async ({ mission_id }) => {
+    const m = mission.resume(mission_id)
+    return { content: [{ type: "text" as const, text: m ? JSON.stringify(m, null, 2) : "Mission not found" }] }
+  })
+
+  server.tool("mission_stop", "Stop a mission and kill its workers + conductor.", { mission_id: z.string() }, async ({ mission_id }) => {
+    const m = mission.stop(mission_id)
+    return { content: [{ type: "text" as const, text: m ? "stopped" : "Mission not found" }] }
+  })
+
+  server.tool("mission_finish", "Mark a mission done.", { mission_id: z.string() }, async ({ mission_id }) => {
+    const m = mission.finish(mission_id)
+    return { content: [{ type: "text" as const, text: m ? "done" : "Mission not found" }] }
+  })
 
   // Rich panel tools
 

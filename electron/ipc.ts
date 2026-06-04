@@ -33,6 +33,7 @@ import { ColorService } from "./services/color"
 import { MathService } from "./services/math"
 import { UrlService } from "./services/url"
 import { UiService } from "./services/ui"
+import { MissionService } from "./services/mission"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -69,6 +70,9 @@ export const colorService = new ColorService()
 export const mathService = new MathService()
 export const urlService = new UrlService()
 export const uiService = new UiService()
+export const missionService = new MissionService(sessionService, {
+  notify: (text, level) => notificationService.notify(text, level as any),
+})
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -123,8 +127,11 @@ export async function setupIpc(win: BrowserWindow) {
     mathService,
     urlService,
     uiService,
+    missionService,
   )
   sessionService.setMcpConfigPath(configPath)
+
+  missionService.start()
 
   // Session IPC -- thin wrappers around service
   ipcMain.handle("session:create", (_e, name: string, cwd: string) =>
@@ -257,6 +264,18 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("notification:dismiss", (_e, id: string) =>
     notificationService.dismiss(id),
   )
+
+  // Mission orchestration IPC
+  ipcMain.handle("mission:list", () => missionService.list())
+  ipcMain.handle("mission:status", (_e, id?: string) => missionService.status(id))
+  ipcMain.handle("mission:create", (_e, goal: string, cwd: string, autonomy?: any) =>
+    missionService.create(goal, cwd, autonomy),
+  )
+  ipcMain.handle("mission:stop", (_e, id: string) => missionService.stop(id))
+  ipcMain.handle("mission:pause", (_e, id: string, resumeAt?: number) =>
+    missionService.pause(id, resumeAt),
+  )
+  ipcMain.handle("mission:resume", (_e, id: string) => missionService.resume(id))
 
   // Cleanup
   app.on("before-quit", () => sessionService.killAll())

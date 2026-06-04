@@ -34,6 +34,7 @@ import type { ColorService } from "../services/color"
 import type { MathService } from "../services/math"
 import type { UrlService } from "../services/url"
 import type { UiService } from "../services/ui"
+import type { MissionService } from "../services/mission"
 import { registerTools } from "./tools"
 
 // Injected into every connecting session's context via the MCP initialize
@@ -90,6 +91,7 @@ export async function startMcpServer(
   mathService: MathService,
   urlService: UrlService,
   uiService: UiService,
+  missionService: MissionService,
 ): Promise<{ port: number; configPath: string }> {
   const server = new McpServer(
     {
@@ -134,6 +136,7 @@ export async function startMcpServer(
     mathService,
     urlService,
     uiService,
+    missionService,
   )
 
   // Create HTTP server with SSE transport

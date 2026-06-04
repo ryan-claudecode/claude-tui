@@ -224,4 +224,10 @@ export class MissionService {
     this.persist(m)
     return m
   }
+
+  start(): void { if (!this.timer) this.timer = setInterval(() => this.tick(), 5000) }
+  pause(id: string, resumeAt?: number): Mission | undefined { return undefined }
+  resume(id: string): Mission | undefined { return undefined }
+  tick(): void {}
+  stopTimer(): void { if (this.timer) { clearInterval(this.timer); this.timer = null } }
 }
