@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
@@ -223,5 +223,47 @@ describe("SessionService.status", () => {
     const s = svc.create()
     svc.setStatus(s.id, "stopped")
     expect(svc.status()).toBeUndefined()
+  })
+})
+
+// Minimal fake of the slice of TerminalService the container uses.
+class FakeTerminals {
+  private n = 0
+  killed: string[] = []
+  written: Array<{ id: string; data: string }> = []
+  private cb: ((e: any) => void) | null = null
+  create(name?: string, cwd?: string) {
+    const id = `live-${++this.n}`
+    return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const }
+  }
+  kill(id: string) { this.killed.push(id); return true }
+  write(id: string, data: string) { this.written.push({ id, data }) }
+  onEvent(cb: (e: any) => void) { this.cb = cb; return () => { this.cb = null } }
+  emit(e: any) { this.cb?.(e) }
+}
+
+describe("SessionService reconciliation", () => {
+  it("folds terminal state/exit events into refs and recomputes session status", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    svc.addTerminal(s.id, { id: "live-1", name: "x", cwd: "/r", lastState: "active" })
+
+    term.emit({ type: "state", id: "live-1", state: "idle" })
+    expect(svc.get(s.id)!.terminals[0].lastState).toBe("idle")
+    expect(svc.get(s.id)!.status).toBe("active") // idle still counts as live
+
+    term.emit({ type: "exit", id: "live-1" })
+    expect(svc.get(s.id)!.terminals[0].lastState).toBe("dead")
+    expect(svc.get(s.id)!.status).toBe("stopped") // no live PTYs left
+  })
+
+  it("ignores events for terminals it does not own", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    expect(() => term.emit({ type: "state", id: "ghost", state: "idle" })).not.toThrow()
   })
 })

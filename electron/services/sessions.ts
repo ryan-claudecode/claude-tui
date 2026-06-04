@@ -41,14 +41,61 @@ export interface SessionServiceOpts {
   now?: () => number
 }
 
+/** The slice of TerminalService the container drives. */
+export interface TerminalLike {
+  create(name?: string, cwd?: string): { id: string; name: string; cwd: string; state: string }
+  kill(id: string): boolean
+  write(id: string, data: string): void
+  onEvent(cb: (e: { type: "created" | "state" | "exit"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string } }) => void): () => void
+}
+
+interface MainWinLike {
+  webContents: { send: (channel: string, ...args: unknown[]) => void }
+  isDestroyed(): boolean
+}
+
 export class SessionService {
   private sessions = new Map<string, WorkSession>()
   private dir: string
   private now: () => number
 
+  private terminals?: TerminalLike
+  private mainWin: MainWinLike | null = null
+
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
     this.now = opts.now ?? (() => Date.now())
+  }
+
+  attachTerminals(terminals: TerminalLike): void {
+    this.terminals = terminals
+    terminals.onEvent((e) => {
+      if (e.type === "state" && e.id && e.state) this.reconcile(e.id, e.state)
+      else if (e.type === "exit" && e.id) this.reconcile(e.id, "dead")
+    })
+  }
+
+  setMainWindow(win: MainWinLike): void { this.mainWin = win }
+
+  private emit(channel: string, ...args: unknown[]): void {
+    if (this.mainWin && !this.mainWin.isDestroyed()) this.mainWin.webContents.send(channel, ...args)
+  }
+
+  /** Find the session owning a live terminal id. */
+  private sessionOf(terminalId: string): WorkSession | undefined {
+    return [...this.sessions.values()].find((s) => s.terminals.some((t) => t.id === terminalId))
+  }
+
+  /** Fold a live terminal's state into its ref + recompute session status; persist + emit. */
+  private reconcile(terminalId: string, state: "active" | "idle" | "dead"): void {
+    const s = this.sessionOf(terminalId)
+    if (!s) return
+    const t = s.terminals.find((x) => x.id === terminalId)
+    if (!t) return
+    t.lastState = state
+    s.status = s.terminals.some((x) => x.lastState === "active" || x.lastState === "idle") ? "active" : "stopped"
+    this.persist(s)
+    this.emit("worksession:updated", s)
   }
 
   create(): WorkSession {
