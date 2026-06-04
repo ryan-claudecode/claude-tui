@@ -156,6 +156,12 @@ Additional tool groups:
 **Snippets** (`SnippetService`):
 - `save_snippet` / `list_snippets` / `send_snippet` / `delete_snippet` — a library of reusable prompt snippets persisted to `~/.claude-tui/snippets.json`. Unlike templates (which spawn a new session), `send_snippet` injects text into an **existing** session's input via `SessionService.write()`.
 
+**Broadcast** (`BroadcastService`):
+- `broadcast_input` — the "synchronize panes" move: send the same text to every open session at once (or a subset via `session_ids`). `submit=true` appends Enter to actually run it; otherwise it just stages the text in each prompt. Fans out via `SessionService.write()` — no session-layer changes.
+
+**Command runner** (`CommandService`):
+- `run_command` — run a one-off shell command in a session's working directory and get structured output back (exit code, stdout, stderr, duration, `timedOut`). The general-purpose sibling of `run_build`/`run_tests`; output is captured (via `spawnSync`), not streamed — use a real session for long-running/interactive processes.
+
 ## Panel System
 
 Claude renders rich UI alongside terminals via panels. State flows:
