@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useState, useMemo } from "react"
+import { diffLines } from "diff"
 
 interface FileDiff {
   path: string
@@ -12,22 +13,26 @@ interface Props {
 
 type Row = { type: "add" | "del" | "ctx"; oldNo?: number; newNo?: number; text: string }
 
-// Naive line diff — replaced with a proper LCS diff in Task 2.1.
-function naiveDiff(oldContent = "", newContent = ""): Row[] {
-  const oldLines = oldContent.split("\n")
-  const newLines = newContent.split("\n")
+// Proper line diff using the `diff` package's LCS-based algorithm. Each change
+// chunk carries a list of lines; we expand it into per-line rows with running
+// old/new line numbers so additions and deletions stay correctly aligned.
+function computeDiff(oldContent = "", newContent = ""): Row[] {
   const rows: Row[] = []
-  const max = Math.max(oldLines.length, newLines.length)
   let o = 1
   let n = 1
-  for (let i = 0; i < max; i++) {
-    const ol = oldLines[i]
-    const nl = newLines[i]
-    if (ol === nl && ol !== undefined) {
-      rows.push({ type: "ctx", oldNo: o++, newNo: n++, text: ol })
-    } else {
-      if (ol !== undefined) rows.push({ type: "del", oldNo: o++, text: ol })
-      if (nl !== undefined) rows.push({ type: "add", newNo: n++, text: nl })
+  for (const part of diffLines(oldContent, newContent)) {
+    // diffLines keeps the trailing newline on each part; drop a single empty
+    // trailing element so we don't render a phantom blank line per chunk.
+    const lines = part.value.split("\n")
+    if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop()
+    for (const text of lines) {
+      if (part.added) {
+        rows.push({ type: "add", newNo: n++, text })
+      } else if (part.removed) {
+        rows.push({ type: "del", oldNo: o++, text })
+      } else {
+        rows.push({ type: "ctx", oldNo: o++, newNo: n++, text })
+      }
     }
   }
   return rows
@@ -36,12 +41,25 @@ function naiveDiff(oldContent = "", newContent = ""): Row[] {
 export default function DiffPanel({ files = [] }: Props) {
   const [active, setActive] = useState(0)
 
-  if (files.length === 0) {
+  const file = files.length > 0 ? files[Math.min(active, files.length - 1)] : undefined
+
+  const rows = useMemo(
+    () => (file ? computeDiff(file.oldContent, file.newContent) : []),
+    [file],
+  )
+
+  if (files.length === 0 || !file) {
     return <div className="panel-empty">No diff data provided.</div>
   }
 
-  const file = files[Math.min(active, files.length - 1)]
-  const rows = naiveDiff(file.oldContent, file.newContent)
+  const stats = rows.reduce(
+    (acc, r) => {
+      if (r.type === "add") acc.add++
+      else if (r.type === "del") acc.del++
+      return acc
+    },
+    { add: 0, del: 0 },
+  )
 
   return (
     <div className="diff-panel">
@@ -58,7 +76,13 @@ export default function DiffPanel({ files = [] }: Props) {
           ))}
         </div>
       )}
-      <div className="diff-filepath">{file.path}</div>
+      <div className="diff-filepath">
+        <span className="diff-filename">{file.path}</span>
+        <span className="diff-stats">
+          {stats.add > 0 && <span className="diff-stat-add">+{stats.add}</span>}
+          {stats.del > 0 && <span className="diff-stat-del">−{stats.del}</span>}
+        </span>
+      </div>
       <div className="diff-body">
         {rows.map((row, i) => (
           <div key={i} className={`diff-line diff-${row.type}`}>
