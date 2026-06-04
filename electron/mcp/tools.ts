@@ -3,12 +3,14 @@ import { z } from "zod"
 import type { SessionService } from "../services/sessions"
 import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
+import type { PanelService } from "../services/panels"
 
 export function registerTools(
   server: McpServer,
   sessions: SessionService,
   workspaces: WorkspaceService,
   appService: AppService,
+  panels: PanelService,
 ) {
   server.tool(
     "create_session",
@@ -167,5 +169,72 @@ export function registerTools(
         },
       ],
     }
+  })
+
+  // Rich panel tools
+
+  server.tool(
+    "show_panel",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, or table). For interactive forms that return user input, use show_form instead.",
+    {
+      type: z.enum(["diff", "image", "markdown", "table"]).describe("Panel type"),
+      props: z.record(z.any()).describe("Panel-specific data"),
+      position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
+    },
+    async ({ type, props, position }) => {
+      const panel = panels.show(type, props, position)
+      return { content: [{ type: "text" as const, text: JSON.stringify(panel) }] }
+    },
+  )
+
+  server.tool(
+    "show_form",
+    "Show an interactive form panel and wait for the user to submit. Returns the submitted field values (or { cancelled: true } if closed). Fields support types: text, textarea, select, checklist, toggle, number.",
+    {
+      props: z
+        .record(z.any())
+        .describe(
+          "Form definition: { title, fields: [{ name, type, label, options?, items? }], submitLabel? }",
+        ),
+      position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
+    },
+    async ({ props, position }) => {
+      const data = await panels.showForm(props, position)
+      return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }
+    },
+  )
+
+  server.tool(
+    "update_panel",
+    "Update an existing panel's content",
+    {
+      id: z.string().describe("Panel ID"),
+      props: z.record(z.any()).describe("Updated properties (merged into existing)"),
+    },
+    async ({ id, props }) => {
+      const ok = panels.update(id, props)
+      return { content: [{ type: "text" as const, text: ok ? "Panel updated" : "Panel not found" }] }
+    },
+  )
+
+  server.tool(
+    "hide_panel",
+    "Hide a panel by ID",
+    {
+      id: z.string().describe("Panel ID"),
+    },
+    async ({ id }) => {
+      const ok = panels.hide(id)
+      return { content: [{ type: "text" as const, text: ok ? "Panel hidden" : "Panel not found" }] }
+    },
+  )
+
+  server.tool("hide_all_panels", "Hide all open panels", {}, async () => {
+    panels.hideAll()
+    return { content: [{ type: "text" as const, text: "All panels hidden" }] }
+  })
+
+  server.tool("list_panels", "List all open ClaudeTUI panels", {}, async () => {
+    return { content: [{ type: "text" as const, text: JSON.stringify(panels.list(), null, 2) }] }
   })
 }

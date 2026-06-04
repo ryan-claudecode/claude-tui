@@ -26,6 +26,13 @@ contextBridge.exposeInMainWorld("api", {
   takeScreenshot: () => ipcRenderer.invoke("app:screenshot"),
   getAppState: () => ipcRenderer.invoke("app:state"),
 
+  // Panels
+  listPanels: () => ipcRenderer.invoke("panel:list"),
+  hidePanel: (id: string) => ipcRenderer.invoke("panel:hide", id),
+  hideAllPanels: () => ipcRenderer.invoke("panel:hide-all"),
+  submitForm: (id: string, data: Record<string, any>) =>
+    ipcRenderer.send("panel:form-submit", id, data),
+
   // Events from main -> renderer
   onSessionData: (callback: (id: string, data: string) => void) =>
     ipcRenderer.on("session:data", (_e, id, data) => callback(id, data)),
