@@ -32,6 +32,7 @@ const GROUPS: Group[] = [
     title: "General",
     items: [
       { keys: ["Ctrl", "Shift", "P"], desc: "Command palette" },
+      { keys: ["Ctrl", "Shift", "F"], desc: "Search session history" },
       { keys: ["Ctrl", "/"], desc: "Keyboard shortcuts (this menu)" },
     ],
   },

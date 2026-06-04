@@ -9,6 +9,7 @@ import DropZone from "./components/DropZone"
 import CommandPalette, { Command } from "./components/CommandPalette"
 import ToastHost from "./components/ToastHost"
 import ShortcutsHelp from "./components/ShortcutsHelp"
+import HistorySearch from "./components/HistorySearch"
 
 // TypeScript type for the API exposed by preload
 declare global {
@@ -30,6 +31,10 @@ declare global {
       onSplitClose: (callback: () => void) => void
       renameSession: (id: string, newName: string) => Promise<boolean>
       getConfig: () => Promise<any>
+      getSessionOutput: (id: string, maxChars?: number) => Promise<string | null>
+      searchSessionOutput: (query: string, sessionId?: string, limit?: number) => Promise<
+        { sessionId: string; name: string; line: number; text: string }[]
+      >
       saveDroppedImage: (base64: string, filename: string) => Promise<string>
       showPanel: (type: string, props: Record<string, any>, position?: string) => Promise<PanelState>
       listPanels: () => Promise<PanelState[]>
@@ -68,6 +73,7 @@ export default function App() {
   const [drawerCollapsed, setDrawerCollapsed] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   // Load workspaces and config on mount
   useEffect(() => {
@@ -251,6 +257,7 @@ export default function App() {
       { id: "split", label: splitLeft ? "Close Split View" : "Split Panes", hint: "Ctrl+\\", run: toggleSplit },
       { id: "drawer", label: "Toggle Panel Drawer", hint: "Ctrl+P", run: toggleDrawer },
       { id: "hide-panels", label: "Close All Panels", keywords: "hide clear", run: () => { setPanels([]); window.api.hideAllPanels() } },
+      { id: "history", label: "Search Session History", hint: "Ctrl+Shift+F", keywords: "find output log scrollback", run: () => setHistoryOpen(true) },
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
     ]
     const sessionCmds: Command[] = sessions.map((s, i) => ({
@@ -271,6 +278,11 @@ export default function App() {
         e.preventDefault()
         e.stopPropagation()
         setPaletteOpen((o) => !o)
+      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
+        // Session history search overlay.
+        e.preventDefault()
+        e.stopPropagation()
+        setHistoryOpen((o) => !o)
       } else if (e.ctrlKey && e.key === "/") {
         // Toggle the keyboard shortcuts cheat sheet.
         e.preventDefault()
@@ -347,6 +359,11 @@ export default function App() {
       <ToastHost />
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <HistorySearch
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onSelectSession={handleSelectSession}
+      />
       <Sidebar
         sessions={sessions}
         activeId={activeId}

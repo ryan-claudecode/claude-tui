@@ -238,9 +238,19 @@ body {
   transition: filter var(--fast) var(--ease);
 }
 
-.status-dot.active { color: var(--green); filter: drop-shadow(0 0 4px var(--green-soft)); }
+.status-dot.active {
+  color: var(--green);
+  filter: drop-shadow(0 0 4px var(--green-soft));
+  animation: status-pulse 1.4s var(--ease) infinite;
+}
 .status-dot.idle { color: var(--yellow); }
 .status-dot.dead { color: var(--text-4); }
+
+/* A working session breathes; an idle one is steady. */
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 
 .sidebar-actions {
   margin-top: auto;
@@ -1596,6 +1606,56 @@ body {
   text-align: center;
   color: var(--text-3);
   font-size: 13px;
+}
+
+/* ============================================================
+   Session history search (Ctrl+Shift+F)
+   ============================================================ */
+.history-panel {
+  max-height: min(70vh, 620px);
+}
+
+.history-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 1px 7px;
+  flex-shrink: 0;
+}
+
+.history-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  justify-content: flex-start;
+}
+
+.history-source {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent, #5aa6ff);
+  opacity: 0.85;
+}
+
+.history-line {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.history-mark {
+  background: rgba(255, 214, 102, 0.25);
+  color: #ffe7a3;
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 /* ============================================================
