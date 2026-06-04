@@ -146,6 +146,10 @@ Additional tool groups:
 **Notifications** (`NotificationService`):
 - `notify` — show a toast (`info` / `success` / `warning` / `error`). Surfaces even when the calling session's terminal isn't focused — use it to announce task completion, request input, or report errors. Auto-dismisses after `timeout` ms (0 = sticky). Rendered by `ToastHost` (`src/components/ToastHost.tsx`).
 
+**Session templates** (`TemplateService`):
+- `list_session_templates` — list pre-configured session types (code review, debugging, frontend, planning)
+- `create_session_from_template` — spawn a session from a template and seed its starter prompt once Claude boots
+
 ## Panel System
 
 Claude renders rich UI alongside terminals via panels. State flows:

@@ -7,6 +7,7 @@ import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
 import type { NotificationService } from "../services/notifications"
 import type { GitService } from "../services/git"
+import type { TemplateService } from "../services/templates"
 import { registerTools } from "./tools"
 
 export async function startMcpServer(
@@ -16,6 +17,7 @@ export async function startMcpServer(
   panelService: PanelService,
   notificationService: NotificationService,
   gitService: GitService,
+  templateService: TemplateService,
 ): Promise<{ port: number; configPath: string }> {
   const server = new McpServer({
     name: "claudetui",
@@ -30,6 +32,7 @@ export async function startMcpServer(
     panelService,
     notificationService,
     gitService,
+    templateService,
   )
 
   // Create HTTP server with SSE transport

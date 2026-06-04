@@ -6,6 +6,7 @@ import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
 import type { NotificationService } from "../services/notifications"
 import type { GitService } from "../services/git"
+import type { TemplateService } from "../services/templates"
 
 export function registerTools(
   server: McpServer,
@@ -15,6 +16,7 @@ export function registerTools(
   panels: PanelService,
   notifications: NotificationService,
   git: GitService,
+  templates: TemplateService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -330,6 +332,37 @@ export function registerTools(
         }
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `git diff failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  // Session template tools — spawn purpose-built sessions seeded with a prompt
+
+  server.tool(
+    "list_session_templates",
+    "List available session templates (pre-configured session types like 'code review' or 'debugging' that seed a starter prompt).",
+    {},
+    async () => {
+      return { content: [{ type: "text" as const, text: JSON.stringify(templates.list(), null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "create_session_from_template",
+    "Create a new session from a template (see list_session_templates). Spawns the session and types the template's starter prompt into it once Claude has booted.",
+    {
+      template_id: z.string().describe("Template id from list_session_templates"),
+      cwd: z.string().optional().describe("Working directory (overrides the template's default)"),
+    },
+    async ({ template_id, cwd }) => {
+      const info = templates.instantiate(template_id, cwd)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: info ? JSON.stringify(info) : `Template not found: ${template_id}`,
+          },
+        ],
       }
     },
   )
