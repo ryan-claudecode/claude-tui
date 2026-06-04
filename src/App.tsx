@@ -76,6 +76,7 @@ declare global {
       pauseMission: (id: string) => Promise<any>
       resumeMission: (id: string) => Promise<any>
       removeAllListeners: (channel: string) => void
+      getSessionOverview: (sessionId: string) => Promise<any>
     }
   }
 }
@@ -376,6 +377,23 @@ export default function App() {
     setDrawerCollapsed(false)
   }, [])
 
+  const openOverview = useCallback(async (sessionId: string) => {
+    const ov = await window.api.getSessionOverview(sessionId)
+    if (!ov) return
+    const panel: PanelState = {
+      id: `overview-${sessionId}`,
+      type: "session-overview",
+      position: "right",
+      props: {
+        ...ov,
+        onReopenTerminal: (terminalId: string) => handleSelectTerminal(sessionId, terminalId),
+      },
+      visible: true,
+    }
+    setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), panel])
+    setDrawerCollapsed(false)
+  }, [handleSelectTerminal])
+
   // Create a mission from the prompt overlay, then open its dashboard panel.
   const createMission = useCallback(
     async (goal: string, autonomy: Autonomy) => {
@@ -431,6 +449,7 @@ export default function App() {
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
       { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: () => setMissionPromptOpen(true) },
       { id: "missions", label: "View Missions", keywords: "orchestrate conductor list dashboard status", run: () => setMissionsListOpen(true) },
+      { id: "session-overview", label: "Show Session Overview", keywords: "context summary findings notes birdseye", run: () => activeSessionId && openOverview(activeSessionId) },
     ]
     const sessionCmds: Command[] = sessions.map((s, i) => ({
       id: `switch-${s.id}`,
@@ -440,7 +459,7 @@ export default function App() {
       run: () => handleSelectSession(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, toggleSplit, toggleDrawer, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, toggleSplit, toggleDrawer, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, activeSessionId])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
@@ -559,6 +578,7 @@ export default function App() {
         onSelectSession={handleSelectSession}
         onSelectTerminal={handleSelectTerminal}
         onSelectWorkspace={(index) => window.api.activateWorkspace(index)}
+        onShowOverview={openOverview}
       />
       <div className="main-area">
         <TabBar

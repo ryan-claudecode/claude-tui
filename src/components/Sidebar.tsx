@@ -11,11 +11,12 @@ interface Props {
   onSelectSession: (id: string) => void
   onSelectTerminal: (sessionId: string, terminalId: string) => void
   onSelectWorkspace?: (index: number) => void
+  onShowOverview?: (sessionId: string) => void
 }
 
 export default function Sidebar({
   sessions, activeSessionId, activeTerminalId, workspaces,
-  onNewSession, onKillSession, onSelectSession, onSelectTerminal, onSelectWorkspace,
+  onNewSession, onKillSession, onSelectSession, onSelectTerminal, onSelectWorkspace, onShowOverview,
 }: Props) {
   return (
     <div className="sidebar">
@@ -53,25 +54,31 @@ export default function Sidebar({
             : s.status === "stopped" ? "Stopped"
             : working > 0 ? `${working} Terminal${working === 1 ? "" : "s"} Working`
             : "Idle"
-          const expandable = s.terminals.length >= 2
+          const selected = activeSessionId === s.id
           const [busy] = [...s.terminals].sort(
             (a, b) => (b.lastState === "active" ? 1 : 0) - (a.lastState === "active" ? 1 : 0),
           )
           return (
             <div key={s.id} className="session-group">
               <div
-                className={`session-item ${activeSessionId === s.id ? "active" : ""}`}
+                className={`session-item ${selected ? "active" : ""}`}
                 onClick={() => onSelectSession(s.id)}
               >
-                {expandable && <span className="tree-caret">▾</span>}
                 <span className={`status-dot ${dot}`} />
                 <span className="session-name">{s.name}</span>
                 <span className="session-label">{label}</span>
+                <button
+                  className="session-overview-btn"
+                  title="Session overview"
+                  onClick={(e) => { e.stopPropagation(); onShowOverview?.(s.id) }}
+                >
+                  ⊕
+                </button>
               </div>
-              {!expandable && busy?.activity && s.status !== "stopped" && (
+              {!selected && busy?.activity && s.status !== "stopped" && (
                 <div className="activity-line">{busy.activity}</div>
               )}
-              {expandable && s.terminals.map((t) => (
+              {selected && s.terminals.map((t) => (
                 <div
                   key={t.id}
                   className={`terminal-item ${activeTerminalId === t.id ? "active" : ""}`}
@@ -80,7 +87,7 @@ export default function Sidebar({
                   <span className={`status-dot ${t.lastState}`} />
                   <span className="terminal-name">{t.name}</span>
                   <span className="activity-inline">
-                    {t.lastState === "active" ? (t.activity ?? "") : "Idle"}
+                    {t.lastState === "dead" ? "Stopped" : t.lastState === "active" ? (t.activity ?? "") : "Idle"}
                   </span>
                 </div>
               ))}

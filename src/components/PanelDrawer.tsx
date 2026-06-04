@@ -17,6 +17,7 @@ import ProgressPanel from "./panels/ProgressPanel"
 import CodePanel from "./panels/CodePanel"
 import HeatmapPanel from "./panels/HeatmapPanel"
 import MissionPanel from "./panels/MissionPanel"
+import SessionOverviewPanel from "./panels/SessionOverviewPanel"
 
 export interface PanelState {
   id: string
@@ -56,6 +57,7 @@ const PANEL_LABELS: Record<string, string> = {
   code: "Code",
   heatmap: "Heatmap",
   mission: "Mission",
+  "session-overview": "Overview",
 }
 
 export default function PanelDrawer({ panels, onClose, onSendToSession, onMissionStop, onMissionPause }: Props) {
@@ -195,6 +197,8 @@ function PanelContent({
       return <HeatmapPanel {...panel.props} />
     case "mission":
       return <MissionPanel {...panel.props} onStop={onMissionStop} onPause={onMissionPause} />
+    case "session-overview":
+      return <SessionOverviewPanel {...(panel.props as any)} />
     default:
       return <pre className="panel-raw">{JSON.stringify(panel.props, null, 2)}</pre>
   }
