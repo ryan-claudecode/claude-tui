@@ -39,12 +39,15 @@ export interface WorkSession {
 export interface SessionServiceOpts {
   dir?: string
   now?: () => number
+  idleFlushGraceMs?: number
 }
 
 /** The slice of TerminalService the container drives. */
 export interface TerminalLike {
   create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string): { id: string; name: string; cwd: string; state: string }
   kill(id: string): boolean
+  write(id: string, data: string): void
+  getOutput(id: string, maxChars?: number): string | null
   onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string }) => void): () => void
 }
 
@@ -61,9 +64,17 @@ export class SessionService {
   private terminals?: TerminalLike
   private mainWin: MainWinLike | null = null
 
+  /** Sessions with notes added since their last summary refresh. */
+  private summaryDirty = new Set<string>()
+  /** Last idle-flush injection time per session (debounce). */
+  private lastFlushAt = new Map<string, number>()
+  private readonly idleFlushMinIntervalMs = 60_000
+  private idleFlushGraceMs: number
+
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
     this.now = opts.now ?? (() => Date.now())
+    this.idleFlushGraceMs = opts.idleFlushGraceMs ?? 8000
   }
 
   attachTerminals(terminals: TerminalLike): void {
@@ -106,8 +117,36 @@ export class SessionService {
     if (!t) return
     t.lastState = state
     s.status = s.terminals.some((x) => x.lastState === "active" || x.lastState === "idle") ? "active" : "stopped"
+    if (state === "idle") this.scheduleIdleFlush(s.id, terminalId)
     this.persist(s)
     this.emit("worksession:updated", s)
+  }
+
+  /**
+   * After a terminal goes idle, refresh the session summary IF new notes have
+   * landed since the last refresh. The terminal that did the work distills it —
+   * we inject one prompt asking it to call set_session_summary. Debounced so we
+   * never flush more than once per idleFlushMinIntervalMs, and gated on dirty so
+   * an idle terminal with nothing new is left alone.
+   */
+  private scheduleIdleFlush(sessionId: string, terminalId: string): void {
+    setTimeout(() => {
+      const s = this.sessions.get(sessionId)
+      if (!s || !this.terminals) return
+      const t = s.terminals.find((x) => x.id === terminalId)
+      if (!t || t.lastState !== "idle") return // moved on; don't interrupt
+      if (!this.summaryDirty.has(sessionId)) return
+      const last = this.lastFlushAt.get(sessionId)
+      if (last !== undefined && this.now() - last < this.idleFlushMinIntervalMs) return
+
+      this.summaryDirty.delete(sessionId)
+      this.lastFlushAt.set(sessionId, this.now())
+      const prompt =
+        "Before you go quiet: fold any new findings into the session summary now. " +
+        "Call set_session_summary with the updated goal + current-state blurb so a " +
+        "fresh terminal inherits it. Keep it concise."
+      this.terminals.write(terminalId, `\x1b[200~${prompt}\x1b[201~\r`)
+    }, this.idleFlushGraceMs)
   }
 
   /** Create a session + spawn & register its first terminal. */
@@ -302,6 +341,7 @@ export class SessionService {
       }
     }
     s.notes.push(note)
+    this.summaryDirty.add(sessionId)
     this.persist(s)
     return note
   }
@@ -310,6 +350,7 @@ export class SessionService {
     const s = this.sessions.get(sessionId)
     if (!s) return
     s.summary = summary
+    this.summaryDirty.delete(sessionId)
     this.persist(s)
   }
 

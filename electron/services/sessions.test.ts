@@ -247,12 +247,16 @@ class FakeTerminals {
   killed: string[] = []
   spawned: Array<{ id: string; name?: string; cwd?: string; sessionId?: string; resumeConvId?: string }> = []
   private cb: ((e: any) => void) | null = null
+  writes: Array<{ id: string; data: string }> = []
+  output = new Map<string, string>()
   create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string) {
     const id = `live-${++this.n}`
     this.spawned.push({ id, name, cwd, sessionId, resumeConvId })
     return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const }
   }
   kill(id: string) { this.killed.push(id); return true }
+  write(id: string, data: string) { this.writes.push({ id, data }) }
+  getOutput(id: string) { return this.output.get(id) ?? null }
   onEvent(cb: (e: any) => void) { this.cb = cb; return () => { this.cb = null } }
   emit(e: any) { this.cb?.(e) }
 }
@@ -385,8 +389,8 @@ describe("SessionService identity-bound spawn", () => {
     svc.addTerminalToSession(session.id, "/repo")
     // every spawn carries the session id so the PTY's MCP config is identity-bound
     expect(term.spawned.every((sp) => sp.sessionId === session.id)).toBe(true)
-    // no write()/seed-paste API is used at all
-    expect("write" in term).toBe(false)
+    // spawning injects nothing (no seed-paste); write is only used by idle-flush/handoff
+    expect(term.writes.length).toBe(0)
   })
 
   it("reopenTerminal also spawns with the session id", () => {
@@ -397,5 +401,34 @@ describe("SessionService identity-bound spawn", () => {
     term.emit({ type: "exit", id: terminalId })
     svc.reopenTerminal(session.id, svc.get(session.id)!.terminals[0].id)
     expect(term.spawned[term.spawned.length - 1].sessionId).toBe(session.id)
+  })
+})
+
+const tick = () => new Promise((r) => setTimeout(r, 5))
+
+describe("SessionService idle-flush", () => {
+  it("injects a summary-refresh prompt when idle + dirty", async () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1, idleFlushGraceMs: 0 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    svc.addNote(session.id, "found the bug") // marks dirty
+
+    term.emit({ type: "state", id: terminalId, state: "idle" }) // active -> idle
+    await tick()
+
+    const injected = term.writes.find((w) => w.id === terminalId)
+    expect(injected).toBeTruthy()
+    expect(injected!.data).toContain("set_session_summary")
+  })
+
+  it("does NOT inject when there are no new notes (clean)", async () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1, idleFlushGraceMs: 0 })
+    svc.attachTerminals(term as any)
+    const { terminalId } = svc.openSession("/repo")
+    term.emit({ type: "state", id: terminalId, state: "idle" })
+    await tick()
+    expect(term.writes.length).toBe(0)
   })
 })
