@@ -1,5 +1,5 @@
 {
-  "goal": "Connectivity test only. Do exactly one task: create a file named PROOF.txt in the current working directory whose entire contents are the single line MISSION_E2E_OK. Then finish the mission. Do not do anything else.",
+  "goal": "Two-task verification of the await/boot race. Do exactly two tasks, in order, each as a separate dispatched worker. Task 1: create a file named PROOF2.txt in the current working directory whose entire contents are the single line, exactly verbatim: L1_CREATED. Task 2 (only after Task 1 is resolved): append a second line to that same PROOF2.txt so its full contents become exactly two lines, verbatim:\nL1_CREATED\nL2_APPENDED\nThen finish the mission. Do not do anything else. Write the literal bytes exactly; do not paraphrase or reformat.",
   "cwd": "C:\\Users\\ryguy\\projects\\mission-e2e",
   "autonomy": "hands-off"
 }
