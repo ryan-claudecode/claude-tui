@@ -21,6 +21,7 @@ import type { FileSearchService } from "../services/filesearch"
 import type { FileService } from "../services/files"
 import type { HttpService } from "../services/http"
 import type { PortService } from "../services/ports"
+import type { EditService } from "../services/edit"
 
 export function registerTools(
   server: McpServer,
@@ -45,6 +46,7 @@ export function registerTools(
   files: FileService,
   http: HttpService,
   ports: PortService,
+  edit: EditService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1197,6 +1199,48 @@ export function registerTools(
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `write_file failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  // Surgical edits — the middle ground between read_file and write_file. Change
+  // a precise string or insert at a line without rewriting (and risking
+  // clobbering) the whole file.
+  server.tool(
+    "replace_in_file",
+    "Replace an exact string in a file (relative to a session's working dir, or absolute). By default old_string must occur exactly once so the edit is unambiguous; set replace_all to change every occurrence. Fails if old_string is missing, not unique (without replace_all), or equal to new_string. Returns the resolved path, number of replacements, and bytes written. Prefer this over rewriting the whole file with write_file for small edits.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      path: z.string().describe("File path, relative to the working dir or absolute"),
+      old_string: z.string().describe("The exact text to replace (include surrounding context to make it unique)"),
+      new_string: z.string().describe("The text to replace it with"),
+      replace_all: z.boolean().optional().describe("Replace every occurrence instead of requiring a unique match (default false)"),
+    },
+    async ({ session_id, path: filePath, old_string, new_string, replace_all }) => {
+      try {
+        const result = edit.replaceInFile(resolveCwd(session_id), filePath, old_string, new_string, replace_all ?? false)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `replace_in_file failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "insert_in_file",
+    "Insert content before a 1-based line number in a file (relative to a session's working dir, or absolute). A line <= 0 or beyond the end of the file appends at the end. The inserted content occupies its own line(s). Returns the resolved path, the line it was inserted at, and bytes written. Use to add a block (import, function, config entry) without rewriting the whole file.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      path: z.string().describe("File path, relative to the working dir or absolute"),
+      line: z.number().describe("1-based line number to insert before; <= 0 or past the end appends at the end"),
+      content: z.string().describe("Content to insert (may contain newlines for multiple lines)"),
+    },
+    async ({ session_id, path: filePath, line, content }) => {
+      try {
+        const result = edit.insertInFile(resolveCwd(session_id), filePath, line, content)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `insert_in_file failed: ${e.message}` }] }
       }
     },
   )
