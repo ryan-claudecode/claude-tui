@@ -261,41 +261,30 @@ body {
   gap: var(--s-1);
 }
 
-.sidebar-btn {
-  background: linear-gradient(180deg, var(--bg-4), var(--bg-3));
-  border: 1px solid var(--border-strong);
-  color: var(--text-1);
-  padding: 7px var(--s-3);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 500;
-  font-family: inherit;
-  text-align: left;
-  border-radius: var(--r);
+.sidebar-hint {
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  box-shadow: var(--shadow-1), inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  transition: background var(--fast) var(--ease), transform var(--fast) var(--ease),
-    box-shadow var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  padding: 5px var(--s-2);
+  cursor: pointer;
+  border-radius: var(--r);
+  font-size: 12px;
+  color: var(--text-2);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+  user-select: none;
 }
 
-.sidebar-btn:hover {
-  background: linear-gradient(180deg, var(--bg-5), var(--bg-4));
-  border-color: #3a4655;
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+.sidebar-hint:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-1);
 }
 
-.sidebar-btn:active {
-  transform: translateY(0);
-  box-shadow: var(--shadow-1);
-}
+.sidebar-hint:active { background: rgba(255, 255, 255, 0.07); }
 
-.sidebar-btn.new { color: var(--accent-bright); }
-.sidebar-btn.new:hover { border-color: rgba(90, 166, 255, 0.4); box-shadow: var(--shadow-glow); }
-.sidebar-btn.kill { color: var(--red); }
-.sidebar-btn.handoff { color: var(--yellow); }
+.sidebar-hint .shortcut-desc { align-self: center; }
+.sidebar-hint.new:hover { color: var(--accent-bright); }
+.sidebar-hint.kill:hover { color: var(--red); }
+.sidebar-hint.handoff:hover { color: var(--yellow); }
 
 /* ============================================================
    Main area
@@ -808,7 +797,7 @@ body {
   line-height: 1.5;
 }
 
-.diff-line { display: flex; white-space: pre; }
+.diff-line { display: flex; white-space: pre; user-select: none; }
 
 .diff-lineno {
   width: 44px;

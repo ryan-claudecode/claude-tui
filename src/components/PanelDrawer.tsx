@@ -30,6 +30,8 @@ export interface PanelState {
 interface Props {
   panels: PanelState[]
   onClose: (id: string) => void
+  // Sends text into the active session (used by the diff panel's review button).
+  onSendToSession?: (text: string) => boolean
 }
 
 const PANEL_LABELS: Record<string, string> = {
@@ -52,7 +54,7 @@ const PANEL_LABELS: Record<string, string> = {
   heatmap: "Heatmap",
 }
 
-export default function PanelDrawer({ panels, onClose }: Props) {
+export default function PanelDrawer({ panels, onClose, onSendToSession }: Props) {
   const visiblePanels = panels.filter((p) => p.visible)
   const [activeIdx, setActiveIdx] = useState(0)
 
@@ -135,16 +137,22 @@ export default function PanelDrawer({ panels, onClose }: Props) {
         </div>
       </div>
       <div className="panel-body">
-        <PanelContent panel={panel} />
+        <PanelContent panel={panel} onSendToSession={onSendToSession} />
       </div>
     </div>
   )
 }
 
-function PanelContent({ panel }: { panel: PanelState }) {
+function PanelContent({
+  panel,
+  onSendToSession,
+}: {
+  panel: PanelState
+  onSendToSession?: (text: string) => boolean
+}) {
   switch (panel.type) {
     case "diff":
-      return <DiffPanel {...panel.props} />
+      return <DiffPanel {...panel.props} onSend={onSendToSession} />
     case "form":
       return <FormPanel panelId={panel.id} {...panel.props} />
     case "image":

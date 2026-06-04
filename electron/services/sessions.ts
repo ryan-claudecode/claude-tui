@@ -359,8 +359,11 @@ export class SessionService {
   }
 
   focus(id: string): boolean {
-    // Focus is primarily a renderer concern; main process just acknowledges
-    return this.sessions.has(id)
+    // Switching the visible tab is a renderer concern — tell it to activate this
+    // session (so the MCP focus_session tool actually changes the active tab).
+    if (!this.sessions.has(id)) return false
+    this.sendToRenderer("session:focus", id)
+    return true
   }
 
   splitPanes(leftId: string, rightId: string): boolean {

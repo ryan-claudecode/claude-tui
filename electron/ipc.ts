@@ -32,6 +32,7 @@ import { TextService } from "./services/text"
 import { ColorService } from "./services/color"
 import { MathService } from "./services/math"
 import { UrlService } from "./services/url"
+import { UiService } from "./services/ui"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -67,6 +68,7 @@ export const textService = new TextService()
 export const colorService = new ColorService()
 export const mathService = new MathService()
 export const urlService = new UrlService()
+export const uiService = new UiService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -82,6 +84,7 @@ export async function setupIpc(win: BrowserWindow) {
 
   panelService.setMainWindow(win)
   notificationService.setMainWindow(win)
+  uiService.setMainWindow(win)
 
   workspaceService.discover(config.workspaceScanPaths)
 
@@ -119,6 +122,7 @@ export async function setupIpc(win: BrowserWindow) {
     colorService,
     mathService,
     urlService,
+    uiService,
   )
   sessionService.setMcpConfigPath(configPath)
 

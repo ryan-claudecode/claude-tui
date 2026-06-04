@@ -32,6 +32,8 @@ import type { TextService } from "../services/text"
 import type { ColorService } from "../services/color"
 import type { MathService } from "../services/math"
 import type { UrlService } from "../services/url"
+import type { UiService } from "../services/ui"
+import { loadConfig } from "../config"
 import { isAbsolute, join } from "path"
 
 export function registerTools(
@@ -68,6 +70,7 @@ export function registerTools(
   color: ColorService,
   math: MathService,
   url: UrlService,
+  ui: UiService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -239,11 +242,99 @@ export function registerTools(
     }
   })
 
+  // App UI control tools — drive the same view actions a user can trigger by
+  // keyboard/menu. Each fans a command to the renderer via UiService. Boolean
+  // toggles take an optional desired state; omit it to flip the current state.
+
+  server.tool(
+    "set_focus_mode",
+    "Toggle or set ClaudeTUI's distraction-free focus mode (hides the sidebar and tab bar so only the terminal(s) and panels show). Omit `enabled` to toggle.",
+    {
+      enabled: z.boolean().optional().describe("true = on, false = off, omit = toggle"),
+    },
+    async ({ enabled }) => {
+      ui.setFocusMode(enabled)
+      const label = enabled === undefined ? "toggled" : enabled ? "enabled" : "disabled"
+      return { content: [{ type: "text" as const, text: `Focus mode ${label}` }] }
+    },
+  )
+
+  server.tool(
+    "toggle_panel_drawer",
+    "Collapse or expand the ClaudeTUI panel drawer (the side/bottom panel area). Omit `collapsed` to toggle. Only has a visible effect when at least one panel is open.",
+    {
+      collapsed: z.boolean().optional().describe("true = collapsed, false = expanded, omit = toggle"),
+    },
+    async ({ collapsed }) => {
+      ui.setPanelDrawer(collapsed)
+      const label = collapsed === undefined ? "toggled" : collapsed ? "collapsed" : "expanded"
+      return { content: [{ type: "text" as const, text: `Panel drawer ${label}` }] }
+    },
+  )
+
+  server.tool(
+    "open_command_palette",
+    "Open or close the ClaudeTUI command palette (the Ctrl+Shift+P fuzzy action menu). Omit `open` to toggle.",
+    {
+      open: z.boolean().optional().describe("true = open, false = close, omit = toggle"),
+    },
+    async ({ open }) => {
+      ui.setCommandPalette(open)
+      return { content: [{ type: "text" as const, text: `Command palette ${open === false ? "closed" : "opened"}` }] }
+    },
+  )
+
+  server.tool(
+    "show_keyboard_shortcuts",
+    "Open or close the ClaudeTUI keyboard-shortcuts help overlay (Ctrl+/). Omit `open` to toggle.",
+    {
+      open: z.boolean().optional().describe("true = open, false = close, omit = toggle"),
+    },
+    async ({ open }) => {
+      ui.setShortcutsHelp(open)
+      return { content: [{ type: "text" as const, text: `Shortcuts help ${open === false ? "closed" : "opened"}` }] }
+    },
+  )
+
+  server.tool(
+    "open_history_search",
+    "Open or close the ClaudeTUI session-history search overlay (Ctrl+Shift+F — searches captured session output). Omit `open` to toggle.",
+    {
+      open: z.boolean().optional().describe("true = open, false = close, omit = toggle"),
+    },
+    async ({ open }) => {
+      ui.setHistorySearch(open)
+      return { content: [{ type: "text" as const, text: `History search ${open === false ? "closed" : "opened"}` }] }
+    },
+  )
+
+  server.tool(
+    "export_session_log",
+    "Trigger a download of a session's captured output as a .txt file. Defaults to the active session if `session_id` is omitted.",
+    {
+      session_id: z.string().optional().describe("Session ID (defaults to the active session)"),
+    },
+    async ({ session_id }) => {
+      ui.exportSessionLog(session_id)
+      return { content: [{ type: "text" as const, text: "Session log export triggered" }] }
+    },
+  )
+
+  server.tool(
+    "get_config",
+    "Read ClaudeTUI's current configuration (~/.claude-tui/config.json) — theme, default command/args, and workspace scan paths.",
+    {},
+    async () => {
+      const config = loadConfig()
+      return { content: [{ type: "text" as const, text: JSON.stringify(config, null, 2) }] }
+    },
+  )
+
   // Rich panel tools
 
   server.tool(
     "show_panel",
-    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, git, or kanban). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams. For notes: props = { title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] } — the cross-session scratchpad (prefer the show_notes tool, which loads saved notes for you). For stat: props = { title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] } — a dashboard of big-number KPI cards (test counts, coverage %, build time, bundle size); distinct from chart, which is for series viz. For log: props = { title?, lines: [string | { text, level?: 'info'|'warn'|'error'|'debug'|'success', time? }], showLevel? } — a scrollable monospace log viewer with per-line severity coloring (command output, test streams, server logs). For progress: props = { title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? } — a vertical stepper with a progress bar for sequential task pipelines (distinct from timeline, which is chronological events). For code: props = { code: string, language?, filename?, startLine?, highlightLines?: number[], wrap? } — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from diff, which compares two versions). For heatmap: props = { title?, rows: number[][], xLabels?: string[], yLabels?: string[], unit?, min?, max? } — a color-coded 2D numeric matrix on a blue→green→amber→red ramp (correlation matrices, coverage grids, latency-by-hour); distinct from chart (series viz) and table (text grid).",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, heatmap, tree, timeline, git, kanban, notes, stat, log, progress, or code). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams. For notes: props = { title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] } — the cross-session scratchpad (prefer the show_notes tool, which loads saved notes for you). For stat: props = { title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] } — a dashboard of big-number KPI cards (test counts, coverage %, build time, bundle size); distinct from chart, which is for series viz. For log: props = { title?, lines: [string | { text, level?: 'info'|'warn'|'error'|'debug'|'success', time? }], showLevel? } — a scrollable monospace log viewer with per-line severity coloring (command output, test streams, server logs). For progress: props = { title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? } — a vertical stepper with a progress bar for sequential task pipelines (distinct from timeline, which is chronological events). For code: props = { code: string, language?, filename?, startLine?, highlightLines?: number[], wrap? } — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from diff, which compares two versions). For heatmap: props = { title?, rows: number[][], xLabels?: string[], yLabels?: string[], unit?, min?, max? } — a color-coded 2D numeric matrix on a blue→green→amber→red ramp (correlation matrices, coverage grids, latency-by-hour); distinct from chart (series viz) and table (text grid).",
     {
       type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban", "notes", "stat", "log", "progress", "code", "heatmap"]).describe("Panel type"),
       props: z.record(z.any()).describe("Panel-specific data"),

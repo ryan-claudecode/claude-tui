@@ -67,11 +67,30 @@ contextBridge.exposeInMainWorld("api", {
   onSessionState: (callback: (id: string, state: string) => void) =>
     ipcRenderer.on("session:state", (_e, id, state) => callback(id, state)),
 
+  // Session focus event from main (triggered by the focus_session MCP tool)
+  onSessionFocus: (callback: (id: string) => void) =>
+    ipcRenderer.on("session:focus", (_e, id) => callback(id)),
+
   // Split pane events from main (triggered by MCP tools)
   onSplitSet: (callback: (leftId: string, rightId: string) => void) =>
     ipcRenderer.on("split:set", (_e, leftId, rightId) => callback(leftId, rightId)),
   onSplitClose: (callback: () => void) =>
     ipcRenderer.on("split:close", () => callback()),
+
+  // UI control events from main (triggered by the App UI control MCP tools).
+  // The boolean payload is the desired state; `undefined`/`null` means toggle.
+  onUiFocusMode: (callback: (enabled?: boolean) => void) =>
+    ipcRenderer.on("ui:focus-mode", (_e, enabled) => callback(enabled ?? undefined)),
+  onUiDrawer: (callback: (collapsed?: boolean) => void) =>
+    ipcRenderer.on("ui:drawer", (_e, collapsed) => callback(collapsed ?? undefined)),
+  onUiCommandPalette: (callback: (open?: boolean) => void) =>
+    ipcRenderer.on("ui:command-palette", (_e, open) => callback(open ?? undefined)),
+  onUiShortcutsHelp: (callback: (open?: boolean) => void) =>
+    ipcRenderer.on("ui:shortcuts-help", (_e, open) => callback(open ?? undefined)),
+  onUiHistorySearch: (callback: (open?: boolean) => void) =>
+    ipcRenderer.on("ui:history-search", (_e, open) => callback(open ?? undefined)),
+  onUiExportLog: (callback: (sessionId: string | null) => void) =>
+    ipcRenderer.on("ui:export-log", (_e, sessionId) => callback(sessionId)),
 
   // Panel events from main (triggered by MCP tools)
   onPanelShow: (callback: (panel: any) => void) =>

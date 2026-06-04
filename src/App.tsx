@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import Sidebar from "./components/Sidebar"
 import TabBar from "./components/TabBar"
 import TerminalPane from "./components/TerminalPane"
@@ -29,8 +29,15 @@ declare global {
       onSessionCreated: (callback: (session: any) => void) => void
       onSessionState: (callback: (id: string, state: string) => void) => void
       getSessionActivity: () => Promise<any[]>
+      onSessionFocus: (callback: (id: string) => void) => void
       onSplitSet: (callback: (leftId: string, rightId: string) => void) => void
       onSplitClose: (callback: () => void) => void
+      onUiFocusMode: (callback: (enabled?: boolean) => void) => void
+      onUiDrawer: (callback: (collapsed?: boolean) => void) => void
+      onUiCommandPalette: (callback: (open?: boolean) => void) => void
+      onUiShortcutsHelp: (callback: (open?: boolean) => void) => void
+      onUiHistorySearch: (callback: (open?: boolean) => void) => void
+      onUiExportLog: (callback: (sessionId: string | null) => void) => void
       renameSession: (id: string, newName: string) => Promise<boolean>
       getConfig: () => Promise<any>
       getSessionOutput: (id: string, maxChars?: number) => Promise<string | null>
@@ -123,6 +130,26 @@ export default function App() {
       setSplitRight(null)
     })
 
+    // Switch the visible tab when the focus_session MCP tool fires.
+    window.api.onSessionFocus((id) => setActiveId(id))
+
+    // UI control events from MCP tools. A boolean payload sets the state
+    // explicitly; undefined toggles it (functional updates keep this correct
+    // despite the once-on-mount registration).
+    const setOrToggle =
+      (setter: React.Dispatch<React.SetStateAction<boolean>>) => (value?: boolean) =>
+        setter((cur) => (typeof value === "boolean" ? value : !cur))
+
+    window.api.onUiFocusMode(setOrToggle(setZenMode))
+    window.api.onUiCommandPalette(setOrToggle(setPaletteOpen))
+    window.api.onUiShortcutsHelp(setOrToggle(setHelpOpen))
+    window.api.onUiHistorySearch(setOrToggle(setHistoryOpen))
+    // Drawer only toggles meaningfully when a panel exists; mirror the keybind.
+    window.api.onUiDrawer((collapsed) =>
+      setDrawerCollapsed((cur) => (typeof collapsed === "boolean" ? collapsed : !cur))
+    )
+    window.api.onUiExportLog((id) => exportLogRef.current(id ?? undefined))
+
     // Panel events from main process (triggered by MCP tools)
     window.api.onPanelShow((panel) => {
       setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), panel])
@@ -148,6 +175,13 @@ export default function App() {
       window.api.removeAllListeners("session:state")
       window.api.removeAllListeners("split:set")
       window.api.removeAllListeners("split:close")
+      window.api.removeAllListeners("session:focus")
+      window.api.removeAllListeners("ui:focus-mode")
+      window.api.removeAllListeners("ui:drawer")
+      window.api.removeAllListeners("ui:command-palette")
+      window.api.removeAllListeners("ui:shortcuts-help")
+      window.api.removeAllListeners("ui:history-search")
+      window.api.removeAllListeners("ui:export-log")
       window.api.removeAllListeners("panel:show")
       window.api.removeAllListeners("panel:update")
       window.api.removeAllListeners("panel:hide")
@@ -194,6 +228,18 @@ export default function App() {
       if (activeId) {
         window.api.writeToSession(activeId, `"${path}" `)
       }
+    },
+    [activeId]
+  )
+
+  // Send text straight into the active session (used by the diff review button).
+  // Wrapped in bracketed-paste markers so a multi-line block is inserted as one
+  // paste, then submitted with Enter. Returns false when no session is active.
+  const sendToActiveSession = useCallback(
+    (text: string): boolean => {
+      if (!activeId) return false
+      window.api.writeToSession(activeId, `\x1b[200~${text}\x1b[201~\r`)
+      return true
     },
     [activeId]
   )
@@ -260,11 +306,12 @@ export default function App() {
 
   // Save the active session's captured scrollback to a downloaded .txt file —
   // a quick way to keep a record of what Claude did in a session.
-  const handleExportLog = useCallback(async () => {
-    if (!activeId) return
-    const text = await window.api.getSessionOutput(activeId, 100000)
+  const handleExportLog = useCallback(async (id?: string) => {
+    const target = id ?? activeId
+    if (!target) return
+    const text = await window.api.getSessionOutput(target, 100000)
     if (text == null) return
-    const name = sessions.find((s) => s.id === activeId)?.name ?? activeId
+    const name = sessions.find((s) => s.id === target)?.name ?? target
     const blob = new Blob([text], { type: "text/plain" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -273,6 +320,14 @@ export default function App() {
     a.click()
     URL.revokeObjectURL(url)
   }, [activeId, sessions])
+
+  // The mount-time MCP listener for ui:export-log needs the latest closure of
+  // handleExportLog (which closes over activeId/sessions). Keep it in a ref so
+  // the once-registered listener always calls the current version.
+  const exportLogRef = useRef(handleExportLog)
+  useEffect(() => {
+    exportLogRef.current = handleExportLog
+  }, [handleExportLog])
 
   // Commands surfaced in the Ctrl+Shift+P command palette. Static app actions
   // plus a dynamic "Switch to…" entry per open session.
@@ -474,7 +529,13 @@ export default function App() {
             </>
           )}
         </div>
-          {!drawerCollapsed && <PanelDrawer panels={panels} onClose={handleClosePanel} />}
+          {!drawerCollapsed && (
+            <PanelDrawer
+              panels={panels}
+              onClose={handleClosePanel}
+              onSendToSession={sendToActiveSession}
+            />
+          )}
         </div>
         <StatusBar
           session={sessions.find((s) => s.id === activeId) ?? null}

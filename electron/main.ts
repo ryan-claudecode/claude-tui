@@ -1,4 +1,4 @@
-import { app, BrowserWindow, protocol } from "electron"
+import { app, BrowserWindow, protocol, Menu } from "electron"
 import { join } from "path"
 import { setupIpc } from "./ipc"
 
@@ -12,6 +12,7 @@ async function createWindow() {
     minHeight: 500,
     title: "ClaudeTUI",
     backgroundColor: "#0d1117",
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       nodeIntegration: false,
@@ -36,6 +37,9 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Drop the default File/Edit/View/Window menu — none of it is useful here and
+  // we'll build our own in-app affordances. (Removes the menu bar on Win/Linux.)
+  Menu.setApplicationMenu(null)
   await createWindow()
 })
 

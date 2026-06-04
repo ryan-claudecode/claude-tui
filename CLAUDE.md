@@ -46,6 +46,7 @@ Three layers — service layer is the core, everything else is a thin adapter on
 | `electron/services/workspaces.ts` | **WorkspaceService** — workspace discovery + activation |
 | `electron/services/panels.ts` | **PanelService** — rich UI panel state + form callbacks |
 | `electron/services/app.ts` | **AppService** — app-level ops (screenshot, app state, build) |
+| `electron/services/ui.ts` | **UiService** — bridges renderer-only view actions (focus mode, drawer, palette, etc.) to MCP by emitting `ui:*` events |
 | `electron/mcp/server.ts` | MCP HTTP/SSE server lifecycle |
 | `electron/mcp/tools.ts` | MCP tool definitions — calls services |
 | `electron/config.ts` | Loads ~/.claude-tui/config.json |
@@ -127,6 +128,7 @@ The `--mcp-config` flag auto-connects Claude to the ClaudeTUI MCP server so Clau
 - Config written to `{tmpdir}/claudetui/mcp-config.json`
 - Each spawned Claude session gets `--mcp-config` pointing to this file
 - Tools map 1:1 to service methods
+- The server ships an `instructions` string (`SERVER_INSTRUCTIONS` in `electron/mcp/server.ts`) via the MCP initialize result. Claude Code surfaces this as an "MCP Server Instructions" block, so a freshly spawned session gets a map of the tool groups up front without having to load each (deferred) tool schema to discover them. Keep it in sync when adding tool groups.
 
 ### MCP Tools
 
@@ -134,7 +136,7 @@ Session/workspace tools map 1:1 to `SessionService` / `WorkspaceService` methods
 Additional tool groups:
 
 **Panels** (`PanelService`):
-- `show_panel` — show a `diff`, `image`, `markdown`, `table`, `test`, `chart`, `tree`, `timeline`, `git`, `kanban`, `notes`, `stat`, `log`, `progress`, or `code` panel. `git` renders a `git_status` result (branch, ahead/behind, staged/unstaged files) plus optional `git_log` commits; `kanban` renders `{ columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] }` — grouped cards for status buckets / parallel workstreams; `notes` renders `{ title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] }` (markdown bodies) — but prefer the `show_notes` tool, which loads saved notes for you; `stat` renders `{ title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] }` — a dashboard of big-number KPI cards (distinct from `chart`, which is for series viz); `log` renders `{ title?, lines: [string | { text, level?, time? }], showLevel? }` — a scrollable monospace log viewer with per-line severity coloring; `progress` renders `{ title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? }` — a vertical stepper with a progress bar for sequential task pipelines (distinct from `timeline`, which is chronological events); `code` renders `{ code, language?, filename?, startLine?, highlightLines?: number[], wrap? }` — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from `diff`, which compares two versions).
+- `show_panel` — show a `diff`, `image`, `markdown`, `table`, `test`, `chart`, `heatmap`, `tree`, `timeline`, `git`, `kanban`, `notes`, `stat`, `log`, `progress`, or `code` panel. `git` renders a `git_status` result (branch, ahead/behind, staged/unstaged files) plus optional `git_log` commits; `kanban` renders `{ columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] }` — grouped cards for status buckets / parallel workstreams; `notes` renders `{ title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] }` (markdown bodies) — but prefer the `show_notes` tool, which loads saved notes for you; `stat` renders `{ title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] }` — a dashboard of big-number KPI cards (distinct from `chart`, which is for series viz); `log` renders `{ title?, lines: [string | { text, level?, time? }], showLevel? }` — a scrollable monospace log viewer with per-line severity coloring; `progress` renders `{ title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? }` — a vertical stepper with a progress bar for sequential task pipelines (distinct from `timeline`, which is chronological events); `code` renders `{ code, language?, filename?, startLine?, highlightLines?: number[], wrap? }` — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from `diff`, which compares two versions); `heatmap` renders `{ rows: number[][], xLabels?: string[], yLabels?: string[], title?, unit?, min?, max? }` — a color-coded 2D numeric matrix on a blue→green→amber→red ramp (correlation matrices, coverage grids, latency-by-hour). Note: the grid is `rows` (a 2D array), with `xLabels`/`yLabels` for the column/row headers — not `matrix`/`colLabels`/`rowLabels`.
 - `show_form` — show an interactive form and **wait** for the user to submit; returns the field values (or `{ cancelled: true }`)
 - `update_panel` / `hide_panel` / `hide_all_panels` / `list_panels`
 
@@ -209,6 +211,24 @@ Find and kill OS processes without parsing `netstat`/`lsof`/`tasklist`/`ps` — 
 - `kill_process_on_port` — force-kill whatever is listening on a port; returns `{ port, platform, found, killed: [{ pid, name }], failed: [{ pid, name, error }] }`.
 - `list_processes` — list running processes, optionally filtered by case-insensitive name substring; returns `{ platform, filter, processes: [{ pid, name }], truncated }` (capped at 200).
 - `kill_process` — force-kill a process by PID; returns `{ pid, killed, error? }`.
+
+**App UI control** (`UiService`):
+Drive the same view actions a user triggers by keyboard/menu — so Claude can ask the app to, e.g., "enter focus mode". These are **renderer-only** view states (no service owned the data), so `UiService` bridges them: each tool calls a `UiService` method that emits a `ui:*` event the renderer listens for (mount-time listeners in `App.tsx`, registered via `preload.ts`). The boolean-toggle tools take an optional desired state; omit it to flip the current value.
+- `set_focus_mode` — distraction-free mode (hides sidebar + tab bar). `enabled?`
+- `toggle_panel_drawer` — collapse/expand the panel drawer. `collapsed?`
+- `open_command_palette` — the Ctrl+Shift+P fuzzy action menu. `open?`
+- `show_keyboard_shortcuts` — the Ctrl+/ shortcuts overlay. `open?`
+- `open_history_search` — the Ctrl+Shift+F session-output search overlay. `open?`
+- `export_session_log` — download a session's captured output as `.txt` (defaults to active session). `session_id?`
+- `get_config` — read the current config (theme, default command/args, scan paths).
+
+### How to add a renderer-only UI action to MCP
+
+When a feature lives purely in React state (no service), expose it through `UiService` rather than inventing a service for it:
+1. **UiService method** — add `setFoo(value?)` to `electron/services/ui.ts` that calls `this.emit("ui:foo", value)`.
+2. **Preload listener** — add `onUiFoo` to `electron/preload.ts` (`ipcRenderer.on("ui:foo", ...)`, `?? undefined` so omitted = toggle).
+3. **MCP tool** — add `server.tool("foo", ...)` in `electron/mcp/tools.ts` calling `ui.setFoo(...)`.
+4. **Renderer wiring** — in `App.tsx`'s mount `useEffect`, register `window.api.onUiFoo(...)` to update React state, and add a `removeAllListeners("ui:foo")` to the cleanup. If the handler needs a fresh closure (like `export_session_log` does over `activeId`), stash it in a ref synced by its own effect.
 
 ## Panel System
 

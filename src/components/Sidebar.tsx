@@ -54,15 +54,18 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-actions">
-        <button className="sidebar-btn new" onClick={onNewSession}>
-          <span className="shortcut-key">Ctrl+N</span> New Session
-        </button>
-        <button className="sidebar-btn kill" onClick={onKillSession}>
-          <span className="shortcut-key">Ctrl+K</span> Kill Session
-        </button>
-        <button className="sidebar-btn handoff" onClick={onHandoff}>
-          <span className="shortcut-key">Ctrl+H</span> Handoff
-        </button>
+        <div className="sidebar-hint new" onClick={onNewSession}>
+          <span className="shortcut-key">Ctrl+N</span>
+          <span className="shortcut-desc">New session</span>
+        </div>
+        <div className="sidebar-hint kill" onClick={onKillSession}>
+          <span className="shortcut-key">Ctrl+K</span>
+          <span className="shortcut-desc">Kill session</span>
+        </div>
+        <div className="sidebar-hint handoff" onClick={onHandoff}>
+          <span className="shortcut-key">Ctrl+H</span>
+          <span className="shortcut-desc">Handoff</span>
+        </div>
       </div>
     </div>
   )

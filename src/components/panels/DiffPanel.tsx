@@ -9,6 +9,9 @@ interface FileDiff {
 
 interface Props {
   files?: FileDiff[]
+  // Sends the built review request to the active session. Returns false when
+  // there's no active session to receive it. Injected by PanelDrawer/App.
+  onSend?: (text: string) => boolean
 }
 
 type Row = { type: "add" | "del" | "ctx"; oldNo?: number; newNo?: number; text: string }
@@ -65,14 +68,16 @@ function buildReviewRequest(path: string, selected: Row[], note: string): string
   return `Regarding \`${path}\` (${range}):\n\n\`\`\`diff\n${hunk}\n\`\`\`\n\n${instruction}\n`
 }
 
-export default function DiffPanel({ files = [] }: Props) {
+export default function DiffPanel({ files = [], onSend }: Props) {
   const [active, setActive] = useState(0)
   // Inclusive selection range over `rows`, by row index. `anchor` is where the
-  // selection started; `head` is the most recent click. null = no selection.
+  // selection started; `head` is the most recent dragged-over/clicked line.
   const [anchor, setAnchor] = useState<number | null>(null)
   const [head, setHead] = useState<number | null>(null)
+  const [dragging, setDragging] = useState(false)
   const [note, setNote] = useState("")
-  const [copied, setCopied] = useState(false)
+  // null = idle, "sent" = delivered, "no-session" = nothing to receive it.
+  const [sendState, setSendState] = useState<null | "sent" | "no-session">(null)
 
   const file = files.length > 0 ? files[Math.min(active, files.length - 1)] : undefined
 
@@ -84,24 +89,36 @@ export default function DiffPanel({ files = [] }: Props) {
   const clearSelection = useCallback(() => {
     setAnchor(null)
     setHead(null)
+    setDragging(false)
     setNote("")
-    setCopied(false)
+    setSendState(null)
   }, [])
 
-  const handleLineClick = useCallback(
+  // Begin a drag-selection (or extend it with Shift). Mouse-enter while the
+  // button is held grows the range; mouse-up anywhere in the body ends it.
+  const handleLineMouseDown = useCallback(
     (i: number, e: React.MouseEvent) => {
-      setCopied(false)
+      e.preventDefault()
+      setSendState(null)
       if (e.shiftKey && anchor !== null) {
-        // Extend the existing selection to the clicked line.
         setHead(i)
       } else {
-        // Start a new single-line selection.
         setAnchor(i)
         setHead(i)
       }
+      setDragging(true)
     },
     [anchor],
   )
+
+  const handleLineEnter = useCallback(
+    (i: number) => {
+      if (dragging) setHead(i)
+    },
+    [dragging],
+  )
+
+  const endDrag = useCallback(() => setDragging(false), [])
 
   const selectFile = useCallback(
     (i: number) => {
@@ -115,16 +132,11 @@ export default function DiffPanel({ files = [] }: Props) {
   const hi = anchor !== null && head !== null ? Math.max(anchor, head) : -1
   const hasSelection = lo >= 0
 
-  const handleCopy = useCallback(async () => {
-    if (!file || !hasSelection) return
+  const handleSend = useCallback(() => {
+    if (!file || !hasSelection || !onSend) return
     const text = buildReviewRequest(file.path, rows.slice(lo, hi + 1), note)
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-    } catch {
-      setCopied(false)
-    }
-  }, [file, hasSelection, rows, lo, hi, note])
+    setSendState(onSend(text) ? "sent" : "no-session")
+  }, [file, hasSelection, onSend, rows, lo, hi, note])
 
   if (files.length === 0 || !file) {
     return <div className="panel-empty">No diff data provided.</div>
@@ -163,14 +175,15 @@ export default function DiffPanel({ files = [] }: Props) {
           {stats.del > 0 && <span className="diff-stat-del">−{stats.del}</span>}
         </span>
       </div>
-      <div className="diff-body">
+      <div className="diff-body" onMouseUp={endDrag} onMouseLeave={endDrag}>
         {rows.map((row, i) => {
           const selected = hasSelection && i >= lo && i <= hi
           return (
             <div
               key={i}
               className={`diff-line diff-${row.type}${selected ? " diff-selected" : ""}`}
-              onClick={(e) => handleLineClick(i, e)}
+              onMouseDown={(e) => handleLineMouseDown(i, e)}
+              onMouseEnter={() => handleLineEnter(i)}
             >
               <span className="diff-lineno">{row.oldNo ?? ""}</span>
               <span className="diff-lineno">{row.newNo ?? ""}</span>
@@ -198,16 +211,20 @@ export default function DiffPanel({ files = [] }: Props) {
             value={note}
             onChange={(e) => {
               setNote(e.target.value)
-              setCopied(false)
+              setSendState(null)
             }}
           />
-          <button className="diff-review-copy" onClick={handleCopy}>
-            {copied ? "Copied — paste into a session" : "Copy review request"}
+          <button className="diff-review-copy" onClick={handleSend}>
+            {sendState === "sent"
+              ? "Sent to session ✓"
+              : sendState === "no-session"
+                ? "No active session"
+                : "Send to session"}
           </button>
         </div>
       ) : (
         <div className="diff-review-hint">
-          Click a line (Shift-click to extend) to start a review comment.
+          Click or drag across lines to start a review comment.
         </div>
       )}
     </div>

@@ -33,7 +33,28 @@ import type { TextService } from "../services/text"
 import type { ColorService } from "../services/color"
 import type { MathService } from "../services/math"
 import type { UrlService } from "../services/url"
+import type { UiService } from "../services/ui"
 import { registerTools } from "./tools"
+
+// Injected into every connecting session's context via the MCP initialize
+// result (the "MCP Server Instructions" block Claude Code surfaces). Gives a
+// session spawned inside the app a map of what it can drive without having to
+// load each deferred tool schema first to find out.
+const SERVER_INSTRUCTIONS = `You are running inside ClaudeTUI — a desktop app for managing Claude Code sessions — and you are connected to its MCP server ("claudetui"). These tools let you drive the app itself (render rich UI, orchestrate other sessions, inspect the repo) alongside your normal work.
+
+Tool groups (all prefixed mcp__claudetui__):
+- Panels — show_panel renders a rich UI panel in the side drawer: diff, image, markdown, table, test, chart, heatmap, tree, timeline, git, kanban, notes, stat, log, progress, code. show_form shows an interactive form and waits for the user's submission. Plus update_panel / hide_panel / hide_all_panels / list_panels.
+- Sessions & orchestration — create_session, kill_session, focus_session, rename_session, list_sessions, get_session_activity, wait_for_session_idle (delegate a task to another session and block until it finishes), broadcast_input (send input to all sessions at once).
+- Git — git_status / git_log / git_diff / git_show / git_blame / git_branches / git_stage / git_commit / git_push / git_pull / git_stash and more, all returning structured JSON.
+- Files — read_file / write_file / replace_in_file / insert_in_file, find_files (glob) / grep_code (regex), diff_files.
+- System & network — run_command / run_build / run_tests, http_request / download_file / check_port / wait_for_port, find_process_on_port / kill_process_on_port / list_processes / kill_process, open_external / reveal_path, read_clipboard / write_clipboard.
+- Utilities — JSON, CSV, regex, text, encode/hash, math, color, URL, and time helpers.
+- Self-verification — take_screenshot (capture the app window), get_app_state (assert on window/session state), notify (toast that surfaces even when the terminal isn't focused).
+- App UI control — drive the same view actions the user can: set_focus_mode (distraction-free), toggle_panel_drawer, open_command_palette, show_keyboard_shortcuts, open_history_search, export_session_log, get_config.
+
+Notes: tool schemas may be deferred — if a tool isn't loaded yet, search for it by exact name to load its schema before calling. Prefer these structured tools over shelling out (e.g. git_status over running \`git status\`). See CLAUDE.md for full per-tool detail and the panel prop schemas.`
+
+
 
 export async function startMcpServer(
   sessionService: SessionService,
@@ -68,11 +89,15 @@ export async function startMcpServer(
   colorService: ColorService,
   mathService: MathService,
   urlService: UrlService,
+  uiService: UiService,
 ): Promise<{ port: number; configPath: string }> {
-  const server = new McpServer({
-    name: "claudetui",
-    version: "0.1.0",
-  })
+  const server = new McpServer(
+    {
+      name: "claudetui",
+      version: "0.1.0",
+    },
+    { instructions: SERVER_INSTRUCTIONS },
+  )
 
   registerTools(
     server,
@@ -108,6 +133,7 @@ export async function startMcpServer(
     colorService,
     mathService,
     urlService,
+    uiService,
   )
 
   // Create HTTP server with SSE transport
