@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { MissionService, type SessionDriver } from "./mission"
+import { MissionService, detectUsageLimit, type SessionDriver } from "./mission"
 
 function fakeDriver(overrides: Partial<SessionDriver> = {}): SessionDriver {
   return {
@@ -231,5 +231,56 @@ describe("MissionService supervisor — stalled workers", () => {
     expect(task.status).toBe("pending")
     expect(task.assignedTo).toBeUndefined()
     expect(svc.get(m.id)!.workers.some((w) => w.sessionId === "w1")).toBe(false)
+  })
+})
+
+describe("detectUsageLimit", () => {
+  it("flags usage-limit messages", () => {
+    expect(detectUsageLimit("Claude usage limit reached. Try again later.").limited).toBe(true)
+    expect(detectUsageLimit("5-hour limit reached").limited).toBe(true)
+    expect(detectUsageLimit("normal output").limited).toBe(false)
+  })
+})
+
+describe("MissionService pause/resume", () => {
+  it("pause sets status + resumeAt; resume clears it", () => {
+    const svc = new MissionService(fakeDriver(), { dir, now: () => 1000 })
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    svc.pause(m.id, 5000)
+    expect(svc.get(m.id)!.status).toBe("paused")
+    expect(svc.get(m.id)!.resumeAt).toBe(5000)
+    svc.resume(m.id)
+    expect(svc.get(m.id)!.status).toBe("running")
+    expect(svc.get(m.id)!.resumeAt).toBeUndefined()
+  })
+
+  it("tick auto-resumes a paused mission once resumeAt passes", () => {
+    let t = 1000
+    const svc = new MissionService(fakeDriver({ getActivity: () => [] }), { dir, now: () => t, seedDelayMs: 0 })
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "x" }])
+    svc.pause(m.id, 4000)
+    t = 3000; svc.tick()
+    expect(svc.get(m.id)!.status).toBe("paused")
+    t = 4001; svc.tick()
+    expect(svc.get(m.id)!.status).toBe("running")
+  })
+
+  it("tick pauses a running mission when a session hits a usage limit", () => {
+    let t = 1000
+    const svc = new MissionService(
+      fakeDriver({
+        getActivity: () => [{ id: "c1", name: "c", state: "idle", idleMs: 0 }],
+        getOutput: () => "Claude usage limit reached",
+      }),
+      { dir, now: () => t, seedDelayMs: 0, usageBackoffMs: 60_000 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "x" }])
+    svc.get(m.id)!.conductorSessionId = "c1"
+    svc.tick()
+    expect(svc.get(m.id)!.status).toBe("paused")
+    expect(svc.get(m.id)!.resumeAt).toBe(1000 + 60_000)
   })
 })

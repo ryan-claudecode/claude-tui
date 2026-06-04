@@ -50,11 +50,17 @@ export interface Mission {
 
 const TERMINAL: MissionStatus[] = ["done", "stopped"]
 
+const USAGE_LIMIT_RE = /usage limit|limit reached|rate limit|too many requests/i
+export function detectUsageLimit(text: string): { limited: boolean } {
+  return { limited: USAGE_LIMIT_RE.test(text) }
+}
+
 export interface MissionServiceOpts {
   dir?: string
   now?: () => number
   seedDelayMs?: number
   workerStallMs?: number
+  usageBackoffMs?: number
   notify?: (text: string, level?: string) => void
 }
 
@@ -63,6 +69,7 @@ export class MissionService {
   private now: () => number
   private seedDelayMs: number
   private workerStallMs: number
+  private usageBackoffMs: number
   private notify?: (text: string, level?: string) => void
   private missions = new Map<string, Mission>()
   private timer: ReturnType<typeof setInterval> | null = null
@@ -72,6 +79,7 @@ export class MissionService {
     this.now = opts.now ?? (() => Date.now())
     this.seedDelayMs = opts.seedDelayMs ?? 4000
     this.workerStallMs = opts.workerStallMs ?? 10 * 60_000
+    this.usageBackoffMs = opts.usageBackoffMs ?? 60 * 60_000
     this.notify = opts.notify
     this.loadAll()
   }
@@ -229,9 +237,41 @@ export class MissionService {
   }
 
   start(): void { if (!this.timer) this.timer = setInterval(() => this.tick(), 5000) }
-  pause(id: string, resumeAt?: number): Mission | undefined { return undefined }
-  resume(id: string): Mission | undefined { return undefined }
   stopTimer(): void { if (this.timer) { clearInterval(this.timer); this.timer = null } }
+
+  pause(id: string, resumeAt?: number): Mission | undefined {
+    const m = this.missions.get(id)
+    if (!m) return undefined
+    m.status = "paused"
+    m.resumeAt = resumeAt
+    this.log(m, "pause", resumeAt ? `Paused until ${new Date(resumeAt).toISOString()}` : "Paused")
+    this.persist(m)
+    return m
+  }
+
+  resume(id: string): Mission | undefined {
+    const m = this.missions.get(id)
+    if (!m) return undefined
+    m.status = "running"
+    m.resumeAt = undefined
+    this.log(m, "info", "Resumed")
+    this.persist(m)
+    return m
+  }
+
+  private checkUsageLimit(m: Mission): boolean {
+    const ids = [m.conductorSessionId, ...m.workers.map((w) => w.sessionId)].filter(Boolean) as string[]
+    for (const id of ids) {
+      const out = this.sessions.getOutput(id, 2000) ?? ""
+      if (detectUsageLimit(out).limited) {
+        this.pause(m.id, this.now() + this.usageBackoffMs)
+        if (m.conductorSessionId) { this.sessions.kill(m.conductorSessionId); m.conductorSessionId = undefined }
+        this.notify?.(`Mission paused (usage limit): ${m.goal}`, "warning")
+        return true
+      }
+    }
+    return false
+  }
 
   private conductorSeed(m: Mission): string {
     return `You are the Conductor for ClaudeTUI mission "${m.id}". ` +
@@ -276,10 +316,16 @@ export class MissionService {
   }
 
   tick(): void {
+    const now = this.now()
     const activity = this.sessions.getActivity()
     const live = new Set(activity.filter((a) => a.state !== "dead").map((a) => a.id))
     for (const m of this.missions.values()) {
+      if (m.status === "paused") {
+        if (m.resumeAt != null && now >= m.resumeAt) this.resume(m.id)
+        continue
+      }
       if (m.status !== "running") continue
+      if (this.checkUsageLimit(m)) continue
       this.reapStalledWorkers(m, activity)
       this.ensureConductor(m, live)
       this.persist(m)
