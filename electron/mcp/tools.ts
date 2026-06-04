@@ -8,6 +8,7 @@ import type { NotificationService } from "../services/notifications"
 import type { GitService } from "../services/git"
 import type { TemplateService } from "../services/templates"
 import type { TestRunnerService } from "../services/tests"
+import type { LayoutService } from "../services/layouts"
 
 export function registerTools(
   server: McpServer,
@@ -19,6 +20,7 @@ export function registerTools(
   git: GitService,
   templates: TemplateService,
   tests: TestRunnerService,
+  layouts: LayoutService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -397,6 +399,64 @@ export function registerTools(
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `run_tests failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  // Saved layout tools — snapshot/restore a named set of sessions + working dirs
+
+  server.tool(
+    "list_layouts",
+    "List saved session layouts. A layout is a named snapshot of open sessions and their working directories that can be restored later (e.g. after an app restart).",
+    {},
+    async () => {
+      return { content: [{ type: "text" as const, text: JSON.stringify(layouts.list(), null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "save_layout",
+    "Save the currently open sessions (names + working directories) as a named layout. Re-saving with an existing name overwrites it.",
+    {
+      name: z.string().describe("Name for the layout, e.g. 'frontend' or 'incident-review'"),
+    },
+    async ({ name }) => {
+      const layout = layouts.save(name)
+      return { content: [{ type: "text" as const, text: JSON.stringify(layout) }] }
+    },
+  )
+
+  server.tool(
+    "restore_layout",
+    "Restore a saved layout by recreating each of its sessions. Returns the newly created sessions.",
+    {
+      name: z.string().describe("Name of the layout to restore (see list_layouts)"),
+    },
+    async ({ name }) => {
+      const created = layouts.restore(name)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: created ? JSON.stringify(created) : `Layout not found: ${name}`,
+          },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "delete_layout",
+    "Delete a saved layout by name.",
+    {
+      name: z.string().describe("Name of the layout to delete"),
+    },
+    async ({ name }) => {
+      const ok = layouts.delete(name)
+      return {
+        content: [
+          { type: "text" as const, text: ok ? "Layout deleted" : `Layout not found: ${name}` },
+        ],
       }
     },
   )

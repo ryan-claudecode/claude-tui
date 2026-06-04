@@ -8,6 +8,7 @@ import { NotificationService } from "./services/notifications"
 import { GitService } from "./services/git"
 import { TemplateService } from "./services/templates"
 import { TestRunnerService } from "./services/tests"
+import { LayoutService } from "./services/layouts"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -19,6 +20,7 @@ export const notificationService = new NotificationService()
 export const gitService = new GitService()
 export const templateService = new TemplateService(sessionService)
 export const testRunnerService = new TestRunnerService()
+export const layoutService = new LayoutService(sessionService)
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -47,6 +49,7 @@ export async function setupIpc(win: BrowserWindow) {
     gitService,
     templateService,
     testRunnerService,
+    layoutService,
   )
   sessionService.setMcpConfigPath(configPath)
 
@@ -110,6 +113,12 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("test:run", (_e, cwd: string, command?: string) =>
     testRunnerService.run(cwd, command),
   )
+
+  // Layout IPC -- saved session snapshots
+  ipcMain.handle("layout:list", () => layoutService.list())
+  ipcMain.handle("layout:save", (_e, name: string) => layoutService.save(name))
+  ipcMain.handle("layout:restore", (_e, name: string) => layoutService.restore(name))
+  ipcMain.handle("layout:delete", (_e, name: string) => layoutService.delete(name))
 
   // Notification IPC
   ipcMain.handle("notification:list", () => notificationService.list())
