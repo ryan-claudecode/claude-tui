@@ -76,9 +76,17 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("app:state", () =>
     appService.getAppState(sessionService.list(), workspaceService.list()),
   )
+  ipcMain.handle("app:save-image", (_e, base64: string, filename: string) =>
+    appService.saveDroppedImage(base64, filename),
+  )
 
   // Panel IPC
   ipcMain.handle("panel:list", () => panelService.list())
+  ipcMain.handle(
+    "panel:show",
+    (_e, type: string, props: Record<string, any>, position?: string) =>
+      panelService.show(type, props, position),
+  )
   ipcMain.handle("panel:hide", (_e, id: string) => panelService.hide(id))
   ipcMain.handle("panel:hide-all", () => panelService.hideAll())
   ipcMain.on("panel:form-submit", (_e, id: string, data: Record<string, any>) =>

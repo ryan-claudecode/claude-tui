@@ -5,6 +5,7 @@ import TerminalPane from "./components/TerminalPane"
 import SplitView from "./components/SplitView"
 import StatusBar from "./components/StatusBar"
 import PanelDrawer, { PanelState } from "./components/PanelDrawer"
+import DropZone from "./components/DropZone"
 
 // TypeScript type for the API exposed by preload
 declare global {
@@ -26,6 +27,8 @@ declare global {
       onSplitClose: (callback: () => void) => void
       renameSession: (id: string, newName: string) => Promise<boolean>
       getConfig: () => Promise<any>
+      saveDroppedImage: (base64: string, filename: string) => Promise<string>
+      showPanel: (type: string, props: Record<string, any>, position?: string) => Promise<PanelState>
       listPanels: () => Promise<PanelState[]>
       hidePanel: (id: string) => Promise<boolean>
       hideAllPanels: () => Promise<void>
@@ -54,6 +57,7 @@ export default function App() {
   const [splitRight, setSplitRight] = useState<string | null>(null)
   const [config, setConfig] = useState<any>(null)
   const [panels, setPanels] = useState<PanelState[]>([])
+  const [dragActive, setDragActive] = useState(false)
 
   // Load workspaces and config on mount
   useEffect(() => {
@@ -128,6 +132,44 @@ export default function App() {
     setPanels((prev) => prev.filter((p) => p.id !== id))
     window.api.hidePanel(id)
   }, [])
+
+  // Drag-and-drop image support
+  const hasImage = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer.items).some((it) => it.type.startsWith("image/"))
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (hasImage(e)) {
+      e.preventDefault()
+      setDragActive(true)
+    }
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    // Only clear when leaving the window entirely
+    if (e.relatedTarget === null) setDragActive(false)
+  }, [])
+
+  const handleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault()
+      setDragActive(false)
+      const file = Array.from(e.dataTransfer.files).find((f) =>
+        f.type.startsWith("image/")
+      )
+      if (!file) return
+      const base64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.readAsDataURL(file)
+      })
+      const path = await window.api.saveDroppedImage(base64, file.name)
+      await window.api.showPanel("image", { src: path, alt: file.name })
+      if (activeId) {
+        window.api.writeToSession(activeId, `"${path}" `)
+      }
+    },
+    [activeId]
+  )
 
   // Auto-focus first session if active was removed
   useEffect(() => {
@@ -216,7 +258,13 @@ export default function App() {
   }, [handleNewSession, handleKillSession, handleHandoff, sessions, splitLeft, activeId])
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <DropZone active={dragActive} />
       <Sidebar
         sessions={sessions}
         activeId={activeId}

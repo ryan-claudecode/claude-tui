@@ -1,5 +1,8 @@
 import { BrowserWindow } from "electron"
 import { execSync } from "child_process"
+import { writeFileSync, mkdirSync } from "fs"
+import { join } from "path"
+import { tmpdir } from "os"
 
 export class AppService {
   private mainWin: BrowserWindow | null = null
@@ -28,6 +31,17 @@ export class AppService {
       sessions,
       workspaces,
     }
+  }
+
+  /** Persist a dropped image to a temp file and return its absolute path. */
+  saveDroppedImage(base64: string, filename: string): string {
+    const dir = join(tmpdir(), "claudetui", "drops")
+    mkdirSync(dir, { recursive: true })
+    const data = base64.replace(/^data:[^;]+;base64,/, "")
+    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_") || "image.png"
+    const path = join(dir, `${Date.now()}-${safeName}`)
+    writeFileSync(path, Buffer.from(data, "base64"))
+    return path
   }
 
   runBuild(): { success: boolean; output: string } {

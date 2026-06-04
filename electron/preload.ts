@@ -25,8 +25,12 @@ contextBridge.exposeInMainWorld("api", {
   // App testing
   takeScreenshot: () => ipcRenderer.invoke("app:screenshot"),
   getAppState: () => ipcRenderer.invoke("app:state"),
+  saveDroppedImage: (base64: string, filename: string) =>
+    ipcRenderer.invoke("app:save-image", base64, filename),
 
   // Panels
+  showPanel: (type: string, props: Record<string, any>, position?: string) =>
+    ipcRenderer.invoke("panel:show", type, props, position),
   listPanels: () => ipcRenderer.invoke("panel:list"),
   hidePanel: (id: string) => ipcRenderer.invoke("panel:hide", id),
   hideAllPanels: () => ipcRenderer.invoke("panel:hide-all"),
