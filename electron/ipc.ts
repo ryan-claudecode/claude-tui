@@ -23,6 +23,7 @@ import { HttpService } from "./services/http"
 import { PortService } from "./services/ports"
 import { EditService } from "./services/edit"
 import { ProcessService } from "./services/process"
+import { EncodeService } from "./services/encode"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -49,6 +50,7 @@ export const httpService = new HttpService()
 export const portService = new PortService()
 export const editService = new EditService()
 export const processService = new ProcessService()
+export const encodeService = new EncodeService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -92,6 +94,7 @@ export async function setupIpc(win: BrowserWindow) {
     portService,
     editService,
     processService,
+    encodeService,
   )
   sessionService.setMcpConfigPath(configPath)
 

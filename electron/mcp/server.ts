@@ -24,6 +24,7 @@ import type { HttpService } from "../services/http"
 import type { PortService } from "../services/ports"
 import type { EditService } from "../services/edit"
 import type { ProcessService } from "../services/process"
+import type { EncodeService } from "../services/encode"
 import { registerTools } from "./tools"
 
 export async function startMcpServer(
@@ -50,6 +51,7 @@ export async function startMcpServer(
   portService: PortService,
   editService: EditService,
   processService: ProcessService,
+  encodeService: EncodeService,
 ): Promise<{ port: number; configPath: string }> {
   const server = new McpServer({
     name: "claudetui",
@@ -81,6 +83,7 @@ export async function startMcpServer(
     portService,
     editService,
     processService,
+    encodeService,
   )
 
   // Create HTTP server with SSE transport

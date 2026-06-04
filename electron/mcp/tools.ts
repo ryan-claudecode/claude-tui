@@ -23,6 +23,8 @@ import type { HttpService } from "../services/http"
 import type { PortService } from "../services/ports"
 import type { EditService } from "../services/edit"
 import type { ProcessService } from "../services/process"
+import type { EncodeService } from "../services/encode"
+import { isAbsolute, join } from "path"
 
 export function registerTools(
   server: McpServer,
@@ -49,6 +51,7 @@ export function registerTools(
   ports: PortService,
   edit: EditService,
   processes: ProcessService,
+  encode: EncodeService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1705,6 +1708,85 @@ export function registerTools(
     async ({ pid }) => {
       const result = processes.kill(pid)
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "encode_text",
+    "Encode or decode text without a throwaway shell command. operation: 'base64_encode' | 'base64_decode' | 'url_encode' | 'url_decode'. Returns { result }.",
+    {
+      operation: z
+        .enum(["base64_encode", "base64_decode", "url_encode", "url_decode"])
+        .describe("Which transform to apply"),
+      text: z.string().describe("The text to transform"),
+    },
+    async ({ operation, text }) => {
+      const map = {
+        base64_encode: () => encode.base64Encode(text),
+        base64_decode: () => encode.base64Decode(text),
+        url_encode: () => encode.urlEncode(text),
+        url_decode: () => encode.urlDecode(text),
+      }
+      const result = map[operation]()
+      return { content: [{ type: "text" as const, text: JSON.stringify({ result }) }] }
+    },
+  )
+
+  server.tool(
+    "hash_text",
+    "Compute the hex digest of a UTF-8 string. algo: 'md5' | 'sha1' | 'sha256' | 'sha512' (default sha256). Returns { algo, hash }.",
+    {
+      text: z.string().describe("The text to hash"),
+      algo: z.enum(["md5", "sha1", "sha256", "sha512"]).optional().describe("Hash algorithm (default sha256)"),
+    },
+    async ({ text, algo }) => {
+      const a = algo ?? "sha256"
+      const hash = encode.hash(text, a)
+      return { content: [{ type: "text" as const, text: JSON.stringify({ algo: a, hash }) }] }
+    },
+  )
+
+  server.tool(
+    "hash_file",
+    "Compute the hex digest of a file's bytes (refuses files > 100MB). Path resolves against the session's working dir (or absolute). algo defaults to sha256. Returns { path, algo, hash, bytes }.",
+    {
+      path: z.string().describe("File path (relative to the session cwd, or absolute)"),
+      session_id: z.string().optional().describe("Session whose cwd resolves relative paths"),
+      algo: z.enum(["md5", "sha1", "sha256", "sha512"]).optional().describe("Hash algorithm (default sha256)"),
+    },
+    async ({ path, session_id, algo }) => {
+      const a = algo ?? "sha256"
+      const resolved = isAbsolute(path) ? path : join(resolveCwd(session_id), path)
+      const { hash, bytes } = encode.hashFile(resolved, a)
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify({ path: resolved, algo: a, hash, bytes }) },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "generate_uuid",
+    "Generate one or more RFC 4122 v4 UUIDs (count 1-100, default 1). Returns { uuids: string[] }.",
+    {
+      count: z.number().optional().describe("How many UUIDs to generate (1-100, default 1)"),
+    },
+    async ({ count }) => {
+      const uuids = encode.uuid(count ?? 1)
+      return { content: [{ type: "text" as const, text: JSON.stringify({ uuids }) }] }
+    },
+  )
+
+  server.tool(
+    "decode_jwt",
+    "Decode (NOT verify) a JWT — base64url-decode the header and payload, surface the raw signature segment. Returns { header, payload, signature }. Throws on a malformed token.",
+    {
+      token: z.string().describe("The JWT string (header.payload.signature)"),
+    },
+    async ({ token }) => {
+      const parts = encode.decodeJwt(token)
+      return { content: [{ type: "text" as const, text: JSON.stringify(parts, null, 2) }] }
     },
   )
 }
