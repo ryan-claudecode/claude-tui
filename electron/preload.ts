@@ -47,6 +47,16 @@ contextBridge.exposeInMainWorld("api", {
   onSplitClose: (callback: () => void) =>
     ipcRenderer.on("split:close", () => callback()),
 
+  // Panel events from main (triggered by MCP tools)
+  onPanelShow: (callback: (panel: any) => void) =>
+    ipcRenderer.on("panel:show", (_e, panel) => callback(panel)),
+  onPanelUpdate: (callback: (payload: { id: string; props: any }) => void) =>
+    ipcRenderer.on("panel:update", (_e, payload) => callback(payload)),
+  onPanelHide: (callback: (id: string) => void) =>
+    ipcRenderer.on("panel:hide", (_e, id) => callback(id)),
+  onPanelHideAll: (callback: () => void) =>
+    ipcRenderer.on("panel:hide-all", () => callback()),
+
   // Cleanup
   removeAllListeners: (channel: string) => ipcRenderer.removeAllListeners(channel),
 })

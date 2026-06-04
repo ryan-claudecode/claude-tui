@@ -4,6 +4,7 @@ import TabBar from "./components/TabBar"
 import TerminalPane from "./components/TerminalPane"
 import SplitView from "./components/SplitView"
 import StatusBar from "./components/StatusBar"
+import PanelDrawer, { PanelState } from "./components/PanelDrawer"
 
 // TypeScript type for the API exposed by preload
 declare global {
@@ -25,6 +26,14 @@ declare global {
       onSplitClose: (callback: () => void) => void
       renameSession: (id: string, newName: string) => Promise<boolean>
       getConfig: () => Promise<any>
+      listPanels: () => Promise<PanelState[]>
+      hidePanel: (id: string) => Promise<boolean>
+      hideAllPanels: () => Promise<void>
+      submitForm: (id: string, data: Record<string, any>) => void
+      onPanelShow: (callback: (panel: PanelState) => void) => void
+      onPanelUpdate: (callback: (payload: { id: string; props: any }) => void) => void
+      onPanelHide: (callback: (id: string) => void) => void
+      onPanelHideAll: (callback: () => void) => void
       removeAllListeners: (channel: string) => void
     }
   }
@@ -44,6 +53,7 @@ export default function App() {
   const [splitLeft, setSplitLeft] = useState<string | null>(null)
   const [splitRight, setSplitRight] = useState<string | null>(null)
   const [config, setConfig] = useState<any>(null)
+  const [panels, setPanels] = useState<PanelState[]>([])
 
   // Load workspaces and config on mount
   useEffect(() => {
@@ -83,12 +93,40 @@ export default function App() {
       setSplitRight(null)
     })
 
+    // Panel events from main process (triggered by MCP tools)
+    window.api.onPanelShow((panel) => {
+      setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), panel])
+    })
+
+    window.api.onPanelUpdate(({ id, props }) => {
+      setPanels((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, props } : p))
+      )
+    })
+
+    window.api.onPanelHide((id) => {
+      setPanels((prev) => prev.filter((p) => p.id !== id))
+    })
+
+    window.api.onPanelHideAll(() => {
+      setPanels([])
+    })
+
     return () => {
       window.api.removeAllListeners("session:created")
       window.api.removeAllListeners("session:exit")
       window.api.removeAllListeners("split:set")
       window.api.removeAllListeners("split:close")
+      window.api.removeAllListeners("panel:show")
+      window.api.removeAllListeners("panel:update")
+      window.api.removeAllListeners("panel:hide")
+      window.api.removeAllListeners("panel:hide-all")
     }
+  }, [])
+
+  const handleClosePanel = useCallback((id: string) => {
+    setPanels((prev) => prev.filter((p) => p.id !== id))
+    window.api.hidePanel(id)
   }, [])
 
   // Auto-focus first session if active was removed
@@ -198,6 +236,11 @@ export default function App() {
           onKillSession={handleKillSessionById}
           onRenameSession={handleRenameSession}
         />
+        <div
+          className={`workspace-body ${
+            panels.some((p) => p.visible && p.position === "bottom") ? "col" : "row"
+          }`}
+        >
         <div className="terminal-container">
           {splitLeft && splitRight ? (
             <SplitView
@@ -241,6 +284,8 @@ export default function App() {
               )}
             </>
           )}
+        </div>
+          <PanelDrawer panels={panels} onClose={handleClosePanel} />
         </div>
         <StatusBar
           session={sessions.find((s) => s.id === activeId) ?? null}
