@@ -12,6 +12,7 @@ import { LayoutService } from "./services/layouts"
 import { SnippetService } from "./services/snippets"
 import { BroadcastService } from "./services/broadcast"
 import { CommandService } from "./services/commands"
+import { ClipboardService } from "./services/clipboard"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -27,6 +28,7 @@ export const layoutService = new LayoutService(sessionService)
 export const snippetService = new SnippetService(sessionService)
 export const broadcastService = new BroadcastService(sessionService)
 export const commandService = new CommandService()
+export const clipboardService = new ClipboardService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -59,6 +61,7 @@ export async function setupIpc(win: BrowserWindow) {
     snippetService,
     broadcastService,
     commandService,
+    clipboardService,
   )
   sessionService.setMcpConfigPath(configPath)
 

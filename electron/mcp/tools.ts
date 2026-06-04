@@ -12,6 +12,7 @@ import type { LayoutService } from "../services/layouts"
 import type { SnippetService } from "../services/snippets"
 import type { BroadcastService } from "../services/broadcast"
 import type { CommandService } from "../services/commands"
+import type { ClipboardService } from "../services/clipboard"
 
 export function registerTools(
   server: McpServer,
@@ -27,6 +28,7 @@ export function registerTools(
   snippets: SnippetService,
   broadcast: BroadcastService,
   commands: CommandService,
+  clipboard: ClipboardService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -667,6 +669,41 @@ export function registerTools(
           {
             type: "text" as const,
             text: JSON.stringify({ ...result, output }, null, 2),
+          },
+        ],
+      }
+    },
+  )
+
+  // Clipboard — hand artifacts to the user's clipboard or read what they copied
+
+  server.tool(
+    "write_clipboard",
+    "Write text to the user's system clipboard. Use this to hand the user a finished artifact (a command, regex, snippet, or path) so they can paste it elsewhere without copying it out of the terminal.",
+    {
+      text: z.string().describe("Text to place on the clipboard"),
+    },
+    async ({ text }) => {
+      const result = clipboard.write(text)
+      return {
+        content: [
+          { type: "text" as const, text: `Copied ${result.length} chars to clipboard` },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "read_clipboard",
+    "Read the current text contents of the user's system clipboard. Use this to pull in something the user just copied (an error message, a URL, a snippet) without asking them to paste it.",
+    {},
+    async () => {
+      const result = clipboard.read()
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: result.text ? result.text : "(clipboard is empty)",
           },
         ],
       }

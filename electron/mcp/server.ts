@@ -13,6 +13,7 @@ import type { LayoutService } from "../services/layouts"
 import type { SnippetService } from "../services/snippets"
 import type { BroadcastService } from "../services/broadcast"
 import type { CommandService } from "../services/commands"
+import type { ClipboardService } from "../services/clipboard"
 import { registerTools } from "./tools"
 
 export async function startMcpServer(
@@ -28,6 +29,7 @@ export async function startMcpServer(
   snippetService: SnippetService,
   broadcastService: BroadcastService,
   commandService: CommandService,
+  clipboardService: ClipboardService,
 ): Promise<{ port: number; configPath: string }> {
   const server = new McpServer({
     name: "claudetui",
@@ -48,6 +50,7 @@ export async function startMcpServer(
     snippetService,
     broadcastService,
     commandService,
+    clipboardService,
   )
 
   // Create HTTP server with SSE transport
