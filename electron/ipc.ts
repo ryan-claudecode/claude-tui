@@ -93,6 +93,8 @@ export async function setupIpc(win: BrowserWindow) {
   uiService.setMainWindow(win)
 
   workspaceService.discover(config.workspaceScanPaths)
+  workSessionService.attachTerminals(sessionService)
+  workSessionService.setMainWindow(win)
   workSessionService.load()
 
   // Start MCP server and configure sessions to auto-connect
@@ -162,6 +164,25 @@ export async function setupIpc(win: BrowserWindow) {
     "session:search-output",
     (_e, query: string, sessionId?: string, limit?: number) =>
       sessionService.searchOutput(query, sessionId, limit),
+  )
+
+  // Work-session (container) IPC -- the durable session tier above terminals
+  ipcMain.handle("worksession:list", () => workSessionService.list())
+  ipcMain.handle("worksession:open", (_e, cwd?: string) => workSessionService.openSession(cwd))
+  ipcMain.handle("worksession:add-terminal", (_e, sessionId: string, cwd?: string) =>
+    workSessionService.addTerminalToSession(sessionId, cwd),
+  )
+  ipcMain.handle("worksession:reopen-terminal", (_e, sessionId: string, terminalId: string) =>
+    workSessionService.reopenTerminal(sessionId, terminalId),
+  )
+  ipcMain.handle("worksession:close-terminal", (_e, sessionId: string, terminalId: string) =>
+    workSessionService.closeTerminal(sessionId, terminalId),
+  )
+  ipcMain.handle("worksession:kill", (_e, sessionId: string) =>
+    workSessionService.killSession(sessionId),
+  )
+  ipcMain.handle("worksession:context", (_e, sessionId: string) =>
+    workSessionService.getContext(sessionId),
   )
 
   // Workspace IPC
