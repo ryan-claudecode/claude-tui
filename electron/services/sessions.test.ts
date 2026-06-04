@@ -74,3 +74,37 @@ describe("SessionService terminals", () => {
     expect(svc.get(s.id)!.name).toBe("First")
   })
 })
+
+describe("SessionService.deriveStatus", () => {
+  const mk = (svc: SessionService) => svc.create()
+
+  it("Empty when no terminals", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = mk(svc)
+    expect(svc.deriveStatus(s.id)).toBe("Empty")
+  })
+
+  it("Stopped when session.status is stopped", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = mk(svc)
+    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "idle" })
+    svc.setStatus(s.id, "stopped")
+    expect(svc.deriveStatus(s.id)).toBe("Stopped")
+  })
+
+  it("Idle when live terminals exist but none active", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = mk(svc)
+    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "idle" })
+    expect(svc.deriveStatus(s.id)).toBe("Idle")
+  })
+
+  it("counts active terminals (singular vs plural)", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = mk(svc)
+    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "active" })
+    expect(svc.deriveStatus(s.id)).toBe("1 Terminal Working")
+    svc.addTerminal(s.id, { id: "t2", name: "y", cwd: "/r", lastState: "active" })
+    expect(svc.deriveStatus(s.id)).toBe("2 Terminals Working")
+  })
+})

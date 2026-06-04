@@ -105,6 +105,24 @@ export class SessionService {
     this.persist(s)
   }
 
+  setStatus(sessionId: string, status: "active" | "stopped"): void {
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    s.status = status
+    this.persist(s)
+  }
+
+  /** Human-readable session label derived from status + terminal states. */
+  deriveStatus(sessionId: string): string {
+    const s = this.sessions.get(sessionId)
+    if (!s) return "Stopped"
+    if (s.terminals.length === 0) return "Empty"
+    if (s.status === "stopped") return "Stopped"
+    const active = s.terminals.filter((t) => t.lastState === "active").length
+    if (active > 0) return `${active} Terminal${active === 1 ? "" : "s"} Working`
+    return "Idle"
+  }
+
   private persist(s: WorkSession): void {
     s.updatedAt = this.now()
     mkdirSync(this.dir, { recursive: true })
