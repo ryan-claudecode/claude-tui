@@ -228,6 +228,36 @@ export class MissionService {
   start(): void { if (!this.timer) this.timer = setInterval(() => this.tick(), 5000) }
   pause(id: string, resumeAt?: number): Mission | undefined { return undefined }
   resume(id: string): Mission | undefined { return undefined }
-  tick(): void {}
   stopTimer(): void { if (this.timer) { clearInterval(this.timer); this.timer = null } }
+
+  private conductorSeed(m: Mission): string {
+    return `You are the Conductor for ClaudeTUI mission "${m.id}". ` +
+      `Call the mission_status MCP tool to load the goal and task list, then drive the mission: ` +
+      `if planning, decompose the goal with mission_plan; otherwise pick the next pending task, ` +
+      `mission_dispatch it to a worker, mission_await it, review the output, and mission_resolve it. ` +
+      `Commit completed work with the git_* tools. Loop until every task is done, then mission_finish. ` +
+      `If you hit a usage limit, call mission_pause. You may stop anytime — a fresh Conductor resumes from mission_status.`
+  }
+
+  private liveSessionIds(): Set<string> {
+    return new Set(this.sessions.getActivity().filter((a) => a.state !== "dead").map((a) => a.id))
+  }
+
+  private ensureConductor(m: Mission, live: Set<string>): void {
+    if (m.conductorSessionId && live.has(m.conductorSessionId)) return
+    const info = this.sessions.create(`Conductor · ${m.goal.slice(0, 24)}`, m.cwd)
+    m.conductorSessionId = info.id
+    this.log(m, "info", `Conductor (re)spawned: ${info.id}`)
+    const seed = this.conductorSeed(m)
+    if (this.seedDelayMs > 0) setTimeout(() => this.sessions.write(info.id, `${seed}\r`), this.seedDelayMs)
+    else this.sessions.write(info.id, `${seed}\r`)
+    this.persist(m)
+  }
+
+  tick(): void {
+    const live = this.liveSessionIds()
+    for (const m of this.missions.values()) {
+      if (m.status === "running") this.ensureConductor(m, live)
+    }
+  }
 }

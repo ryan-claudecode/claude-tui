@@ -156,3 +156,52 @@ describe("MissionService resolve/stop", () => {
     expect(killed.sort()).toEqual(["c1", "w1"])
   })
 })
+
+describe("MissionService supervisor — conductor", () => {
+  it("spawns a conductor for a running mission that has none", () => {
+    const created: Array<{ name?: string; cwd?: string }> = []
+    const writes: Array<{ id: string; data: string }> = []
+    const svc = new MissionService(
+      fakeDriver({
+        create: (name, cwd) => { created.push({ name, cwd }); return { id: "c1", name: name ?? "", cwd: cwd ?? "", state: "active" } },
+        write: (id, data) => writes.push({ id, data }),
+        getActivity: () => [{ id: "c1", name: "c", state: "active", idleMs: 0 }],
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    svc.tick()
+    expect(svc.get(m.id)!.conductorSessionId).toBe("c1")
+    expect(created.length).toBe(1)
+  })
+
+  it("respawns the conductor if its session has died", () => {
+    let nextId = 1
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: `c${nextId++}`, name: "c", cwd: "/r", state: "active" }),
+        getActivity: () => [], // no live sessions -> conductor considered dead
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    svc.tick() // spawns c1
+    const first = svc.get(m.id)!.conductorSessionId
+    svc.tick() // c1 absent from activity -> respawn c2
+    const second = svc.get(m.id)!.conductorSessionId
+    expect(first).toBe("c1")
+    expect(second).toBe("c2")
+  })
+
+  it("does not spawn a conductor for paused/done/stopped missions", () => {
+    let count = 0
+    const svc = new MissionService(fakeDriver({ create: () => { count++; return { id: `c${count}`, name: "c", cwd: "/r", state: "active" } } }), { dir, seedDelayMs: 0 })
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    svc.finish(m.id)
+    svc.tick()
+    expect(count).toBe(0)
+  })
+})
