@@ -24,6 +24,19 @@ export interface GitCommit {
   subject: string
 }
 
+export interface GitCommitDetail {
+  hash: string
+  author: string
+  email: string
+  date: string
+  subject: string
+  body: string
+  /** Changed-files summary from `git show --stat`. */
+  stat: string
+  /** Full patch for the commit. */
+  diff: string
+}
+
 /**
  * GitService — structured git queries and operations scoped to a working dir.
  *
@@ -183,5 +196,30 @@ export class GitService {
   stashList(cwd: string): string[] {
     const raw = this.run(cwd, ["stash", "list"])
     return raw ? raw.split("\n") : []
+  }
+
+  /**
+   * Show a single commit: full metadata, the changed-files summary (`--stat`),
+   * and the patch. `git_log` lists commits; this drills into one of them (or any
+   * ref) so Claude can review exactly what changed without parsing terminal
+   * output. Defaults to HEAD.
+   */
+  show(cwd: string, ref = "HEAD"): GitCommitDetail {
+    const sep = "\x1f"
+    const fmt = ["%H", "%an", "%ae", "%ad", "%s", "%b"].join(sep)
+    const meta = this.run(cwd, ["show", "-s", "--date=short", `--pretty=format:${fmt}`, ref])
+    const [hash, author, email, date, subject, body] = meta.split(sep)
+    const stat = this.run(cwd, ["show", "--stat", "--format=", ref]).trim()
+    const diff = this.run(cwd, ["show", "--format=", ref]).trim()
+    return {
+      hash,
+      author,
+      email,
+      date,
+      subject,
+      body: (body ?? "").trim(),
+      stat,
+      diff,
+    }
   }
 }

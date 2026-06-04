@@ -9,6 +9,7 @@ import ChartPanel from "./panels/ChartPanel"
 import TreePanel from "./panels/TreePanel"
 import TimelinePanel from "./panels/TimelinePanel"
 import GitPanel from "./panels/GitPanel"
+import KanbanPanel from "./panels/KanbanPanel"
 
 export interface PanelState {
   id: string
@@ -36,6 +37,7 @@ const PANEL_LABELS: Record<string, string> = {
   tree: "Tree",
   timeline: "Timeline",
   git: "Git",
+  kanban: "Kanban",
 }
 
 export default function PanelDrawer({ panels, onClose }: Props) {
@@ -149,6 +151,8 @@ function PanelContent({ panel }: { panel: PanelState }) {
       return <TimelinePanel {...panel.props} />
     case "git":
       return <GitPanel {...panel.props} />
+    case "kanban":
+      return <KanbanPanel {...panel.props} />
     default:
       return <pre className="panel-raw">{JSON.stringify(panel.props, null, 2)}</pre>
   }

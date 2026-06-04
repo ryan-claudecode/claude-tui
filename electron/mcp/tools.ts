@@ -369,6 +369,23 @@ export function registerTools(
   )
 
   server.tool(
+    "git_show",
+    "Show a single commit (or any ref): full metadata (hash, author, email, date, subject, body), the changed-files summary (--stat), and the patch. git_log lists commits; this drills into one of them so you can review exactly what changed. Defaults to HEAD.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to inspect"),
+      ref: z.string().optional().describe("Commit hash or ref to show (default: HEAD)"),
+    },
+    async ({ session_id, ref }) => {
+      try {
+        const detail = git.show(resolveCwd(session_id), ref)
+        return { content: [{ type: "text" as const, text: JSON.stringify(detail, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git show failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
     "git_stage",
     "Stage changes in a session's working directory. Pass specific file paths, or omit `files` to stage everything (git add -A). Returns the refreshed git status.",
     {
