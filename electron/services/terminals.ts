@@ -1,8 +1,54 @@
 import * as pty from "node-pty"
-import { existsSync, writeFileSync, mkdirSync } from "fs"
+import { existsSync, writeFileSync, mkdirSync, readdirSync, statSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { BrowserWindow } from "electron"
+
+/**
+ * Encode an absolute cwd into the directory name Claude Code uses under
+ * ~/.claude/projects/. CC replaces every path separator and the drive colon
+ * with "-": "C:\\Users\\ryguy\\app" -> "C--Users-ryguy-app".
+ */
+export function encodeProjectDir(cwd: string): string {
+  return cwd.replace(/[:\\/]/g, "-")
+}
+
+/**
+ * Resolve the Claude Code conversation id for a terminal by finding the newest
+ * transcript .jsonl in ~/.claude/projects/<encoded-cwd>/ whose mtime is at or
+ * after the terminal's spawn time (minus a small skew). Returns the uuid (file
+ * basename) or undefined if CC hasn't written one yet.
+ *
+ * `projectsRoot` is injectable for tests; production passes
+ * join(homedir(), ".claude", "projects").
+ */
+export function resolveTranscriptId(
+  projectsRoot: string,
+  cwd: string,
+  spawnedAt: number,
+): string | undefined {
+  const dir = join(projectsRoot, encodeProjectDir(cwd))
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return undefined
+  }
+  const skewMs = 2000
+  let best: { id: string; mtime: number } | undefined
+  for (const f of entries) {
+    if (!f.endsWith(".jsonl")) continue
+    let mtime: number
+    try {
+      mtime = statSync(join(dir, f)).mtimeMs
+    } catch {
+      continue
+    }
+    if (mtime < spawnedAt - skewMs) continue
+    if (!best || mtime > best.mtime) best = { id: f.slice(0, -".jsonl".length), mtime }
+  }
+  return best?.id
+}
 
 export interface TerminalInfo {
   id: string
