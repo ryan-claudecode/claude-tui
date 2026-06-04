@@ -10,6 +10,8 @@ import CommandPalette, { Command } from "./components/CommandPalette"
 import ToastHost from "./components/ToastHost"
 import ShortcutsHelp from "./components/ShortcutsHelp"
 import HistorySearch from "./components/HistorySearch"
+import MissionPrompt, { Autonomy } from "./components/MissionPrompt"
+import MissionsList, { Mission } from "./components/MissionsList"
 
 // TypeScript type for the API exposed by preload
 declare global {
@@ -90,6 +92,9 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [missionPromptOpen, setMissionPromptOpen] = useState(false)
+  const [missionsListOpen, setMissionsListOpen] = useState(false)
+  const [missions, setMissions] = useState<Mission[]>([])
   const [zenMode, setZenMode] = useState(false)
 
   // Load workspaces and config on mount
@@ -344,12 +349,8 @@ export default function App() {
     exportLogRef.current = handleExportLog
   }, [handleExportLog])
 
-  // Start a new orchestration mission, then open its dashboard panel.
-  const startMission = useCallback(async () => {
-    const goal = window.prompt("Mission goal?")
-    if (!goal) return
-    const cwd = sessions.find((s) => s.id === activeId)?.cwd ?? ""
-    const m = await window.api.createMission(goal, cwd, "hands-off")
+  // Open (or refresh) a mission's dashboard panel.
+  const openMission = useCallback((m: { id: string }) => {
     const panel: PanelState = {
       id: `mission-${m.id}`,
       type: "mission",
@@ -358,7 +359,44 @@ export default function App() {
       visible: true,
     }
     setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), panel])
-  }, [sessions, activeId])
+    setDrawerCollapsed(false)
+  }, [])
+
+  // Create a mission from the prompt overlay, then open its dashboard panel.
+  const createMission = useCallback(
+    async (goal: string, autonomy: Autonomy) => {
+      const cwd = sessions.find((s) => s.id === activeId)?.cwd ?? ""
+      const m = await window.api.createMission(goal, cwd, autonomy)
+      openMission(m)
+    },
+    [sessions, activeId, openMission],
+  )
+
+  // Missions don't push updates, so poll while the list overlay or any mission
+  // panel is open and refresh both from the same listMissions() result.
+  const hasMissionPanel = panels.some((p) => p.type === "mission" && p.visible)
+  useEffect(() => {
+    if (!missionsListOpen && !hasMissionPanel) return
+    let cancelled = false
+    const refresh = async () => {
+      const list = (await window.api.listMissions()) as Mission[]
+      if (cancelled) return
+      setMissions(list)
+      setPanels((prev) =>
+        prev.map((p) => {
+          if (p.type !== "mission") return p
+          const m = list.find((x) => `mission-${x.id}` === p.id)
+          return m ? { ...p, props: m } : p
+        }),
+      )
+    }
+    refresh()
+    const t = setInterval(refresh, 3000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [missionsListOpen, hasMissionPanel])
 
   // Commands surfaced in the Ctrl+Shift+P command palette. Static app actions
   // plus a dynamic "Switch to…" entry per open session.
@@ -374,7 +412,8 @@ export default function App() {
       { id: "export-log", label: "Export Active Session Log", keywords: "save download output history file", run: handleExportLog },
       { id: "zen", label: zenMode ? "Exit Focus Mode" : "Enter Focus Mode", hint: "Ctrl+Shift+Z", keywords: "zen distraction free hide sidebar fullscreen", run: () => setZenMode((z) => !z) },
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
-      { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: startMission },
+      { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: () => setMissionPromptOpen(true) },
+      { id: "missions", label: "View Missions", keywords: "orchestrate conductor list dashboard status", run: () => setMissionsListOpen(true) },
     ]
     const sessionCmds: Command[] = sessions.map((s, i) => ({
       id: `switch-${s.id}`,
@@ -384,7 +423,7 @@ export default function App() {
       run: () => setActiveId(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, startMission, zenMode, splitLeft, sessions])
+  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, zenMode, splitLeft, sessions])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
@@ -484,6 +523,23 @@ export default function App() {
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
         onSelectSession={handleSelectSession}
+      />
+      <MissionPrompt
+        open={missionPromptOpen}
+        onClose={() => setMissionPromptOpen(false)}
+        onSubmit={createMission}
+      />
+      <MissionsList
+        open={missionsListOpen}
+        missions={missions}
+        onClose={() => setMissionsListOpen(false)}
+        onOpen={(m) => {
+          openMission(m)
+          setMissionsListOpen(false)
+        }}
+        onStop={(id) => window.api.stopMission(id)}
+        onPause={(id) => window.api.pauseMission(id)}
+        onResume={(id) => window.api.resumeMission(id)}
       />
       <Sidebar
         sessions={sessions}
