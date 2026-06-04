@@ -591,6 +591,22 @@ export function registerTools(
     },
   )
 
+  server.tool(
+    "git_branches",
+    "List local and remote-tracking branches (name, whether it's the current branch, whether it's remote). Fills the gap between git_branch (create) and git_checkout (switch): answers 'what can I switch to?'.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to inspect"),
+    },
+    async ({ session_id }) => {
+      try {
+        const branches = git.branches(resolveCwd(session_id))
+        return { content: [{ type: "text" as const, text: JSON.stringify(branches, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git branches failed: ${e.message}` }] }
+      }
+    },
+  )
+
   // Session template tools — spawn purpose-built sessions seeded with a prompt
 
   server.tool(

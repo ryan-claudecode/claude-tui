@@ -37,6 +37,15 @@ export interface GitCommitDetail {
   diff: string
 }
 
+export interface GitBranch {
+  /** Short branch name (e.g. "main" or "origin/feature-x"). */
+  name: string
+  /** True for the currently checked-out branch. */
+  current: boolean
+  /** True for remote-tracking branches (refs/remotes/*). */
+  remote: boolean
+}
+
 export interface GitBlameLine {
   /** 1-based line number in the final file. */
   line: number
@@ -176,6 +185,33 @@ export class GitService {
   checkout(cwd: string, ref: string): GitStatus {
     this.run(cwd, ["checkout", ref])
     return this.status(cwd)
+  }
+
+  /**
+   * List local and remote-tracking branches with a flag for the current one.
+   * Fills the gap between `git_branch` (create) and `git_checkout` (switch):
+   * answers "what branches can I switch to?" without parsing `git branch -a`.
+   */
+  branches(cwd: string): GitBranch[] {
+    const sep = "\x1f"
+    const raw = this.run(cwd, [
+      "for-each-ref",
+      `--format=%(refname)${sep}%(HEAD)`,
+      "refs/heads",
+      "refs/remotes",
+    ])
+    if (!raw) return []
+    const out: GitBranch[] = []
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue
+      const [refname, head] = line.split(sep)
+      const remote = refname.startsWith("refs/remotes/")
+      // Skip the symbolic "origin/HEAD -> origin/main" pointer.
+      if (remote && refname.endsWith("/HEAD")) continue
+      const name = refname.replace(/^refs\/heads\//, "").replace(/^refs\/remotes\//, "")
+      out.push({ name, current: head.trim() === "*", remote })
+    }
+    return out
   }
 
   /** Push to the remote. Uses --porcelain so the result lands on stdout. */
