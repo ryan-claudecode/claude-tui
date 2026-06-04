@@ -188,6 +188,9 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("worksession:overview", (_e, sessionId: string) =>
     workSessionService.getOverview(sessionId),
   )
+  ipcMain.handle("worksession:handoff", (_e, sessionId: string, terminalId: string) =>
+    workSessionService.handoffTerminal(sessionId, terminalId),
+  )
 
   // Workspace IPC
   ipcMain.handle("workspace:list", () =>

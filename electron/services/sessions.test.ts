@@ -452,6 +452,30 @@ describe("SessionService.getOverview", () => {
   })
 })
 
+describe("SessionService.handoffTerminal", () => {
+  it("spawns a fresh terminal in the same session and retires the old one", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+
+    const r = svc.handoffTerminal(session.id, terminalId)
+
+    const s = svc.get(session.id)!
+    const oldRef = s.terminals.find((t) => t.id === terminalId)
+    expect(oldRef?.lastState).toBe("dead")
+    expect(r?.terminalId).toBeTruthy()
+    expect(r!.terminalId).not.toBe(terminalId)
+    expect(s.terminals.find((t) => t.id === r!.terminalId)?.lastState).toBe("active")
+  })
+
+  it("returns undefined for an unknown session", () => {
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(new FakeTerminals() as any)
+    expect(svc.handoffTerminal("nope", "nope")).toBeUndefined()
+  })
+})
+
 const tick = () => new Promise((r) => setTimeout(r, 5))
 
 describe("SessionService idle-flush", () => {

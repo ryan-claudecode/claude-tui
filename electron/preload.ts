@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("worksession:context", sessionId),
   getSessionOverview: (sessionId: string) =>
     ipcRenderer.invoke("worksession:overview", sessionId),
+  handoffTerminal: (sessionId: string, terminalId: string) =>
+    ipcRenderer.invoke("worksession:handoff", sessionId, terminalId),
 
   // Workspace management
   getWorkspaces: () => ipcRenderer.invoke("workspace:list"),

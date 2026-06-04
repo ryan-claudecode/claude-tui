@@ -77,6 +77,7 @@ declare global {
       resumeMission: (id: string) => Promise<any>
       removeAllListeners: (channel: string) => void
       getSessionOverview: (sessionId: string) => Promise<any>
+      handoffTerminal: (sessionId: string, terminalId: string) => Promise<{ terminalId: string } | undefined>
     }
   }
 }
@@ -287,6 +288,12 @@ export default function App() {
     }
   }, [activeSessionId, activeTerminalId])
 
+  const handleHandoff = useCallback(async () => {
+    if (!activeSessionId || !activeTerminalId) return
+    const r = await window.api.handoffTerminal(activeSessionId, activeTerminalId)
+    if (r?.terminalId) setActiveTerminalId(r.terminalId)
+  }, [activeSessionId, activeTerminalId])
+
   const handleKillSession = useCallback(() => {
     if (!activeSessionId) return
     if (window.confirm("Kill this session and all its terminals? This deletes its record.")) {
@@ -492,6 +499,10 @@ export default function App() {
         // Ctrl+K — kill the active session (confirm)
         e.preventDefault(); e.stopPropagation()
         handleKillSession()
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "h") {
+        // Ctrl+H — retire & continue (handoff): flush summary, fresh terminal, retire old
+        e.preventDefault(); e.stopPropagation()
+        handleHandoff()
       } else if (e.ctrlKey && e.key === "\\") {
         e.preventDefault(); e.stopPropagation()
         toggleSplit()
@@ -533,7 +544,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, panels, drawerCollapsed, handleClosePanel, helpOpen])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, panels, drawerCollapsed, handleClosePanel, helpOpen])
 
   return (
     <div

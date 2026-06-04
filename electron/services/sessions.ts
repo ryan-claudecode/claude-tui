@@ -211,6 +211,37 @@ export class SessionService {
     this.emit("worksession:removed", sessionId)
   }
 
+  /**
+   * Retire & continue: force an immediate summary flush on the active terminal,
+   * spawn a fresh primed terminal in the same session, and mark the old one dead.
+   * The fresh terminal inherits everything via get_session_context on entry.
+   */
+  handoffTerminal(sessionId: string, terminalId: string): { terminalId: string } | undefined {
+    const s = this.sessions.get(sessionId)
+    if (!s || !this.terminals) return undefined
+    const old = s.terminals.find((t) => t.id === terminalId)
+    if (!old) return undefined
+
+    // Force a summary flush now if dirty (bypass debounce — explicit user intent).
+    if (this.summaryDirty.has(sessionId)) {
+      this.summaryDirty.delete(sessionId)
+      this.lastFlushAt.set(sessionId, this.now())
+      const prompt =
+        "You're being retired. Fold all findings into the session summary NOW via " +
+        "set_session_summary, then stop."
+      this.terminals.write(terminalId, `\x1b[200~${prompt}\x1b[201~\r`)
+    }
+
+    const info = this.terminals.create(undefined, old.cwd, s.id)
+    s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: "active" })
+    this.terminals.kill(terminalId)
+    old.lastState = "dead"
+    s.status = "active"
+    this.persist(s)
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
+    return { terminalId: info.id }
+  }
+
   /** Reopen a dead/stale terminal ref with a fresh primed PTY (3a: fresh, not --resume). */
   reopenTerminal(sessionId: string, terminalId: string): { terminalId: string } | undefined {
     const s = this.sessions.get(sessionId)
