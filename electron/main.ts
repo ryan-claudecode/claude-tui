@@ -31,8 +31,7 @@ function createWindow() {
     mainWindow.loadFile(rendererPath)
   }
 
-  // Open DevTools in dev for debugging
-  mainWindow.webContents.openDevTools()
+  // Uncomment to debug: mainWindow.webContents.openDevTools()
 }
 
 app.whenReady().then(createWindow)
