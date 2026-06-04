@@ -1234,6 +1234,33 @@ body {
   line-height: 1.5;
 }
 
+.md-codeblock { position: relative; }
+.md-codeblock pre { margin: 0 0 var(--s-3); }
+
+.md-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 9px;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s, background 0.15s;
+}
+.md-codeblock:hover .md-copy,
+.md-copy:focus-visible { opacity: 1; }
+.md-copy:hover {
+  color: var(--accent-bright);
+  border-color: var(--accent-dim);
+  background: var(--bg-0);
+}
+
 .markdown-body blockquote {
   margin: 0 0 var(--s-3);
   padding: 0 var(--s-3);
