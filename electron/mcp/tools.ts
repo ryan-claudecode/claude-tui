@@ -19,6 +19,7 @@ import type { TaskQueueService } from "../services/taskqueue"
 import type { SystemService } from "../services/system"
 import type { FileSearchService } from "../services/filesearch"
 import type { FileService } from "../services/files"
+import type { HttpService } from "../services/http"
 
 export function registerTools(
   server: McpServer,
@@ -41,6 +42,7 @@ export function registerTools(
   system: SystemService,
   fileSearch: FileSearchService,
   files: FileService,
+  http: HttpService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1193,6 +1195,35 @@ export function registerTools(
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `write_file failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  // HTTP client — make a request and get a structured response (status, headers,
+  // body) without spawning curl/Invoke-WebRequest in a terminal. Pairs with
+  // open_external (browser) and run_command. Great for poking a localhost dev
+  // server you just started or hitting a JSON API.
+  server.tool(
+    "http_request",
+    "Make an HTTP(S) request and return a structured response: status, statusText, headers, content-type, body (capped at 1MB), bodyBytes, truncated flag, and durationMs. Only http/https URLs are allowed. Use this instead of curl/Invoke-WebRequest for portable, structured results — e.g. to check a localhost dev server you just started or hit a JSON API.",
+    {
+      url: z.string().describe("The full http:// or https:// URL to request"),
+      method: z.string().optional().describe("HTTP method (default GET)"),
+      headers: z.record(z.string()).optional().describe("Request headers as a key/value map"),
+      body: z.string().optional().describe("Request body (for POST/PUT/PATCH)"),
+      timeout_ms: z.number().optional().describe("Abort the request after this many ms (default 15000)"),
+    },
+    async ({ url, method, headers, body, timeout_ms }) => {
+      try {
+        const result = await http.request(url, {
+          method,
+          headers: headers as Record<string, string> | undefined,
+          body,
+          timeoutMs: timeout_ms,
+        })
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `http_request failed: ${e.message}` }] }
       }
     },
   )
