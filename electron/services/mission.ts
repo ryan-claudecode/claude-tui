@@ -54,6 +54,7 @@ export interface MissionServiceOpts {
   dir?: string
   now?: () => number
   seedDelayMs?: number
+  workerStallMs?: number
   notify?: (text: string, level?: string) => void
 }
 
@@ -61,6 +62,7 @@ export class MissionService {
   private dir: string
   private now: () => number
   private seedDelayMs: number
+  private workerStallMs: number
   private notify?: (text: string, level?: string) => void
   private missions = new Map<string, Mission>()
   private timer: ReturnType<typeof setInterval> | null = null
@@ -69,6 +71,7 @@ export class MissionService {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "missions")
     this.now = opts.now ?? (() => Date.now())
     this.seedDelayMs = opts.seedDelayMs ?? 4000
+    this.workerStallMs = opts.workerStallMs ?? 10 * 60_000
     this.notify = opts.notify
     this.loadAll()
   }
@@ -254,10 +257,32 @@ export class MissionService {
     this.persist(m)
   }
 
+  private reapStalledWorkers(m: Mission, activity: SessionActivity[]): void {
+    const byId = new Map(activity.map((a) => [a.id, a]))
+    for (const w of [...m.workers]) {
+      const a = byId.get(w.sessionId)
+      const stalled = !a || a.idleMs > this.workerStallMs
+      if (w.currentTaskId && stalled) {
+        const task = m.tasks.find((t) => t.id === w.currentTaskId)
+        if (task && task.status === "in-progress") {
+          task.status = "pending"
+          task.assignedTo = undefined
+        }
+        this.sessions.kill(w.sessionId)
+        m.workers = m.workers.filter((x) => x.sessionId !== w.sessionId)
+        this.log(m, "error", `Reaped stalled worker ${w.sessionId}; task requeued`)
+      }
+    }
+  }
+
   tick(): void {
-    const live = this.liveSessionIds()
+    const activity = this.sessions.getActivity()
+    const live = new Set(activity.filter((a) => a.state !== "dead").map((a) => a.id))
     for (const m of this.missions.values()) {
-      if (m.status === "running") this.ensureConductor(m, live)
+      if (m.status !== "running") continue
+      this.reapStalledWorkers(m, activity)
+      this.ensureConductor(m, live)
+      this.persist(m)
     }
   }
 }

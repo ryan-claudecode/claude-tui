@@ -205,3 +205,31 @@ describe("MissionService supervisor — conductor", () => {
     expect(count).toBe(0)
   })
 })
+
+describe("MissionService supervisor — stalled workers", () => {
+  it("kills a worker idle beyond the threshold and frees its task", () => {
+    const killed: string[] = []
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        getActivity: () => [
+          { id: "c1", name: "c", state: "active", idleMs: 0 },
+          { id: "w1", name: "w", state: "idle", idleMs: 11 * 60_000 }, // 11 min idle
+        ],
+        kill: (id) => { killed.push(id); return true },
+      }),
+      { dir, seedDelayMs: 0, workerStallMs: 10 * 60_000 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")            // assigns w1, status in-progress
+    svc.get(m.id)!.conductorSessionId = "c1"    // pretend conductor exists
+    svc.tick()
+    expect(killed).toContain("w1")
+    const task = svc.get(m.id)!.tasks[0]
+    expect(task.status).toBe("pending")
+    expect(task.assignedTo).toBeUndefined()
+    expect(svc.get(m.id)!.workers.some((w) => w.sessionId === "w1")).toBe(false)
+  })
+})
