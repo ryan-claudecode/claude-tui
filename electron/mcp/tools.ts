@@ -18,6 +18,7 @@ import type { NotesService } from "../services/notes"
 import type { TaskQueueService } from "../services/taskqueue"
 import type { SystemService } from "../services/system"
 import type { FileSearchService } from "../services/filesearch"
+import type { FileService } from "../services/files"
 
 export function registerTools(
   server: McpServer,
@@ -39,6 +40,7 @@ export function registerTools(
   taskQueue: TaskQueueService,
   system: SystemService,
   fileSearch: FileSearchService,
+  files: FileService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1152,6 +1154,45 @@ export function registerTools(
             text: JSON.stringify({ cwd, ...result }, null, 2),
           },
         ],
+      }
+    },
+  )
+
+  // File read/write — structured access scoped to a session's working dir,
+  // resolving relative paths against it. Pairs with find_files/grep_code.
+  server.tool(
+    "read_file",
+    "Read a file (relative to a session's working dir, or absolute) and return its contents. Optionally pass start_line/end_line (1-based, inclusive) to read just a slice. Returns total line count so you can page through large files. Refuses files over 2MB.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      path: z.string().describe("File path, relative to the working dir or absolute"),
+      start_line: z.number().optional().describe("First line to return, 1-based inclusive"),
+      end_line: z.number().optional().describe("Last line to return, 1-based inclusive"),
+    },
+    async ({ session_id, path: filePath, start_line, end_line }) => {
+      try {
+        const result = files.read(resolveCwd(session_id), filePath, start_line, end_line)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `read_file failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "write_file",
+    "Write content to a file (relative to a session's working dir, or absolute), creating parent directories as needed. Overwrites the file if it exists. Returns the resolved path, bytes written, and whether the file was newly created. Use for quick scaffolding or edits without scraping a terminal redirect.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      path: z.string().describe("File path, relative to the working dir or absolute"),
+      content: z.string().describe("Full content to write to the file"),
+    },
+    async ({ session_id, path: filePath, content }) => {
+      try {
+        const result = files.write(resolveCwd(session_id), filePath, content)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `write_file failed: ${e.message}` }] }
       }
     },
   )

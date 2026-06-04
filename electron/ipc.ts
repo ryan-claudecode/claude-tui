@@ -18,6 +18,7 @@ import { NotesService } from "./services/notes"
 import { TaskQueueService } from "./services/taskqueue"
 import { SystemService } from "./services/system"
 import { FileSearchService } from "./services/filesearch"
+import { FileService } from "./services/files"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -39,6 +40,7 @@ export const notesService = new NotesService()
 export const taskQueueService = new TaskQueueService()
 export const systemService = new SystemService()
 export const fileSearchService = new FileSearchService()
+export const fileService = new FileService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -77,6 +79,7 @@ export async function setupIpc(win: BrowserWindow) {
     taskQueueService,
     systemService,
     fileSearchService,
+    fileService,
   )
   sessionService.setMcpConfigPath(configPath)
 
