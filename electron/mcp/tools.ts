@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
-import type { SessionService } from "../services/sessions"
+import type { TerminalService } from "../services/terminals"
 import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
@@ -39,7 +39,7 @@ import { isAbsolute, join } from "path"
 
 export function registerTools(
   server: McpServer,
-  sessions: SessionService,
+  sessions: TerminalService,
   workspaces: WorkspaceService,
   appService: AppService,
   panels: PanelService,

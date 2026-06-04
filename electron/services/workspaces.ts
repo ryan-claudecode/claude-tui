@@ -1,12 +1,12 @@
 import { spawn } from "child_process"
 import { discoverWorkspaces, type Workspace } from "../workspace/discovery"
-import type { SessionService, SessionInfo } from "./sessions"
+import type { TerminalService, TerminalInfo } from "./terminals"
 
 export class WorkspaceService {
   private workspaces: Workspace[] = []
-  private sessionService: SessionService
+  private sessionService: TerminalService
 
-  constructor(sessionService: SessionService) {
+  constructor(sessionService: TerminalService) {
     this.sessionService = sessionService
   }
 
@@ -18,7 +18,7 @@ export class WorkspaceService {
     return this.workspaces
   }
 
-  activate(index: number): { workspace: string; sessions: SessionInfo[] } | null {
+  activate(index: number): { workspace: string; sessions: TerminalInfo[] } | null {
     const ws = this.workspaces[index]
     if (!ws) return null
 
@@ -35,7 +35,7 @@ export class WorkspaceService {
     }
 
     // Create Claude sessions for each repo
-    const created: SessionInfo[] = []
+    const created: TerminalInfo[] = []
     for (const repo of ws.repos) {
       const repoPath = repo.path.replace(/^~/, process.env.HOME ?? process.env.USERPROFILE ?? "")
       const info = this.sessionService.create(repo.name, repoPath)

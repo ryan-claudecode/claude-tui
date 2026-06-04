@@ -1,6 +1,6 @@
 import { app, ipcMain, BrowserWindow } from "electron"
 import { join } from "path"
-import { SessionService } from "./services/sessions"
+import { TerminalService } from "./services/terminals"
 import { WorkspaceService } from "./services/workspaces"
 import { AppService } from "./services/app"
 import { PanelService } from "./services/panels"
@@ -37,7 +37,7 @@ import { MissionService } from "./services/mission"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
-export const sessionService = new SessionService()
+export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
 export const appService = new AppService()
 export const panelService = new PanelService()

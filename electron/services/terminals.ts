@@ -3,14 +3,14 @@ import { existsSync } from "fs"
 import { join } from "path"
 import { BrowserWindow } from "electron"
 
-export interface SessionInfo {
+export interface TerminalInfo {
   id: string
   name: string
   cwd: string
   state: "active" | "idle" | "dead"
 }
 
-interface Session {
+interface Terminal {
   id: string
   name: string
   cwd: string
@@ -21,7 +21,7 @@ interface Session {
 }
 
 /** Per-session activity snapshot for the "which session needs me?" view. */
-export interface SessionActivity {
+export interface TerminalActivity {
   id: string
   name: string
   state: "active" | "idle" | "dead"
@@ -58,8 +58,8 @@ export interface OutputMatch {
   text: string
 }
 
-export class SessionService {
-  private sessions = new Map<string, Session>()
+export class TerminalService {
+  private sessions = new Map<string, Terminal>()
   /** Bounded plain-text scrollback per session, for history search/review. */
   private outputBuffers = new Map<string, string>()
   /** Max characters of scrollback retained per session. */
@@ -96,7 +96,7 @@ export class SessionService {
   }
 
   /** Record output activity and flip a session back to active if it was idle. */
-  private markActive(session: Session) {
+  private markActive(session: Terminal) {
     session.lastActivity = Date.now()
     if (session.state === "idle") {
       session.state = "active"
@@ -167,7 +167,7 @@ export class SessionService {
     })
   }
 
-  create(name?: string, cwd?: string): SessionInfo {
+  create(name?: string, cwd?: string): TerminalInfo {
     const id = `session-${this.nextId++}`
     const sessionName = name || id
     const sessionCwd = cwd || process.cwd()
@@ -190,7 +190,7 @@ export class SessionService {
       } as Record<string, string>,
     })
 
-    const session: Session = {
+    const session: Terminal = {
       id,
       name: sessionName,
       cwd: sessionCwd,
@@ -202,7 +202,7 @@ export class SessionService {
     this.sessions.set(id, session)
     this.attachPtyListeners(session)
 
-    const info: SessionInfo = { id, name: sessionName, cwd: sessionCwd, state: "active" }
+    const info: TerminalInfo = { id, name: sessionName, cwd: sessionCwd, state: "active" }
     this.sendToRenderer("session:created", info)
     return info
   }
@@ -259,7 +259,7 @@ export class SessionService {
     return results
   }
 
-  list(): SessionInfo[] {
+  list(): TerminalInfo[] {
     return Array.from(this.sessions.values()).map((s) => ({
       id: s.id,
       name: s.name,
@@ -273,7 +273,7 @@ export class SessionService {
    * (waiting for input), and how long each has been quiet. Lets a user — or
    * Claude itself — tell at a glance which background session needs attention.
    */
-  getActivity(): SessionActivity[] {
+  getActivity(): TerminalActivity[] {
     const now = Date.now()
     return Array.from(this.sessions.values()).map((s) => ({
       id: s.id,

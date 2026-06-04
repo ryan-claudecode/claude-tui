@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js"
 import { createServer } from "http"
-import type { SessionService } from "../services/sessions"
+import type { TerminalService } from "../services/terminals"
 import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
@@ -59,7 +59,7 @@ Notes: tool schemas may be deferred — if a tool isn't loaded yet, search for i
 
 
 export async function startMcpServer(
-  sessionService: SessionService,
+  sessionService: TerminalService,
   workspaceService: WorkspaceService,
   appService: AppService,
   panelService: PanelService,

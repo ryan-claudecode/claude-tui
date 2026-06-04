@@ -1,4 +1,4 @@
-import type { SessionService, SessionInfo } from "./sessions"
+import type { TerminalService, TerminalInfo } from "./terminals"
 
 export interface SessionTemplate {
   id: string
@@ -51,7 +51,7 @@ const BUILTIN_TEMPLATES: SessionTemplate[] = [
 export class TemplateService {
   private templates = new Map<string, SessionTemplate>()
 
-  constructor(private sessions: SessionService) {
+  constructor(private sessions: TerminalService) {
     for (const t of BUILTIN_TEMPLATES) this.templates.set(t.id, t)
   }
 
@@ -65,7 +65,7 @@ export class TemplateService {
   }
 
   /** Create a session from a template and seed its starter prompt. */
-  instantiate(id: string, cwd?: string): SessionInfo | null {
+  instantiate(id: string, cwd?: string): TerminalInfo | null {
     const template = this.templates.get(id)
     if (!template) return null
 

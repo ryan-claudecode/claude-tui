@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
-import type { SessionService } from "./sessions"
+import type { TerminalService } from "./terminals"
 
 export interface Snippet {
   name: string
@@ -19,10 +19,10 @@ const SNIPPETS_FILE = join(SNIPPETS_DIR, "snippets.json")
  * or Claude can stash a frequently-used instruction and fire it on demand.
  *
  * Thin by design: it only reads/writes its own JSON file and calls
- * SessionService.write() to inject text — no changes to the session layer.
+ * TerminalService.write() to inject text — no changes to the session layer.
  */
 export class SnippetService {
-  constructor(private sessions: SessionService) {}
+  constructor(private sessions: TerminalService) {}
 
   private read(): Snippet[] {
     try {
@@ -63,7 +63,7 @@ export class SnippetService {
   /**
    * Inject a snippet's content into a session's input. Returns false if the
    * snippet doesn't exist. Whether the session exists is the caller's concern —
-   * SessionService.write() no-ops on an unknown id.
+   * TerminalService.write() no-ops on an unknown id.
    */
   send(name: string, sessionId: string): boolean {
     const snippet = this.read().find((s) => s.name === name)

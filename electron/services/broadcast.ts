@@ -1,4 +1,4 @@
-import type { SessionService } from "./sessions"
+import type { TerminalService } from "./terminals"
 
 export interface BroadcastResult {
   /** Session ids that received the input. */
@@ -15,12 +15,12 @@ export interface BroadcastResult {
  * case: fan a single prompt or command out to several Claude sessions
  * simultaneously instead of typing it into each one.
  *
- * Thin by design: it only fans out to SessionService.write() — no PTY or session
+ * Thin by design: it only fans out to TerminalService.write() — no PTY or session
  * state lives here. Targeting all open sessions is the default; pass explicit ids
  * to scope the broadcast to a subset.
  */
 export class BroadcastService {
-  constructor(private sessions: SessionService) {}
+  constructor(private sessions: TerminalService) {}
 
   /**
    * Write `content` to every targeted session. With no `sessionIds`, broadcasts

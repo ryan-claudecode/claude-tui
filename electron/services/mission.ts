@@ -1,17 +1,17 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
-import type { SessionInfo, SessionActivity } from "./sessions"
+import type { TerminalInfo, TerminalActivity } from "./terminals"
 
-/** The slice of SessionService that MissionService drives. A fake is used in tests. */
+/** The slice of TerminalService that MissionService drives. A fake is used in tests. */
 export interface SessionDriver {
-  create(name?: string, cwd?: string): SessionInfo
+  create(name?: string, cwd?: string): TerminalInfo
   write(id: string, data: string): void
   waitForIdle(
     id: string,
     opts: { input?: string; submit?: boolean; quietMs?: number; timeoutMs?: number; notBefore?: number },
   ): Promise<{ idle: boolean; timedOut: boolean; reason?: string }>
-  getActivity(): SessionActivity[]
+  getActivity(): TerminalActivity[]
   getOutput(id: string, maxChars?: number): string | null
   kill(id: string): boolean
 }
@@ -346,7 +346,7 @@ export class MissionService {
     this.persist(m)
   }
 
-  private reapStalledWorkers(m: Mission, activity: SessionActivity[]): void {
+  private reapStalledWorkers(m: Mission, activity: TerminalActivity[]): void {
     const byId = new Map(activity.map((a) => [a.id, a]))
     const now = this.now()
     // A worker just spawned this/last tick may not appear in getActivity() yet —

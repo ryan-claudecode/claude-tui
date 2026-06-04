@@ -7,7 +7,7 @@ import { BrowserWindow } from "electron"
  *
  * This is the bridge for "view" actions that have no natural home in a
  * data-owning service — it holds the window and fans commands to the renderer,
- * mirroring how SessionService drives split panes. The rule for full MCP
+ * mirroring how TerminalService drives split panes. The rule for full MCP
  * coverage: any new renderer-only affordance (a toggle, an overlay, a view
  * command) gets a method here + a tool, so Claude can control everything the
  * user can click or key-bind.

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
-import type { SessionService, SessionInfo } from "./sessions"
+import type { TerminalService, TerminalInfo } from "./terminals"
 
 export interface SavedLayout {
   name: string
@@ -18,11 +18,11 @@ const LAYOUTS_FILE = join(LAYOUTS_DIR, "layouts.json")
  * demand. Lets a user (or Claude) snapshot a working setup — e.g. "frontend",
  * "incident-review" — and restore it later or after an app restart.
  *
- * Deliberately thin: it only reads SessionService's public list() and create(),
+ * Deliberately thin: it only reads TerminalService's public list() and create(),
  * so it owns no PTY state and needs no changes to the session layer.
  */
 export class LayoutService {
-  constructor(private sessions: SessionService) {}
+  constructor(private sessions: TerminalService) {}
 
   private read(): SavedLayout[] {
     try {
@@ -56,7 +56,7 @@ export class LayoutService {
   }
 
   /** Recreate every session in a saved layout. Returns the created sessions. */
-  restore(name: string): SessionInfo[] | null {
+  restore(name: string): TerminalInfo[] | null {
     const layout = this.read().find((l) => l.name === name)
     if (!layout) return null
     return layout.sessions.map((s) => this.sessions.create(s.name, s.cwd))
