@@ -122,6 +122,22 @@ export class MissionService {
     return this.list().find((m) => !TERMINAL.includes(m.status))
   }
 
+  plan(id: string, tasks: Array<{ title: string; detail?: string }>): Mission | undefined {
+    const m = this.missions.get(id)
+    if (!m) return undefined
+    m.tasks = tasks.map((t, i) => ({
+      id: `t${i + 1}-${Math.random().toString(36).slice(2, 6)}`,
+      title: t.title,
+      detail: t.detail,
+      status: "pending" as TaskStatus,
+      attempts: 0,
+    }))
+    if (m.status === "planning") m.status = "running"
+    this.log(m, "task", `Planned ${tasks.length} task(s)`)
+    this.persist(m)
+    return m
+  }
+
   finish(id: string): Mission | undefined {
     const m = this.missions.get(id)
     if (!m) return undefined

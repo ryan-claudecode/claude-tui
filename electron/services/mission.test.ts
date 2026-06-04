@@ -58,3 +58,19 @@ describe("MissionService create/get/list", () => {
     expect(svc2.status()?.id).toBe(a.id) // b terminal, falls back to a
   })
 })
+
+describe("MissionService plan", () => {
+  it("adds tasks and flips planning -> running", () => {
+    const svc = new MissionService(fakeDriver(), { dir })
+    const m = svc.create("g", "/r")
+    const out = svc.plan(m.id, [{ title: "t1" }, { title: "t2", detail: "d" }])!
+    expect(out.status).toBe("running")
+    expect(out.tasks.map((t) => t.title)).toEqual(["t1", "t2"])
+    expect(out.tasks.every((t) => t.status === "pending" && t.attempts === 0)).toBe(true)
+    expect(out.tasks[1].detail).toBe("d")
+  })
+  it("returns undefined for unknown mission", () => {
+    const svc = new MissionService(fakeDriver(), { dir })
+    expect(svc.plan("nope", [{ title: "x" }])).toBeUndefined()
+  })
+})
