@@ -2,11 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { SessionService } from "../services/sessions"
 import type { WorkspaceService } from "../services/workspaces"
+import type { AppService } from "../services/app"
 
 export function registerTools(
   server: McpServer,
   sessions: SessionService,
   workspaces: WorkspaceService,
+  appService: AppService,
 ) {
   server.tool(
     "create_session",
@@ -133,4 +135,37 @@ export function registerTools(
       }
     },
   )
+
+  // Testing infrastructure tools
+
+  server.tool("take_screenshot", "Capture a screenshot of the ClaudeTUI window", {}, async () => {
+    try {
+      const base64 = await appService.captureScreenshot()
+      return { content: [{ type: "image" as const, data: base64, mimeType: "image/png" }] }
+    } catch (e: any) {
+      return { content: [{ type: "text" as const, text: `Screenshot failed: ${e.message}` }] }
+    }
+  })
+
+  server.tool(
+    "get_app_state",
+    "Get current ClaudeTUI application state (sessions, workspaces, window info)",
+    {},
+    async () => {
+      const state = appService.getAppState(sessions.list(), workspaces.list())
+      return { content: [{ type: "text" as const, text: JSON.stringify(state, null, 2) }] }
+    },
+  )
+
+  server.tool("run_build", "Build the ClaudeTUI project and check for errors", {}, async () => {
+    const result = appService.runBuild()
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `${result.success ? "BUILD SUCCESS" : "BUILD FAILED"}\n${result.output}`,
+        },
+      ],
+    }
+  })
 }

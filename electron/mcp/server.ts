@@ -3,18 +3,20 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js"
 import { createServer } from "http"
 import type { SessionService } from "../services/sessions"
 import type { WorkspaceService } from "../services/workspaces"
+import type { AppService } from "../services/app"
 import { registerTools } from "./tools"
 
 export async function startMcpServer(
   sessionService: SessionService,
   workspaceService: WorkspaceService,
+  appService: AppService,
 ): Promise<{ port: number; configPath: string }> {
   const server = new McpServer({
     name: "claudetui",
     version: "0.1.0",
   })
 
-  registerTools(server, sessionService, workspaceService)
+  registerTools(server, sessionService, workspaceService, appService)
 
   // Create HTTP server with SSE transport
   const httpServer = createServer()

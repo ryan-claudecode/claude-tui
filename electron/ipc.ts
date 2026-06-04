@@ -1,11 +1,14 @@
 import { app, ipcMain, BrowserWindow } from "electron"
+import { join } from "path"
 import { SessionService } from "./services/sessions"
 import { WorkspaceService } from "./services/workspaces"
+import { AppService } from "./services/app"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
 export const sessionService = new SessionService()
 export const workspaceService = new WorkspaceService(sessionService)
+export const appService = new AppService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -16,10 +19,13 @@ export async function setupIpc(win: BrowserWindow) {
     config.defaultArgs ?? ["--dangerously-skip-permissions"],
   )
 
+  appService.setMainWindow(win)
+  appService.setProjectRoot(join(__dirname, "../.."))
+
   workspaceService.discover(config.workspaceScanPaths)
 
   // Start MCP server and configure sessions to auto-connect
-  const { configPath } = await startMcpServer(sessionService, workspaceService)
+  const { configPath } = await startMcpServer(sessionService, workspaceService, appService)
   sessionService.setMcpConfigPath(configPath)
 
   // Session IPC -- thin wrappers around service
@@ -55,6 +61,12 @@ export async function setupIpc(win: BrowserWindow) {
 
   // Config
   ipcMain.handle("config:get", () => config)
+
+  // App testing tools
+  ipcMain.handle("app:screenshot", async () => appService.captureScreenshot())
+  ipcMain.handle("app:state", () =>
+    appService.getAppState(sessionService.list(), workspaceService.list()),
+  )
 
   // Cleanup
   app.on("before-quit", () => sessionService.killAll())

@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld("api", {
   // Handoff
   triggerHandoff: (id: string) => ipcRenderer.invoke("session:handoff", id),
 
+  // App testing
+  takeScreenshot: () => ipcRenderer.invoke("app:screenshot"),
+  getAppState: () => ipcRenderer.invoke("app:state"),
+
   // Events from main -> renderer
   onSessionData: (callback: (id: string, data: string) => void) =>
     ipcRenderer.on("session:data", (_e, id, data) => callback(id, data)),
