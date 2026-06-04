@@ -80,6 +80,31 @@ export class SessionService {
     }
   }
 
+  addTerminal(sessionId: string, ref: TerminalRef): void {
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    if (!s.terminals.some((t) => t.id === ref.id)) s.terminals.push(ref)
+    this.persist(s)
+  }
+
+  removeTerminal(sessionId: string, terminalId: string): void {
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    s.terminals = s.terminals.filter((t) => t.id !== terminalId)
+    this.persist(s)
+  }
+
+  nameTerminal(sessionId: string, terminalId: string, name: string): void {
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    const t = s.terminals.find((x) => x.id === terminalId)
+    if (!t) return
+    t.name = name
+    // Session inherits its name from the FIRST terminal while still a placeholder.
+    if (s.name === "Untitled session" && s.terminals[0]?.id === terminalId) s.name = name
+    this.persist(s)
+  }
+
   private persist(s: WorkSession): void {
     s.updatedAt = this.now()
     mkdirSync(this.dir, { recursive: true })
