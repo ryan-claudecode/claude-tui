@@ -640,6 +640,43 @@ export function registerTools(
     },
   )
 
+  server.tool(
+    "git_file_at_ref",
+    "Read a file's content as it existed at a given commit/ref (git show <ref>:<file>). git_show inspects a whole commit; this recovers one file's prior version (defaults to HEAD) — for comparing against the working copy or restoring lost content.",
+    {
+      file: z.string().describe("Repo-relative path to the file"),
+      ref: z.string().optional().describe("Commit/ref to read from (default HEAD)"),
+      session_id: z.string().optional().describe("Session whose cwd to inspect"),
+    },
+    async ({ file, ref, session_id }) => {
+      try {
+        const result = git.fileAtRef(resolveCwd(session_id), file, ref)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git file-at-ref failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_search_log",
+    "Search commit history by message (git log --grep). git_log lists recent commits; this answers 'which commit mentioned X?' across the whole repo. Case-insensitive by default.",
+    {
+      query: z.string().describe("Substring/pattern to search commit messages for"),
+      limit: z.number().optional().describe("Max commits to return (default 30)"),
+      case_insensitive: z.boolean().optional().describe("Case-insensitive match (default true)"),
+      session_id: z.string().optional().describe("Session whose cwd to inspect"),
+    },
+    async ({ query, limit, case_insensitive, session_id }) => {
+      try {
+        const commits = git.searchLog(resolveCwd(session_id), query, limit, case_insensitive)
+        return { content: [{ type: "text" as const, text: JSON.stringify(commits, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git search-log failed: ${e.message}` }] }
+      }
+    },
+  )
+
   // Session template tools — spawn purpose-built sessions seeded with a prompt
 
   server.tool(

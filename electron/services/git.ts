@@ -410,4 +410,33 @@ export class GitService {
     }
     return [...map.values()]
   }
+
+  /**
+   * Read a file's content as it existed at a given ref (`git show <ref>:<file>`).
+   * git_show drills into a whole commit; this answers "what did THIS file look
+   * like at that point?" — for comparing against the working copy or recovering
+   * a prior version. Defaults to HEAD.
+   */
+  fileAtRef(cwd: string, file: string, ref = "HEAD"): { ref: string; file: string; content: string } {
+    const content = this.run(cwd, ["show", `${ref}:${file}`])
+    return { ref, file, content }
+  }
+
+  /**
+   * Search commit history by message (`git log --grep`). git_log lists recent
+   * commits and git_file_history scopes to one file; this answers "which commit
+   * mentioned X?" across the whole repo. Case-insensitive by default.
+   */
+  searchLog(cwd: string, query: string, limit = 30, caseInsensitive = true): GitCommit[] {
+    const sep = "\x1f"
+    const fmt = ["%h", "%an", "%ad", "%s"].join(sep)
+    const args = ["log", `-n${limit}`, "--date=short", `--pretty=format:${fmt}`, `--grep=${query}`]
+    if (caseInsensitive) args.push("-i")
+    const raw = this.run(cwd, args)
+    if (!raw) return []
+    return raw.split("\n").map((line) => {
+      const [hash, author, date, subject] = line.split(sep)
+      return { hash, author, date, subject }
+    })
+  }
 }
