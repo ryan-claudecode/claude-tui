@@ -4,6 +4,7 @@ import { SessionService } from "./services/sessions"
 import { WorkspaceService } from "./services/workspaces"
 import { AppService } from "./services/app"
 import { PanelService } from "./services/panels"
+import { NotificationService } from "./services/notifications"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -11,6 +12,7 @@ export const sessionService = new SessionService()
 export const workspaceService = new WorkspaceService(sessionService)
 export const appService = new AppService()
 export const panelService = new PanelService()
+export const notificationService = new NotificationService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -25,6 +27,7 @@ export async function setupIpc(win: BrowserWindow) {
   appService.setProjectRoot(join(__dirname, "../.."))
 
   panelService.setMainWindow(win)
+  notificationService.setMainWindow(win)
 
   workspaceService.discover(config.workspaceScanPaths)
 
@@ -34,6 +37,7 @@ export async function setupIpc(win: BrowserWindow) {
     workspaceService,
     appService,
     panelService,
+    notificationService,
   )
   sessionService.setMcpConfigPath(configPath)
 
@@ -91,6 +95,12 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("panel:hide-all", () => panelService.hideAll())
   ipcMain.on("panel:form-submit", (_e, id: string, data: Record<string, any>) =>
     panelService.submitForm(id, data),
+  )
+
+  // Notification IPC
+  ipcMain.handle("notification:list", () => notificationService.list())
+  ipcMain.handle("notification:dismiss", (_e, id: string) =>
+    notificationService.dismiss(id),
   )
 
   // Cleanup

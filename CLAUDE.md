@@ -143,6 +143,9 @@ Additional tool groups:
 - `get_app_state` — current window/session/workspace state for assertions
 - `run_build` — build the project and return success/error output
 
+**Notifications** (`NotificationService`):
+- `notify` — show a toast (`info` / `success` / `warning` / `error`). Surfaces even when the calling session's terminal isn't focused — use it to announce task completion, request input, or report errors. Auto-dismisses after `timeout` ms (0 = sticky). Rendered by `ToastHost` (`src/components/ToastHost.tsx`).
+
 ## Panel System
 
 Claude renders rich UI alongside terminals via panels. State flows:

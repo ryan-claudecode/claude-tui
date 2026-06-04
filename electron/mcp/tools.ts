@@ -4,6 +4,7 @@ import type { SessionService } from "../services/sessions"
 import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
+import type { NotificationService } from "../services/notifications"
 
 export function registerTools(
   server: McpServer,
@@ -11,6 +12,7 @@ export function registerTools(
   workspaces: WorkspaceService,
   appService: AppService,
   panels: PanelService,
+  notifications: NotificationService,
 ) {
   server.tool(
     "create_session",
@@ -237,4 +239,27 @@ export function registerTools(
   server.tool("list_panels", "List all open ClaudeTUI panels", {}, async () => {
     return { content: [{ type: "text" as const, text: JSON.stringify(panels.list(), null, 2) }] }
   })
+
+  // Notification tools
+
+  server.tool(
+    "notify",
+    "Show a toast notification in ClaudeTUI. Use this to alert the user when a background task finishes, you need their input, or you hit an error — it surfaces even when this session's terminal isn't focused.",
+    {
+      message: z.string().describe("Notification body text"),
+      level: z
+        .enum(["info", "success", "warning", "error"])
+        .optional()
+        .describe("Severity / color of the toast (default: info)"),
+      title: z.string().optional().describe("Optional bold title line"),
+      timeout: z
+        .number()
+        .optional()
+        .describe("Milliseconds before auto-dismiss; 0 keeps it until dismissed (default: 5000)"),
+    },
+    async ({ message, level, title, timeout }) => {
+      const notification = notifications.notify(message, level, title, timeout)
+      return { content: [{ type: "text" as const, text: JSON.stringify(notification) }] }
+    },
+  )
 }

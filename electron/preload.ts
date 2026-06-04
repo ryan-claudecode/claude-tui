@@ -37,6 +37,14 @@ contextBridge.exposeInMainWorld("api", {
   submitForm: (id: string, data: Record<string, any>) =>
     ipcRenderer.send("panel:form-submit", id, data),
 
+  // Notifications
+  listNotifications: () => ipcRenderer.invoke("notification:list"),
+  dismissNotification: (id: string) => ipcRenderer.invoke("notification:dismiss", id),
+  onNotificationShow: (callback: (notification: any) => void) =>
+    ipcRenderer.on("notification:show", (_e, notification) => callback(notification)),
+  onNotificationDismiss: (callback: (id: string) => void) =>
+    ipcRenderer.on("notification:dismiss", (_e, id) => callback(id)),
+
   // Events from main -> renderer
   onSessionData: (callback: (id: string, data: string) => void) =>
     ipcRenderer.on("session:data", (_e, id, data) => callback(id, data)),

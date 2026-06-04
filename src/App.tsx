@@ -7,6 +7,7 @@ import StatusBar from "./components/StatusBar"
 import PanelDrawer, { PanelState } from "./components/PanelDrawer"
 import DropZone from "./components/DropZone"
 import CommandPalette, { Command } from "./components/CommandPalette"
+import ToastHost from "./components/ToastHost"
 
 // TypeScript type for the API exposed by preload
 declare global {
@@ -34,6 +35,10 @@ declare global {
       hidePanel: (id: string) => Promise<boolean>
       hideAllPanels: () => Promise<void>
       submitForm: (id: string, data: Record<string, any>) => void
+      listNotifications: () => Promise<any[]>
+      dismissNotification: (id: string) => Promise<boolean>
+      onNotificationShow: (callback: (notification: any) => void) => void
+      onNotificationDismiss: (callback: (id: string) => void) => void
       onPanelShow: (callback: (panel: PanelState) => void) => void
       onPanelUpdate: (callback: (payload: { id: string; props: any }) => void) => void
       onPanelHide: (callback: (id: string) => void) => void
@@ -326,6 +331,7 @@ export default function App() {
       onDrop={handleDrop}
     >
       <DropZone active={dragActive} />
+      <ToastHost />
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       <Sidebar
         sessions={sessions}

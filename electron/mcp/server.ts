@@ -5,6 +5,7 @@ import type { SessionService } from "../services/sessions"
 import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
+import type { NotificationService } from "../services/notifications"
 import { registerTools } from "./tools"
 
 export async function startMcpServer(
@@ -12,13 +13,21 @@ export async function startMcpServer(
   workspaceService: WorkspaceService,
   appService: AppService,
   panelService: PanelService,
+  notificationService: NotificationService,
 ): Promise<{ port: number; configPath: string }> {
   const server = new McpServer({
     name: "claudetui",
     version: "0.1.0",
   })
 
-  registerTools(server, sessionService, workspaceService, appService, panelService)
+  registerTools(
+    server,
+    sessionService,
+    workspaceService,
+    appService,
+    panelService,
+    notificationService,
+  )
 
   // Create HTTP server with SSE transport
   const httpServer = createServer()
