@@ -15,6 +15,13 @@ export interface WriteFileResult {
   created: boolean // true if the file did not exist before
 }
 
+export interface PathOpResult {
+  from?: string // resolved source path (move/copy)
+  to?: string // resolved destination path (move/copy)
+  path?: string // resolved path (delete/mkdir)
+  kind: "file" | "directory"
+}
+
 const MAX_READ_BYTES = 2 * 1024 * 1024 // refuse to read files larger than 2MB
 
 /**
@@ -68,5 +75,60 @@ export class FileService {
       bytesWritten: Buffer.byteLength(content, "utf8"),
       created,
     }
+  }
+
+  private resolve(baseDir: string, filePath: string): string {
+    return path.isAbsolute(filePath) ? filePath : path.resolve(baseDir, filePath)
+  }
+
+  private kindOf(abs: string): "file" | "directory" {
+    return fs.statSync(abs).isDirectory() ? "directory" : "file"
+  }
+
+  /**
+   * Move/rename `from` to `to` (both relative to `baseDir` or absolute). Creates
+   * the destination's parent directories as needed.
+   */
+  move(baseDir: string, from: string, to: string): PathOpResult {
+    const absFrom = this.resolve(baseDir, from)
+    const absTo = this.resolve(baseDir, to)
+    const kind = this.kindOf(absFrom)
+    fs.mkdirSync(path.dirname(absTo), { recursive: true })
+    fs.renameSync(absFrom, absTo)
+    return { from: absFrom, to: absTo, kind }
+  }
+
+  /**
+   * Copy `from` to `to` (both relative to `baseDir` or absolute). Recurses into
+   * directories. Creates the destination's parent directories as needed.
+   */
+  copy(baseDir: string, from: string, to: string): PathOpResult {
+    const absFrom = this.resolve(baseDir, from)
+    const absTo = this.resolve(baseDir, to)
+    const kind = this.kindOf(absFrom)
+    fs.mkdirSync(path.dirname(absTo), { recursive: true })
+    fs.cpSync(absFrom, absTo, { recursive: true })
+    return { from: absFrom, to: absTo, kind }
+  }
+
+  /**
+   * Delete `filePath` (relative to `baseDir` or absolute). Removes directories
+   * recursively. Throws if the path does not exist.
+   */
+  remove(baseDir: string, filePath: string): PathOpResult {
+    const abs = this.resolve(baseDir, filePath)
+    const kind = this.kindOf(abs)
+    fs.rmSync(abs, { recursive: true, force: false })
+    return { path: abs, kind }
+  }
+
+  /**
+   * Create directory `dirPath` (relative to `baseDir` or absolute), including
+   * any missing parents. No error if it already exists.
+   */
+  makeDir(baseDir: string, dirPath: string): PathOpResult {
+    const abs = this.resolve(baseDir, dirPath)
+    fs.mkdirSync(abs, { recursive: true })
+    return { path: abs, kind: "directory" }
   }
 }
