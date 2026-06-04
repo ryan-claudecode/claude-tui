@@ -439,6 +439,88 @@ export function registerTools(
     },
   )
 
+  server.tool(
+    "git_push",
+    "Push commits to the remote for a session's working directory. Returns push output plus the refreshed git status (ahead count drops to 0 on success).",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+    },
+    async ({ session_id }) => {
+      try {
+        const result = git.push(resolveCwd(session_id))
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git push failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_pull",
+    "Pull from the remote (fast-forward only) for a session's working directory. Returns pull output plus the refreshed git status.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+    },
+    async ({ session_id }) => {
+      try {
+        const result = git.pull(resolveCwd(session_id))
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git pull failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_stash",
+    "Stash the working-tree changes in a session's working directory (optionally with a message). Returns stash output plus the refreshed git status.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+      message: z.string().optional().describe("Optional stash message"),
+    },
+    async ({ session_id, message }) => {
+      try {
+        const result = git.stash(resolveCwd(session_id), message)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git stash failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_stash_pop",
+    "Re-apply and drop a stash entry (the latest, or a given ref like 'stash@{1}') in a session's working directory. Returns output plus the refreshed git status.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+      ref: z.string().optional().describe("Stash ref to pop (default: most recent)"),
+    },
+    async ({ session_id, ref }) => {
+      try {
+        const result = git.stashPop(resolveCwd(session_id), ref)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git stash pop failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_stash_list",
+    "List stash entries for a session's working directory.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+    },
+    async ({ session_id }) => {
+      try {
+        const list = git.stashList(resolveCwd(session_id))
+        return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git stash list failed: ${e.message}` }] }
+      }
+    },
+  )
+
   // Session template tools — spawn purpose-built sessions seeded with a prompt
 
   server.tool(

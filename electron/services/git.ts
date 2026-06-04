@@ -150,4 +150,38 @@ export class GitService {
     this.run(cwd, ["checkout", ref])
     return this.status(cwd)
   }
+
+  /** Push to the remote. Uses --porcelain so the result lands on stdout. */
+  push(cwd: string): { output: string; status: GitStatus } {
+    const output = this.run(cwd, ["push", "--porcelain"])
+    return { output: output || "(pushed)", status: this.status(cwd) }
+  }
+
+  /** Pull (fast-forward only to avoid surprise merge commits). */
+  pull(cwd: string): { output: string; status: GitStatus } {
+    const output = this.run(cwd, ["pull", "--ff-only"])
+    return { output: output || "(up to date)", status: this.status(cwd) }
+  }
+
+  /** Stash the working tree (optionally with a message). */
+  stash(cwd: string, message?: string): { output: string; status: GitStatus } {
+    const args = ["stash", "push"]
+    if (message) args.push("-m", message)
+    const output = this.run(cwd, args)
+    return { output, status: this.status(cwd) }
+  }
+
+  /** Re-apply and drop the most recent (or given) stash entry. */
+  stashPop(cwd: string, ref?: string): { output: string; status: GitStatus } {
+    const args = ["stash", "pop"]
+    if (ref) args.push(ref)
+    const output = this.run(cwd, args)
+    return { output, status: this.status(cwd) }
+  }
+
+  /** List stash entries (raw `git stash list` lines). */
+  stashList(cwd: string): string[] {
+    const raw = this.run(cwd, ["stash", "list"])
+    return raw ? raw.split("\n") : []
+  }
 }
