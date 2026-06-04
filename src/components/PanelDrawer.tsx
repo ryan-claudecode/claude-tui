@@ -4,6 +4,7 @@ import FormPanel from "./panels/FormPanel"
 import ImagePanel from "./panels/ImagePanel"
 import MarkdownPanel from "./panels/MarkdownPanel"
 import TablePanel from "./panels/TablePanel"
+import TestPanel from "./panels/TestPanel"
 
 export interface PanelState {
   id: string
@@ -26,6 +27,7 @@ const PANEL_LABELS: Record<string, string> = {
   image: "Image",
   markdown: "Markdown",
   table: "Table",
+  test: "Tests",
 }
 
 export default function PanelDrawer({ panels, onClose }: Props) {
@@ -112,6 +114,8 @@ function PanelContent({ panel }: { panel: PanelState }) {
       return <MarkdownPanel {...panel.props} />
     case "table":
       return <TablePanel {...panel.props} />
+    case "test":
+      return <TestPanel {...panel.props} />
     default:
       return <pre className="panel-raw">{JSON.stringify(panel.props, null, 2)}</pre>
   }

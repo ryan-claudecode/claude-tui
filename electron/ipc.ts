@@ -7,6 +7,7 @@ import { PanelService } from "./services/panels"
 import { NotificationService } from "./services/notifications"
 import { GitService } from "./services/git"
 import { TemplateService } from "./services/templates"
+import { TestRunnerService } from "./services/tests"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -17,6 +18,7 @@ export const panelService = new PanelService()
 export const notificationService = new NotificationService()
 export const gitService = new GitService()
 export const templateService = new TemplateService(sessionService)
+export const testRunnerService = new TestRunnerService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -44,6 +46,7 @@ export async function setupIpc(win: BrowserWindow) {
     notificationService,
     gitService,
     templateService,
+    testRunnerService,
   )
   sessionService.setMcpConfigPath(configPath)
 
@@ -101,6 +104,11 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("panel:hide-all", () => panelService.hideAll())
   ipcMain.on("panel:form-submit", (_e, id: string, data: Record<string, any>) =>
     panelService.submitForm(id, data),
+  )
+
+  // Test runner IPC
+  ipcMain.handle("test:run", (_e, cwd: string, command?: string) =>
+    testRunnerService.run(cwd, command),
   )
 
   // Notification IPC

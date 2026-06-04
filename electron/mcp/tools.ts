@@ -7,6 +7,7 @@ import type { PanelService } from "../services/panels"
 import type { NotificationService } from "../services/notifications"
 import type { GitService } from "../services/git"
 import type { TemplateService } from "../services/templates"
+import type { TestRunnerService } from "../services/tests"
 
 export function registerTools(
   server: McpServer,
@@ -17,6 +18,7 @@ export function registerTools(
   notifications: NotificationService,
   git: GitService,
   templates: TemplateService,
+  tests: TestRunnerService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -192,9 +194,9 @@ export function registerTools(
 
   server.tool(
     "show_panel",
-    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, or table). For interactive forms that return user input, use show_form instead.",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, or test). For interactive forms that return user input, use show_form instead.",
     {
-      type: z.enum(["diff", "image", "markdown", "table"]).describe("Panel type"),
+      type: z.enum(["diff", "image", "markdown", "table", "test"]).describe("Panel type"),
       props: z.record(z.any()).describe("Panel-specific data"),
       position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
     },
@@ -363,6 +365,38 @@ export function registerTools(
             text: info ? JSON.stringify(info) : `Template not found: ${template_id}`,
           },
         ],
+      }
+    },
+  )
+
+  // Test runner — run a project's test suite and surface parsed results in a panel
+
+  server.tool(
+    "run_tests",
+    "Run a project's test suite in a session's working directory and show the parsed results (pass/fail/skip counts, exit code, duration, output) in a test panel. Use this to verify changes without scraping the terminal.",
+    {
+      session_id: z
+        .string()
+        .optional()
+        .describe("Session whose cwd to run tests in (defaults to the first open session)"),
+      command: z
+        .string()
+        .optional()
+        .describe("Test command to run (default: 'npm test'). e.g. 'npm test', 'vitest run', 'pytest'"),
+      show_panel: z
+        .boolean()
+        .optional()
+        .describe("Show the result in a test panel (default: true)"),
+    },
+    async ({ session_id, command, show_panel }) => {
+      try {
+        const result = tests.run(resolveCwd(session_id), command)
+        if (show_panel !== false) {
+          panels.show("test", { result })
+        }
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `run_tests failed: ${e.message}` }] }
       }
     },
   )
