@@ -1193,6 +1193,115 @@ body {
 }
 
 /* ============================================================
+   Command palette — Ctrl+Shift+P
+   ============================================================ */
+.cmdk-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  background: rgba(7, 9, 13, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: drop-fade 0.12s var(--ease-out);
+}
+
+.cmdk-panel {
+  width: 560px;
+  max-width: calc(100vw - 48px);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(20, 25, 34, 0.96), rgba(11, 14, 20, 0.98));
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), 0 0 0 1px var(--accent-soft);
+  overflow: hidden;
+  animation: cmdk-pop 0.16s var(--ease-out);
+}
+
+@keyframes cmdk-pop {
+  from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.cmdk-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cmdk-prompt {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.cmdk-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-0);
+  font-size: 15px;
+  font-family: inherit;
+}
+
+.cmdk-input::placeholder { color: var(--text-3); }
+
+.cmdk-list {
+  overflow-y: auto;
+  padding: var(--s-1);
+  min-height: 0;
+}
+
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: 9px 12px;
+  border-radius: var(--r);
+  cursor: pointer;
+  color: var(--text-1);
+  border: 1px solid transparent;
+}
+
+.cmdk-item.active {
+  background: linear-gradient(90deg, var(--accent-soft), rgba(90, 166, 255, 0.04));
+  border-color: rgba(90, 166, 255, 0.25);
+  color: var(--text-0);
+}
+
+.cmdk-label { font-size: 13.5px; font-weight: 500; }
+
+.cmdk-hint {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 1px 7px;
+  flex-shrink: 0;
+}
+
+.cmdk-empty {
+  padding: var(--s-4);
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+/* ============================================================
    xterm.js overrides
    ============================================================ */
 .xterm { height: 100%; }

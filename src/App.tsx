@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import Sidebar from "./components/Sidebar"
 import TabBar from "./components/TabBar"
 import TerminalPane from "./components/TerminalPane"
@@ -6,6 +6,7 @@ import SplitView from "./components/SplitView"
 import StatusBar from "./components/StatusBar"
 import PanelDrawer, { PanelState } from "./components/PanelDrawer"
 import DropZone from "./components/DropZone"
+import CommandPalette, { Command } from "./components/CommandPalette"
 
 // TypeScript type for the API exposed by preload
 declare global {
@@ -59,6 +60,7 @@ export default function App() {
   const [panels, setPanels] = useState<PanelState[]>([])
   const [dragActive, setDragActive] = useState(false)
   const [drawerCollapsed, setDrawerCollapsed] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   // Load workspaces and config on mount
   useEffect(() => {
@@ -215,10 +217,53 @@ export default function App() {
     setActiveId(id)
   }, [])
 
+  const toggleSplit = useCallback(() => {
+    if (splitLeft) {
+      setSplitLeft(null)
+      setSplitRight(null)
+    } else if (sessions.length >= 2 && activeId) {
+      const other = sessions.find((s) => s.id !== activeId)
+      if (other) {
+        setSplitLeft(activeId)
+        setSplitRight(other.id)
+      }
+    }
+  }, [splitLeft, sessions, activeId])
+
+  const toggleDrawer = useCallback(() => {
+    if (panels.some((p) => p.visible)) setDrawerCollapsed((c) => !c)
+  }, [panels])
+
+  // Commands surfaced in the Ctrl+Shift+P command palette. Static app actions
+  // plus a dynamic "Switch to…" entry per open session.
+  const commands = useMemo<Command[]>(() => {
+    const base: Command[] = [
+      { id: "new", label: "New Session", hint: "Ctrl+N", run: handleNewSession },
+      { id: "kill", label: "Kill Active Session", hint: "Ctrl+K", run: handleKillSession },
+      { id: "handoff", label: "Trigger Handoff", hint: "Ctrl+H", run: handleHandoff },
+      { id: "split", label: splitLeft ? "Close Split View" : "Split Panes", hint: "Ctrl+\\", run: toggleSplit },
+      { id: "drawer", label: "Toggle Panel Drawer", hint: "Ctrl+P", run: toggleDrawer },
+      { id: "hide-panels", label: "Close All Panels", keywords: "hide clear", run: () => { setPanels([]); window.api.hideAllPanels() } },
+    ]
+    const sessionCmds: Command[] = sessions.map((s, i) => ({
+      id: `switch-${s.id}`,
+      label: `Switch to: ${s.name}`,
+      hint: i < 9 ? `Ctrl+${i + 1}` : undefined,
+      keywords: "session focus",
+      run: () => setActiveId(s.id),
+    }))
+    return [...base, ...sessionCmds]
+  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, splitLeft, sessions])
+
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "n") {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "p") {
+        // Command palette — checked before the bare Ctrl+P drawer toggle.
+        e.preventDefault()
+        e.stopPropagation()
+        setPaletteOpen((o) => !o)
+      } else if (e.ctrlKey && e.key === "n") {
         e.preventDefault()
         e.stopPropagation()
         handleNewSession()
@@ -281,6 +326,7 @@ export default function App() {
       onDrop={handleDrop}
     >
       <DropZone active={dragActive} />
+      <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       <Sidebar
         sessions={sessions}
         activeId={activeId}
@@ -349,6 +395,8 @@ export default function App() {
                     <span className="shortcut-desc">Toggle panel drawer</span>
                     <span className="shortcut-key">Esc</span>
                     <span className="shortcut-desc">Close panel</span>
+                    <span className="shortcut-key">Ctrl+Shift+P</span>
+                    <span className="shortcut-desc">Command palette</span>
                   </div>
                 </div>
               )}
