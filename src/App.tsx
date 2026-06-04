@@ -74,6 +74,7 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [zenMode, setZenMode] = useState(false)
 
   // Load workspaces and config on mount
   useEffect(() => {
@@ -275,6 +276,7 @@ export default function App() {
       { id: "hide-panels", label: "Close All Panels", keywords: "hide clear", run: () => { setPanels([]); window.api.hideAllPanels() } },
       { id: "history", label: "Search Session History", hint: "Ctrl+Shift+F", keywords: "find output log scrollback", run: () => setHistoryOpen(true) },
       { id: "export-log", label: "Export Active Session Log", keywords: "save download output history file", run: handleExportLog },
+      { id: "zen", label: zenMode ? "Exit Focus Mode" : "Enter Focus Mode", hint: "Ctrl+Shift+Z", keywords: "zen distraction free hide sidebar fullscreen", run: () => setZenMode((z) => !z) },
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
     ]
     const sessionCmds: Command[] = sessions.map((s, i) => ({
@@ -285,7 +287,7 @@ export default function App() {
       run: () => setActiveId(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, splitLeft, sessions])
+  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, zenMode, splitLeft, sessions])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
@@ -300,6 +302,11 @@ export default function App() {
         e.preventDefault()
         e.stopPropagation()
         setHistoryOpen((o) => !o)
+      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "z") {
+        // Toggle distraction-free focus mode (hides sidebar + tab bar).
+        e.preventDefault()
+        e.stopPropagation()
+        setZenMode((z) => !z)
       } else if (e.ctrlKey && e.key === "/") {
         // Toggle the keyboard shortcuts cheat sheet.
         e.preventDefault()
@@ -367,7 +374,7 @@ export default function App() {
 
   return (
     <div
-      className="app"
+      className={`app${zenMode ? " zen" : ""}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}

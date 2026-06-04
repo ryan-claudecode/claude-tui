@@ -25,6 +25,7 @@ const GROUPS: Group[] = [
     items: [
       { keys: ["Ctrl", "\\"], desc: "Toggle split panes" },
       { keys: ["Ctrl", "P"], desc: "Toggle panel drawer" },
+      { keys: ["Ctrl", "Shift", "Z"], desc: "Focus mode (hide chrome)" },
       { keys: ["Esc"], desc: "Close most recent panel" },
     ],
   },

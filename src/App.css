@@ -1866,3 +1866,11 @@ body {
    ============================================================ */
 .xterm { height: 100%; }
 .xterm-viewport { overflow-y: auto !important; }
+
+/* ============================================================
+   Focus mode (Ctrl+Shift+Z) — hide chrome for a distraction-free terminal
+   ============================================================ */
+.app.zen .sidebar,
+.app.zen .tab-bar {
+  display: none;
+}
