@@ -16,6 +16,7 @@ import type { ClipboardService } from "../services/clipboard"
 import type { ShellService } from "../services/shell"
 import type { NotesService } from "../services/notes"
 import type { TaskQueueService } from "../services/taskqueue"
+import type { SystemService } from "../services/system"
 
 export function registerTools(
   server: McpServer,
@@ -35,6 +36,7 @@ export function registerTools(
   shellService: ShellService,
   notes: NotesService,
   taskQueue: TaskQueueService,
+  system: SystemService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1069,6 +1071,34 @@ export function registerTools(
     async () => {
       const n = taskQueue.clearDone()
       return { content: [{ type: "text" as const, text: `Cleared ${n} completed task(s)` }] }
+    },
+  )
+
+  // System — read-only environment awareness so you can tailor commands to the
+  // host instead of guessing or spawning throwaway shell calls.
+
+  server.tool(
+    "get_system_info",
+    "Get info about the machine ClaudeTUI is running on: OS platform/arch, hostname, CPU, total/free memory, uptime, home dir, and Node/Electron/Chrome versions. Use this to tailor commands to the host.",
+    {},
+    async () => {
+      const info = system.getInfo()
+      return { content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "which_command",
+    "Check whether an executable is available on PATH and where it resolves to (cross-platform). Use this before running a tool to confirm it's installed instead of relying on a command failing.",
+    {
+      command: z.string().describe("Executable name to locate, e.g. 'node', 'pnpm', 'git'"),
+    },
+    async ({ command }) => {
+      const result = system.which(command)
+      const text = result.found
+        ? `${command} found:\n${result.paths.join("\n")}`
+        : `${command} not found on PATH`
+      return { content: [{ type: "text" as const, text }] }
     },
   )
 }

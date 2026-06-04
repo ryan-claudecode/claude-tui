@@ -16,6 +16,7 @@ import { ClipboardService } from "./services/clipboard"
 import { ShellService } from "./services/shell"
 import { NotesService } from "./services/notes"
 import { TaskQueueService } from "./services/taskqueue"
+import { SystemService } from "./services/system"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -35,6 +36,7 @@ export const clipboardService = new ClipboardService()
 export const shellService = new ShellService()
 export const notesService = new NotesService()
 export const taskQueueService = new TaskQueueService()
+export const systemService = new SystemService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -71,6 +73,7 @@ export async function setupIpc(win: BrowserWindow) {
     shellService,
     notesService,
     taskQueueService,
+    systemService,
   )
   sessionService.setMcpConfigPath(configPath)
 
@@ -195,6 +198,10 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("tasks:complete", (_e, id: string) => taskQueueService.complete(id))
   ipcMain.handle("tasks:delete", (_e, id: string) => taskQueueService.delete(id))
   ipcMain.handle("tasks:clear-done", () => taskQueueService.clearDone())
+
+  // System IPC -- read-only environment lookups
+  ipcMain.handle("system:info", () => systemService.getInfo())
+  ipcMain.handle("system:which", (_e, command: string) => systemService.which(command))
 
   // Notification IPC
   ipcMain.handle("notification:list", () => notificationService.list())
