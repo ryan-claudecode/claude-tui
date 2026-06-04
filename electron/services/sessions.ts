@@ -219,6 +219,11 @@ export class SessionService {
       if (!f.endsWith(".json")) continue
       try {
         const s = JSON.parse(readFileSync(join(this.dir, f), "utf-8")) as WorkSession
+        // Lazy spawn: no PTYs are live at boot, so every persisted terminal ref
+        // is cold until reopened. Reflect that honestly instead of showing the
+        // stale "active"/"idle" state from when the app last closed.
+        for (const t of s.terminals) t.lastState = "dead"
+        s.status = "stopped"
         this.sessions.set(s.id, s)
       } catch { /* skip malformed */ }
     }

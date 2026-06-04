@@ -34,6 +34,21 @@ describe("SessionService persistence", () => {
     expect(b.get(s.id)?.id).toBe(s.id)
     expect(b.list().length).toBe(1)
   })
+
+  it("load() cold-sets terminals to dead/stopped (lazy spawn — no live PTYs at boot)", () => {
+    const a = new SessionService({ dir, now: () => 1000 })
+    const s = a.create()
+    a.addTerminal(s.id, { id: "live-1", name: "x", cwd: "/r", lastState: "active" })
+    a.addTerminal(s.id, { id: "live-2", name: "y", cwd: "/r", lastState: "idle" })
+    // status was "active" while PTYs were notionally live
+    expect(a.get(s.id)!.status).toBe("active")
+
+    const b = new SessionService({ dir, now: () => 2000 })
+    b.load()
+    const loaded = b.get(s.id)!
+    expect(loaded.terminals.map((t) => t.lastState)).toEqual(["dead", "dead"])
+    expect(loaded.status).toBe("stopped")
+  })
 })
 
 describe("SessionService terminals", () => {
