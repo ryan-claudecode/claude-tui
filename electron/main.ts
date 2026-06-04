@@ -1,4 +1,3 @@
-// ClaudeTUI v0.2.0
 import { app, BrowserWindow, protocol } from "electron"
 import { join } from "path"
 import { setupIpc } from "./ipc"
