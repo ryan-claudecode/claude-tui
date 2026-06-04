@@ -631,4 +631,45 @@ export function registerTools(
       }
     },
   )
+
+  server.tool(
+    "wait_for_session_idle",
+    "Block until a session finishes working (its output goes quiet) or a timeout elapses, then return its recent output. The orchestration primitive: optionally inject `input` to delegate a task, then wait for the session to complete it — instead of polling get_session_activity. Returns { idle, timedOut } plus a tail of the session's output produced during the wait.",
+    {
+      session_id: z.string().describe("Session to wait on"),
+      input: z
+        .string()
+        .optional()
+        .describe("Text to send to the session before waiting (delegate a task)"),
+      submit: z
+        .boolean()
+        .optional()
+        .describe("When sending input, append Enter to actually run it (default: false)"),
+      quiet_ms: z
+        .number()
+        .optional()
+        .describe("Milliseconds of no output that counts as 'done' (default: 1500)"),
+      timeout_ms: z
+        .number()
+        .optional()
+        .describe("Give up after this many ms and report timedOut (default: 120000)"),
+    },
+    async ({ session_id, input, submit, quiet_ms, timeout_ms }) => {
+      const result = await sessions.waitForIdle(session_id, {
+        input,
+        submit,
+        quietMs: quiet_ms,
+        timeoutMs: timeout_ms,
+      })
+      const output = sessions.getOutput(session_id, 4000)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ ...result, output }, null, 2),
+          },
+        ],
+      }
+    },
+  )
 }

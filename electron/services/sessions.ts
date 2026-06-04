@@ -283,6 +283,56 @@ export class SessionService {
     }))
   }
 
+  /**
+   * Block until a session has been quiet for `quietMs` (i.e. finished working),
+   * or `timeoutMs` elapses. The orchestration primitive: optionally inject
+   * `input` first, then wait for the session to settle — so a caller can
+   * delegate a task to a session and wait for it to complete instead of polling.
+   *
+   * Injecting input resets the quiet clock, which sidesteps the startup race
+   * where a freshly-prompted session hasn't produced its first output yet.
+   */
+  waitForIdle(
+    id: string,
+    opts: { input?: string; submit?: boolean; quietMs?: number; timeoutMs?: number } = {},
+  ): Promise<{ idle: boolean; timedOut: boolean; reason?: string }> {
+    const session = this.sessions.get(id)
+    if (!session) return Promise.resolve({ idle: false, timedOut: false, reason: "not found" })
+    if (session.state === "dead") {
+      return Promise.resolve({ idle: false, timedOut: false, reason: "dead" })
+    }
+
+    const quietMs = opts.quietMs ?? this.idleThresholdMs
+    const timeoutMs = opts.timeoutMs ?? 120_000
+
+    if (opts.input != null) {
+      // Start the quiet clock now so we wait for output that follows our input.
+      session.lastActivity = Date.now()
+      if (session.state === "idle") {
+        session.state = "active"
+        this.sendToRenderer("session:state", id, "active")
+      }
+      session.pty.write(opts.submit ? opts.input + "\r" : opts.input)
+    }
+
+    const start = Date.now()
+    return new Promise((resolve) => {
+      const timer = setInterval(() => {
+        const s = this.sessions.get(id)
+        if (!s || s.state === "dead") {
+          clearInterval(timer)
+          resolve({ idle: false, timedOut: false, reason: "ended" })
+        } else if (Date.now() - start > timeoutMs) {
+          clearInterval(timer)
+          resolve({ idle: false, timedOut: true })
+        } else if (Date.now() - s.lastActivity >= quietMs) {
+          clearInterval(timer)
+          resolve({ idle: true, timedOut: false })
+        }
+      }, 250)
+    })
+  }
+
   rename(id: string, newName: string): boolean {
     const session = this.sessions.get(id)
     if (!session) return false
