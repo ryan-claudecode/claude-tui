@@ -571,4 +571,52 @@ export function registerTools(
       }
     },
   )
+
+  // Session history — review/search captured terminal output ("what happened while away")
+
+  server.tool(
+    "get_session_output",
+    "Get the recent captured terminal output (scrollback) of a session as plain text. Use this to review what happened in a session — e.g. a background session you weren't watching — without scraping the live terminal.",
+    {
+      session_id: z.string().describe("Session whose output to read"),
+      max_chars: z
+        .number()
+        .optional()
+        .describe("Maximum characters of trailing output to return (default: 8000)"),
+    },
+    async ({ session_id, max_chars }) => {
+      const output = sessions.getOutput(session_id, max_chars)
+      if (output == null) {
+        return { content: [{ type: "text" as const, text: `Session not found: ${session_id}` }] }
+      }
+      return { content: [{ type: "text" as const, text: output || "(no output captured yet)" }] }
+    },
+  )
+
+  server.tool(
+    "search_session_output",
+    "Search captured session output for a string (case-insensitive) and return matching lines with their session and line number. Searches all sessions by default, or pass session_id to scope it. Useful for finding an error, a command, or a result across sessions you weren't watching.",
+    {
+      query: z.string().describe("Text to search for (case-insensitive)"),
+      session_id: z
+        .string()
+        .optional()
+        .describe("Limit the search to one session (defaults to all sessions)"),
+      limit: z.number().optional().describe("Maximum matches to return (default: 50)"),
+    },
+    async ({ query, session_id, limit }) => {
+      const matches = sessions.searchOutput(query, session_id, limit)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              matches.length > 0
+                ? JSON.stringify(matches, null, 2)
+                : `No matches for "${query}"`,
+          },
+        ],
+      }
+    },
+  )
 }
