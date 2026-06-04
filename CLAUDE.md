@@ -180,6 +180,16 @@ All tools resolve a working dir from `session_id` (falls back to the first open 
 - *Write:* `git_stage` / `git_unstage` (specific files or all), `git_commit` (`all` flag = `commit -a`; returns the new commit), `git_branch` (create + checkout), `git_checkout` (switch ref). Each returns the refreshed status so Claude sees the result immediately.
 - *Remote/stash:* `git_push` (`--porcelain`), `git_pull` (`--ff-only`), `git_stash` / `git_stash_pop` / `git_stash_list`.
 
+**File search** (`FileSearchService`):
+All tools resolve a working dir from `session_id` (same fallback as Git) and return structured JSON. Pure-Node (no shell, cross-platform), skip `node_modules`/`.git`/build output, and are bounded so a search in a large repo never floods the response.
+- `find_files` — find files by glob (`*`, `**`, `?`) matched against relative paths; returns paths + sizes (default cap 200).
+- `grep_code` — search file contents by regex (falls back to literal match), optionally scoped to a `glob`, with `case_insensitive`; returns matching lines with file + line number, plus `filesScanned`/`truncated` (default cap 200 matches, skips files > 1MB and binaries).
+
+**File I/O** (`FileService`):
+Structured read/write scoped to a session's working dir (relative paths resolve against it; absolute paths allowed). The no-shell counterpart to `run_command` for file access; pairs with the file-search tools.
+- `read_file` — read a file (optionally a 1-based inclusive `start_line`/`end_line` slice); returns the slice plus `totalLines` for paging. Refuses files > 2MB.
+- `write_file` — write content to a file, creating parent dirs; overwrites if present. Returns resolved path, bytes written, and whether it was newly `created`.
+
 ## Panel System
 
 Claude renders rich UI alongside terminals via panels. State flows:
