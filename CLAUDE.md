@@ -134,7 +134,7 @@ Session/workspace tools map 1:1 to `SessionService` / `WorkspaceService` methods
 Additional tool groups:
 
 **Panels** (`PanelService`):
-- `show_panel` — show a `diff`, `image`, `markdown`, or `table` panel
+- `show_panel` — show a `diff`, `image`, `markdown`, `table`, `test`, `chart`, `tree`, `timeline`, `git`, or `kanban` panel. `git` renders a `git_status` result (branch, ahead/behind, staged/unstaged files) plus optional `git_log` commits; `kanban` renders `{ columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] }` — grouped cards for status buckets / parallel workstreams.
 - `show_form` — show an interactive form and **wait** for the user to submit; returns the field values (or `{ cancelled: true }`)
 - `update_panel` / `hide_panel` / `hide_all_panels` / `list_panels`
 
