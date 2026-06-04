@@ -1407,4 +1407,28 @@ export function registerTools(
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
+
+  server.tool(
+    "list_processes",
+    "List running processes, optionally filtered by a case-insensitive name substring. Returns { platform, filter, processes: [{ pid, name }], truncated } (capped at 200). Use this to find a stray process (e.g. a leftover 'node' or 'esbuild') without parsing tasklist/ps output.",
+    {
+      name_filter: z.string().optional().describe("Only return processes whose name contains this substring (case-insensitive)"),
+    },
+    async ({ name_filter }) => {
+      const result = processes.list(name_filter)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "kill_process",
+    "Force-kill a process by PID. Returns { pid, killed, error? }. Destructive — use list_processes or find_process_on_port first to confirm the PID.",
+    {
+      pid: z.number().describe("Process ID to kill"),
+    },
+    async ({ pid }) => {
+      const result = processes.kill(pid)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
 }

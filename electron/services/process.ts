@@ -19,6 +19,21 @@ export interface KillProcessResult {
   found: boolean
 }
 
+export interface ProcessListResult {
+  platform: NodeJS.Platform
+  filter: string | null
+  processes: PortProcess[]
+  truncated: boolean
+}
+
+export interface KillResult {
+  pid: number
+  killed: boolean
+  error?: string
+}
+
+const MAX_PROCESSES = 200
+
 const run = (cmd: string, args: string[]): string => {
   const res = spawnSync(cmd, args, {
     encoding: "utf8",
@@ -77,6 +92,68 @@ export class ProcessService {
     }
 
     return { port, platform, killed, failed, found: processes.length > 0 }
+  }
+
+  /** List running processes, optionally filtered by a case-insensitive name substring. */
+  list(nameFilter?: string): ProcessListResult {
+    const platform = process.platform
+    const all = platform === "win32" ? this.listWindows() : this.listUnix()
+    const needle = nameFilter?.toLowerCase()
+    const matched = needle
+      ? all.filter((p) => p.name.toLowerCase().includes(needle))
+      : all
+    const truncated = matched.length > MAX_PROCESSES
+    return {
+      platform,
+      filter: nameFilter ?? null,
+      processes: matched.slice(0, MAX_PROCESSES),
+      truncated,
+    }
+  }
+
+  /** Force-kill a process by PID. */
+  kill(pid: number): KillResult {
+    const res =
+      process.platform === "win32"
+        ? spawnSync("taskkill", ["/F", "/PID", String(pid)], {
+            encoding: "utf8",
+            windowsHide: true,
+            timeout: 5000,
+          })
+        : spawnSync("kill", ["-9", String(pid)], { encoding: "utf8", timeout: 5000 })
+    if (res.status === 0 && !res.error) return { pid, killed: true }
+    return {
+      pid,
+      killed: false,
+      error: (res.stderr || res.error?.message || "kill failed").trim(),
+    }
+  }
+
+  private listWindows(): PortProcess[] {
+    const out = run("tasklist", ["/FO", "CSV", "/NH"])
+    const procs: PortProcess[] = []
+    for (const line of out.split(/\r?\n/)) {
+      // "name.exe","pid","session","sess#","mem"
+      const match = line.match(/^"([^"]*)","(\d+)"/)
+      if (!match) continue
+      const pid = Number(match[2])
+      if (Number.isInteger(pid) && pid > 0) procs.push({ pid, name: match[1] })
+    }
+    return procs
+  }
+
+  private listUnix(): PortProcess[] {
+    const out = run("ps", ["-axo", "pid=,comm="])
+    const procs: PortProcess[] = []
+    for (const line of out.split(/\r?\n/)) {
+      const trimmed = line.trim()
+      const sp = trimmed.indexOf(" ")
+      if (sp === -1) continue
+      const pid = Number(trimmed.slice(0, sp))
+      const name = trimmed.slice(sp + 1).trim()
+      if (Number.isInteger(pid) && pid > 0 && name) procs.push({ pid, name })
+    }
+    return procs
   }
 
   private findWindows(port: number): PortProcess[] {
