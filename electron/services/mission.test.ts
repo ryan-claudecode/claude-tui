@@ -116,3 +116,43 @@ describe("MissionService dispatch/await", () => {
     expect(svc.get(m.id)!.tasks[0].status).toBe("review")
   })
 })
+
+describe("MissionService resolve/stop", () => {
+  it("resolve done records result and frees the worker", () => {
+    const killed: string[] = []
+    const svc = new MissionService(
+      fakeDriver({ create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }), kill: (id) => { killed.push(id); return true } }),
+      { dir },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    const out = svc.resolve(m.id, taskId, "done", "looks good")!
+    const task = out.tasks[0]
+    expect(task.status).toBe("done")
+    expect(task.result).toBe("looks good")
+    expect(out.workers.find((w) => w.sessionId === "w1")?.currentTaskId).toBeUndefined()
+  })
+
+  it("logEvent appends to the audit trail", () => {
+    const svc = new MissionService(fakeDriver(), { dir })
+    const m = svc.create("g", "/r")
+    const before = svc.get(m.id)!.eventLog.length
+    svc.logEvent(m.id, "info", "hello")
+    const ev = svc.get(m.id)!.eventLog
+    expect(ev.length).toBe(before + 1)
+    expect(ev[ev.length - 1]).toMatchObject({ kind: "info", text: "hello" })
+  })
+
+  it("stop kills workers + conductor and marks stopped", () => {
+    const killed: string[] = []
+    const svc = new MissionService(fakeDriver({ kill: (id) => { killed.push(id); return true } }), { dir })
+    const m = svc.create("g", "/r")
+    m.workers.push({ sessionId: "w1" })
+    m.conductorSessionId = "c1"
+    const out = svc.stop(m.id)!
+    expect(out.status).toBe("stopped")
+    expect(killed.sort()).toEqual(["c1", "w1"])
+  })
+})

@@ -174,6 +174,48 @@ export class MissionService {
     return { idle: r.idle, timedOut: r.timedOut, output }
   }
 
+  resolve(missionId: string, taskId: string, status: "done" | "failed", result?: string): Mission | undefined {
+    const m = this.missions.get(missionId)
+    const task = m?.tasks.find((t) => t.id === taskId)
+    if (!m || !task) return undefined
+    task.status = status
+    task.result = result
+    const worker = m.workers.find((w) => w.currentTaskId === taskId)
+    if (worker) worker.currentTaskId = undefined
+    this.log(m, "review", `Task "${task.title}" → ${status}${result ? `: ${result}` : ""}`)
+    if (m.tasks.length > 0 && m.tasks.every((t) => t.status === "done")) {
+      m.status = "done"
+      this.log(m, "info", "All tasks done — mission complete")
+    } else if (m.tasks.every((t) => t.status === "done" || t.status === "failed")) {
+      m.status = "blocked"
+      this.log(m, "error", "Remaining tasks failed — mission blocked")
+      this.notify?.(`Mission blocked: ${m.goal}`, "warning")
+    }
+    this.persist(m)
+    return m
+  }
+
+  logEvent(missionId: string, kind: EventKind, text: string): Mission | undefined {
+    const m = this.missions.get(missionId)
+    if (!m) return undefined
+    this.log(m, kind, text)
+    this.persist(m)
+    return m
+  }
+
+  stop(missionId: string): Mission | undefined {
+    const m = this.missions.get(missionId)
+    if (!m) return undefined
+    for (const w of m.workers) this.sessions.kill(w.sessionId)
+    if (m.conductorSessionId) this.sessions.kill(m.conductorSessionId)
+    m.workers = []
+    m.conductorSessionId = undefined
+    m.status = "stopped"
+    this.log(m, "info", "Mission stopped by user")
+    this.persist(m)
+    return m
+  }
+
   finish(id: string): Mission | undefined {
     const m = this.missions.get(id)
     if (!m) return undefined
