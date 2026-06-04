@@ -15,6 +15,7 @@ import StatPanel from "./panels/StatPanel"
 import LogPanel from "./panels/LogPanel"
 import ProgressPanel from "./panels/ProgressPanel"
 import CodePanel from "./panels/CodePanel"
+import HeatmapPanel from "./panels/HeatmapPanel"
 
 export interface PanelState {
   id: string
@@ -48,6 +49,7 @@ const PANEL_LABELS: Record<string, string> = {
   log: "Log",
   progress: "Progress",
   code: "Code",
+  heatmap: "Heatmap",
 }
 
 export default function PanelDrawer({ panels, onClose }: Props) {
@@ -173,6 +175,8 @@ function PanelContent({ panel }: { panel: PanelState }) {
       return <ProgressPanel {...panel.props} />
     case "code":
       return <CodePanel {...panel.props} />
+    case "heatmap":
+      return <HeatmapPanel {...panel.props} />
     default:
       return <pre className="panel-raw">{JSON.stringify(panel.props, null, 2)}</pre>
   }

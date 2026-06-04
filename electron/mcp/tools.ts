@@ -31,6 +31,7 @@ import type { RegexService } from "../services/regex"
 import type { TextService } from "../services/text"
 import type { ColorService } from "../services/color"
 import type { MathService } from "../services/math"
+import type { UrlService } from "../services/url"
 import { isAbsolute, join } from "path"
 
 export function registerTools(
@@ -66,6 +67,7 @@ export function registerTools(
   text: TextService,
   color: ColorService,
   math: MathService,
+  url: UrlService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -241,9 +243,9 @@ export function registerTools(
 
   server.tool(
     "show_panel",
-    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, git, or kanban). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams. For notes: props = { title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] } — the cross-session scratchpad (prefer the show_notes tool, which loads saved notes for you). For stat: props = { title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] } — a dashboard of big-number KPI cards (test counts, coverage %, build time, bundle size); distinct from chart, which is for series viz. For log: props = { title?, lines: [string | { text, level?: 'info'|'warn'|'error'|'debug'|'success', time? }], showLevel? } — a scrollable monospace log viewer with per-line severity coloring (command output, test streams, server logs). For progress: props = { title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? } — a vertical stepper with a progress bar for sequential task pipelines (distinct from timeline, which is chronological events). For code: props = { code: string, language?, filename?, startLine?, highlightLines?: number[], wrap? } — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from diff, which compares two versions).",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, git, or kanban). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams. For notes: props = { title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] } — the cross-session scratchpad (prefer the show_notes tool, which loads saved notes for you). For stat: props = { title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] } — a dashboard of big-number KPI cards (test counts, coverage %, build time, bundle size); distinct from chart, which is for series viz. For log: props = { title?, lines: [string | { text, level?: 'info'|'warn'|'error'|'debug'|'success', time? }], showLevel? } — a scrollable monospace log viewer with per-line severity coloring (command output, test streams, server logs). For progress: props = { title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? } — a vertical stepper with a progress bar for sequential task pipelines (distinct from timeline, which is chronological events). For code: props = { code: string, language?, filename?, startLine?, highlightLines?: number[], wrap? } — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from diff, which compares two versions). For heatmap: props = { title?, rows: number[][], xLabels?: string[], yLabels?: string[], unit?, min?, max? } — a color-coded 2D numeric matrix on a blue→green→amber→red ramp (correlation matrices, coverage grids, latency-by-hour); distinct from chart (series viz) and table (text grid).",
     {
-      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban", "notes", "stat", "log", "progress", "code"]).describe("Panel type"),
+      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban", "notes", "stat", "log", "progress", "code", "heatmap"]).describe("Panel type"),
       props: z.record(z.any()).describe("Panel-specific data"),
       position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
     },
@@ -2057,6 +2059,61 @@ export function registerTools(
     },
     async ({ numbers }) => {
       const result = math.stats(numbers)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "url_parse",
+    "Break a URL into its components without spawning a shell — returns { href, protocol, username, password, host, hostname, port, pathname, search, hash, origin, query, pathSegments }. The query is already parsed into an object (repeated keys become arrays) and the path is split into segments. Throws on an invalid URL. (To percent-encode a single value, use the encode tools' url op.)",
+    {
+      url: z.string().describe("The URL to parse, e.g. 'https://x.com/a/b?q=1&q=2#top'"),
+    },
+    async ({ url: input }) => {
+      const result = url.parse(input)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "url_build",
+    "Assemble a URL from parts (the inverse of url_parse). Requires at least `protocol` and `hostname`; optional `port`, `pathname`, `username`, `password`, `hash`, and `query` (object — array values repeat the key). Returns { href }.",
+    {
+      protocol: z.string().describe("Scheme, e.g. 'https' (with or without trailing colon)"),
+      hostname: z.string().describe("Host, e.g. 'example.com'"),
+      port: z.union([z.string(), z.number()]).optional().describe("Port number"),
+      pathname: z.string().optional().describe("Path, e.g. '/api/v1/users'"),
+      query: z.record(z.any()).optional().describe("Query params as an object"),
+      hash: z.string().optional().describe("Fragment, e.g. '#section'"),
+      username: z.string().optional().describe("Basic-auth username"),
+      password: z.string().optional().describe("Basic-auth password"),
+    },
+    async (parts) => {
+      const result = url.build(parts)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "url_query_parse",
+    "Parse a query string (with or without a leading '?') into an object — repeated keys collapse into an array. Returns { query }. The standalone counterpart to url_parse's query handling.",
+    {
+      query: z.string().describe("The query string, e.g. 'a=1&b=2&b=3'"),
+    },
+    async ({ query }) => {
+      const result = url.parseQuery(query)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "url_query_build",
+    "Serialize an object into a query string (no leading '?') — array values repeat the key. The inverse of url_query_parse. Returns { query }.",
+    {
+      params: z.record(z.any()).describe("The params object to serialize"),
+    },
+    async ({ params }) => {
+      const result = url.buildQuery(params)
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
