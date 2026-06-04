@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "fs"
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, unlinkSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 
@@ -97,6 +97,72 @@ export class SessionService {
     this.persist(s)
     this.emit("worksession:updated", s)
   }
+
+  /** Create a session + spawn & register its first terminal. */
+  openSession(cwd?: string): { session: WorkSession; terminalId: string } {
+    const session = this.create()
+    const terminalId = this.spawnInto(session, cwd)
+    return { session, terminalId }
+  }
+
+  /** Spawn & register an additional terminal in an existing session. */
+  addTerminalToSession(sessionId: string, cwd?: string): { terminalId: string } | undefined {
+    const s = this.sessions.get(sessionId)
+    if (!s) return undefined
+    const terminalId = this.spawnInto(s, cwd)
+    return { terminalId }
+  }
+
+  /** Shared spawn path: create PTY, register a ref, seed it, persist + emit. */
+  private spawnInto(s: WorkSession, cwd?: string): string {
+    if (!this.terminals) throw new Error("terminals not attached")
+    const info = this.terminals.create(undefined, cwd)
+    s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: "active" })
+    s.status = "active"
+    this.persist(s)
+    this.emit("worksession:updated", s)
+    this.seedTerminal(s, info.id)
+    return info.id
+  }
+
+  /** Close a terminal: kill its PTY, drop the ref, keep the session alive (empty-but-live). */
+  closeTerminal(sessionId: string, terminalId: string): void {
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    this.terminals?.kill(terminalId)
+    s.terminals = s.terminals.filter((t) => t.id !== terminalId)
+    s.status = s.terminals.some((t) => t.lastState === "active" || t.lastState === "idle") ? "active" : "stopped"
+    this.persist(s)
+    this.emit("worksession:updated", s)
+  }
+
+  /** Kill the whole session: every PTY + the on-disk record. */
+  killSession(sessionId: string): void {
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    for (const t of s.terminals) this.terminals?.kill(t.id)
+    this.sessions.delete(sessionId)
+    try { unlinkSync(join(this.dir, `${sessionId}.json`)) } catch { /* already gone */ }
+    this.emit("worksession:removed", sessionId)
+  }
+
+  /** Reopen a dead/stale terminal ref with a fresh primed PTY (3a: fresh, not --resume). */
+  reopenTerminal(sessionId: string, terminalId: string): { terminalId: string } | undefined {
+    const s = this.sessions.get(sessionId)
+    if (!s || !this.terminals) return undefined
+    const ref = s.terminals.find((t) => t.id === terminalId)
+    if (!ref) return undefined
+    const info = this.terminals.create(ref.name, ref.cwd)
+    ref.id = info.id
+    ref.lastState = "active"
+    s.status = "active"
+    this.persist(s)
+    this.emit("worksession:updated", s)
+    this.seedTerminal(s, info.id)
+    return { terminalId: info.id }
+  }
+
+  private seedTerminal(_s: WorkSession, _liveId: string): void { /* implemented in Task 4 */ }
 
   create(): WorkSession {
     const t = this.now()

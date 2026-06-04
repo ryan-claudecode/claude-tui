@@ -267,3 +267,66 @@ describe("SessionService reconciliation", () => {
     expect(() => term.emit({ type: "state", id: "ghost", state: "idle" })).not.toThrow()
   })
 })
+
+describe("SessionService orchestration", () => {
+  it("openSession creates a container, spawns + registers its first terminal", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    expect(terminalId).toBe("live-1")
+    expect(svc.get(session.id)!.terminals.map((t) => t.id)).toEqual(["live-1"])
+    expect(svc.get(session.id)!.terminals[0].cwd).toBe("/repo")
+  })
+
+  it("addTerminalToSession spawns + registers another terminal", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session } = svc.openSession("/repo")
+    const r = svc.addTerminalToSession(session.id, "/repo")
+    expect(r!.terminalId).toBe("live-2")
+    expect(svc.get(session.id)!.terminals).toHaveLength(2)
+  })
+
+  it("closeTerminal kills the PTY + drops the ref but keeps the session alive (empty-but-live)", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    svc.closeTerminal(session.id, terminalId)
+    expect(term.killed).toContain("live-1")
+    expect(svc.get(session.id)).toBeDefined()
+    expect(svc.get(session.id)!.terminals).toEqual([])
+    expect(svc.get(session.id)!.status).toBe("stopped")
+  })
+
+  it("killSession kills all PTYs and deletes the record + file", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session } = svc.openSession("/repo")
+    svc.addTerminalToSession(session.id, "/repo")
+    svc.killSession(session.id)
+    expect(term.killed).toEqual(["live-1", "live-2"])
+    expect(svc.get(session.id)).toBeUndefined()
+    expect(existsSync(join(dir, `${session.id}.json`))).toBe(false)
+  })
+
+  it("reopenTerminal spawns a fresh PTY and updates the ref id in place (3a fresh-reopen)", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    // simulate app-close: terminal exits, ref goes dead but stays
+    term.emit({ type: "exit", id: terminalId })
+    const oldRef = svc.get(session.id)!.terminals[0]
+    expect(oldRef.lastState).toBe("dead")
+    const r = svc.reopenTerminal(session.id, oldRef.id)
+    expect(r!.terminalId).toBe("live-2")
+    const ref = svc.get(session.id)!.terminals[0]
+    expect(ref.id).toBe("live-2")
+    expect(ref.lastState).toBe("active")
+    expect(ref.name).toBe(oldRef.name) // name carried over
+  })
+})
