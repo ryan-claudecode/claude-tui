@@ -372,11 +372,16 @@ export default function App() {
     [sessions, activeId, openMission],
   )
 
-  // Missions don't push updates, so poll while the list overlay or any mission
-  // panel is open and refresh both from the same listMissions() result.
-  const hasMissionPanel = panels.some((p) => p.type === "mission" && p.visible)
+  // Missions don't push updates, so poll while the list overlay or a still-live
+  // mission panel is open and refresh both from the same listMissions() result.
+  // Terminal missions (done/stopped) won't change, so once every visible panel
+  // is terminal we stop polling — the refresh that set the terminal status was
+  // the last tick, so the final state is already captured.
+  const hasLiveMissionPanel = panels.some(
+    (p) => p.type === "mission" && p.visible && !["done", "stopped"].includes((p.props as { status?: string })?.status ?? ""),
+  )
   useEffect(() => {
-    if (!missionsListOpen && !hasMissionPanel) return
+    if (!missionsListOpen && !hasLiveMissionPanel) return
     let cancelled = false
     const refresh = async () => {
       const list = (await window.api.listMissions()) as Mission[]
@@ -396,7 +401,7 @@ export default function App() {
       cancelled = true
       clearInterval(t)
     }
-  }, [missionsListOpen, hasMissionPanel])
+  }, [missionsListOpen, hasLiveMissionPanel])
 
   // Commands surfaced in the Ctrl+Shift+P command palette. Static app actions
   // plus a dynamic "Switch to…" entry per open session.

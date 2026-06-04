@@ -20,7 +20,9 @@ interface Props {
   onResume: (id: string) => void
 }
 
-const TERMINAL = ["done", "stopped", "failed"]
+// Mirror MissionService's terminal set (mission.ts) — a terminal mission has
+// no live workers/conductor, so it offers no actions.
+const TERMINAL = ["done", "stopped"]
 
 function relativeTime(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000))
@@ -79,10 +81,10 @@ export default function MissionsList({ open, missions, onClose, onOpen, onStop, 
                     </div>
                   </div>
                   <div className="missions-list-actions" onClick={(e) => e.stopPropagation()}>
-                    {active && m.status === "paused" && (
+                    {m.status === "paused" && (
                       <button onClick={() => onResume(m.id)} title="Resume">Resume</button>
                     )}
-                    {active && m.status !== "paused" && (
+                    {m.status === "running" && (
                       <button onClick={() => onPause(m.id)} title="Pause">Pause</button>
                     )}
                     {active && (
