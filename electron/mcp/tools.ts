@@ -1282,6 +1282,41 @@ export function registerTools(
     },
   )
 
+  server.tool(
+    "tail_file",
+    "Read the last N lines of a file (relative to a session's working dir, or absolute) — the log-tailing counterpart of read_file. Only the final 512KB are read, so it works on large logs that read_file refuses; `partial` is true when earlier content was skipped.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      path: z.string().describe("File path, relative to the working dir or absolute"),
+      lines: z.number().optional().describe("Number of trailing lines to return (default: 50)"),
+    },
+    async ({ session_id, path: filePath, lines }) => {
+      try {
+        const result = files.tail(resolveCwd(session_id), filePath, lines)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `tail_file failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "stat_path",
+    "Get metadata for a file or directory (relative to a session's working dir, or absolute): existence, kind, size, and modified/created timestamps — without scraping `ls -l`/`stat`. Returns `exists: false` instead of erroring for a missing path.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      path: z.string().describe("File or directory path, relative to the working dir or absolute"),
+    },
+    async ({ session_id, path: filePath }) => {
+      try {
+        const result = files.stat(resolveCwd(session_id), filePath)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `stat_path failed: ${e.message}` }] }
+      }
+    },
+  )
+
   // Filesystem operations — move/copy/delete/mkdir without shelling out to
   // mv/cp/rm/mkdir. Paths resolve against a session's working dir (same as
   // read_file/write_file). Directories are handled recursively.
