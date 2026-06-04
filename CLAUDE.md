@@ -201,6 +201,13 @@ Probe the network without spawning `curl`/`netstat` and scraping output — stru
 - `check_port` — single TCP connect to see if something is listening on `host:port` (default host `127.0.0.1`); returns `{ open, durationMs }`.
 - `wait_for_port` — poll a port until it opens or `timeout_ms` elapses (`interval_ms` between attempts); returns `{ open, waitedMs, attempts }`. Use after launching a dev server to block until it's ready before `http_request`.
 
+**Process** (`ProcessService`):
+Find and kill OS processes without parsing `netstat`/`lsof`/`tasklist`/`ps` — structured JSON, cross-platform (Windows uses netstat/tasklist/taskkill, Unix uses lsof/ps/kill). The follow-up to the Network port checks: when `check_port` says a port is taken, reclaim it (the classic "EADDRINUSE on 3000, kill the zombie dev server" loop).
+- `find_process_on_port` — resolve the process(es) listening on a TCP port; returns `{ port, platform, processes: [{ pid, name }] }`.
+- `kill_process_on_port` — force-kill whatever is listening on a port; returns `{ port, platform, found, killed: [{ pid, name }], failed: [{ pid, name, error }] }`.
+- `list_processes` — list running processes, optionally filtered by case-insensitive name substring; returns `{ platform, filter, processes: [{ pid, name }], truncated }` (capped at 200).
+- `kill_process` — force-kill a process by PID; returns `{ pid, killed, error? }`.
+
 ## Panel System
 
 Claude renders rich UI alongside terminals via panels. State flows:
