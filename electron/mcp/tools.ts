@@ -28,6 +28,7 @@ import type { JsonService } from "../services/json"
 import type { TimeService } from "../services/time"
 import type { CsvService } from "../services/csv"
 import type { RegexService } from "../services/regex"
+import type { TextService } from "../services/text"
 import { isAbsolute, join } from "path"
 
 export function registerTools(
@@ -60,6 +61,7 @@ export function registerTools(
   time: TimeService,
   csv: CsvService,
   regex: RegexService,
+  text: TextService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1940,6 +1942,68 @@ export function registerTools(
     },
     async ({ pattern, text, replacement, flags }) => {
       const result = regex.replace(pattern, text, replacement, flags ?? "")
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "text_transform",
+    "Re-case or re-format a string — the no-shell `tr`/case-converter. `op` selects the transform: upper, lower, title, capitalize (first char only), sentence (start of each sentence), camel, pascal, snake, kebab, slug, constant (CONSTANT_CASE), swapcase, trim, squeeze (collapse whitespace runs), reverse. The identifier cases (camel/pascal/snake/kebab/constant) tokenize on camelCase humps and non-alphanumerics. Returns { result }.",
+    {
+      text: z.string().describe("The text to transform"),
+      op: z
+        .enum([
+          "upper",
+          "lower",
+          "title",
+          "capitalize",
+          "sentence",
+          "camel",
+          "pascal",
+          "snake",
+          "kebab",
+          "constant",
+          "slug",
+          "swapcase",
+          "trim",
+          "squeeze",
+          "reverse",
+        ])
+        .describe("The transform to apply"),
+    },
+    async ({ text: input, op }) => {
+      const result = text.transform(input, op)
+      return { content: [{ type: "text" as const, text: JSON.stringify({ result }, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "text_count",
+    "Count the parts of a string without spawning `wc`: returns { chars, charsNoSpaces, words, lines, sentences, paragraphs, bytes } (bytes is UTF-8). Words are whitespace-delimited runs; sentences end on .!?; paragraphs are blank-line-separated blocks.",
+    {
+      text: z.string().describe("The text to measure"),
+    },
+    async ({ text: input }) => {
+      const result = text.count(input)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "text_lines",
+    "Line-oriented transform — the no-shell `sort`/`uniq`/`nl`/`shuf`. `op`: sort (A→Z), rsort (Z→A), dedupe (drop later duplicates, keep order), reverse, shuffle, number (prefix 1-based padded line numbers), trim (strip each line), compact (drop blank lines). `case_insensitive` affects sort/dedupe comparisons. Lines rejoin with \\n. Returns { text, lineCount }.",
+    {
+      text: z.string().describe("The multi-line text to transform"),
+      op: z
+        .enum(["sort", "rsort", "dedupe", "reverse", "shuffle", "number", "trim", "compact"])
+        .describe("The line operation to apply"),
+      case_insensitive: z
+        .boolean()
+        .optional()
+        .describe("Case-insensitive comparison for sort/dedupe (default false)"),
+    },
+    async ({ text: input, op, case_insensitive }) => {
+      const result = text.lines(input, op, { caseInsensitive: case_insensitive })
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )

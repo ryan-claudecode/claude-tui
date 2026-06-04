@@ -28,6 +28,7 @@ import { JsonService } from "./services/json"
 import { TimeService } from "./services/time"
 import { CsvService } from "./services/csv"
 import { RegexService } from "./services/regex"
+import { TextService } from "./services/text"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -59,6 +60,7 @@ export const jsonService = new JsonService()
 export const timeService = new TimeService()
 export const csvService = new CsvService()
 export const regexService = new RegexService()
+export const textService = new TextService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -107,6 +109,7 @@ export async function setupIpc(win: BrowserWindow) {
     timeService,
     csvService,
     regexService,
+    textService,
   )
   sessionService.setMcpConfigPath(configPath)
 
