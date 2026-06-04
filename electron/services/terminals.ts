@@ -29,6 +29,11 @@ export interface TerminalActivity {
   idleMs: number
 }
 
+export type TerminalEvent =
+  | { type: "created"; info: TerminalInfo }
+  | { type: "state"; id: string; state: "active" | "idle" | "dead" }
+  | { type: "exit"; id: string }
+
 /** Wrap a command in a shell so PATH resolution works reliably in Electron */
 function shellWrap(command: string, args: string[]): { shell: string; shellArgs: string[] } {
   if (process.platform === "win32") {
@@ -73,6 +78,18 @@ export class TerminalService {
   private readonly idleThresholdMs = 1500
   private idleTimer: ReturnType<typeof setInterval> | null = null
 
+  private eventListeners = new Set<(e: TerminalEvent) => void>()
+
+  /** Subscribe to in-process terminal lifecycle events. Returns an unsubscribe fn. */
+  onEvent(cb: (e: TerminalEvent) => void): () => void {
+    this.eventListeners.add(cb)
+    return () => this.eventListeners.delete(cb)
+  }
+
+  private emitEvent(e: TerminalEvent): void {
+    for (const cb of this.eventListeners) cb(e)
+  }
+
   setMainWindow(win: BrowserWindow) {
     this.mainWin = win
     this.startIdleMonitor()
@@ -90,6 +107,7 @@ export class TerminalService {
         if (session.state === "active" && now - session.lastActivity > this.idleThresholdMs) {
           session.state = "idle"
           this.sendToRenderer("session:state", session.id, "idle")
+          this.emitEvent({ type: "state", id: session.id, state: "idle" })
         }
       }
     }, 1000)
@@ -101,6 +119,7 @@ export class TerminalService {
     if (session.state === "idle") {
       session.state = "active"
       this.sendToRenderer("session:state", session.id, "active")
+      this.emitEvent({ type: "state", id: session.id, state: "active" })
     }
   }
 
@@ -129,6 +148,7 @@ export class TerminalService {
     session.pty.onExit(() => {
       session.state = "dead"
       this.sendToRenderer("session:exit", session.id)
+      this.emitEvent({ type: "exit", id: session.id })
 
       // Check for handoff file -- auto-respawn if present
       const handoffPath = join(session.cwd, "ephemeral", "handoff.md")
@@ -204,6 +224,7 @@ export class TerminalService {
 
     const info: TerminalInfo = { id, name: sessionName, cwd: sessionCwd, state: "active" }
     this.sendToRenderer("session:created", info)
+    this.emitEvent({ type: "created", info })
     return info
   }
 
@@ -317,6 +338,7 @@ export class TerminalService {
       if (session.state === "idle") {
         session.state = "active"
         this.sendToRenderer("session:state", id, "active")
+        this.emitEvent({ type: "state", id, state: "active" })
       }
       session.pty.write(opts.submit ? opts.input + "\r" : opts.input)
     }
