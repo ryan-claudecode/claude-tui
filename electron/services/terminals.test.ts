@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { TerminalService, encodeProjectDir } from "./terminals"
+import { TerminalService, encodeProjectDir, resumeArgs } from "./terminals"
 
 describe("TerminalService.onEvent", () => {
   it("notifies listeners on created and exit, and unsubscribes cleanly", () => {
@@ -65,5 +65,26 @@ describe("resolveTranscriptId", () => {
     const past = (Date.now() - 60_000) / 1000
     utimesSync(join(dir, `${id}.jsonl`), past, past)
     expect(resolveTranscriptId(root, cwd, Date.now())).toBeUndefined()
+  })
+})
+
+describe("resumeArgs", () => {
+  it("adds --resume when the transcript still exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-resume-"))
+    const cwd = "C:\\fake\\r"
+    const dir = join(root, encodeProjectDir(cwd))
+    mkdirSync(dir, { recursive: true })
+    const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    writeFileSync(join(dir, `${id}.jsonl`), "{}")
+    expect(resumeArgs(root, cwd, id)).toEqual(["--resume", id])
+  })
+
+  it("returns [] when the id is missing", () => {
+    expect(resumeArgs(mkdtempSync(join(tmpdir(), "cc-r2-")), "C:\\x", undefined)).toEqual([])
+  })
+
+  it("returns [] when the transcript file is gone", () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-r3-"))
+    expect(resumeArgs(root, "C:\\x", "dead-id")).toEqual([])
   })
 })

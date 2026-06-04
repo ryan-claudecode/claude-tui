@@ -245,11 +245,11 @@ describe("SessionService.status", () => {
 class FakeTerminals {
   private n = 0
   killed: string[] = []
-  spawned: Array<{ id: string; name?: string; cwd?: string; sessionId?: string }> = []
+  spawned: Array<{ id: string; name?: string; cwd?: string; sessionId?: string; resumeConvId?: string }> = []
   private cb: ((e: any) => void) | null = null
-  create(name?: string, cwd?: string, sessionId?: string) {
+  create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string) {
     const id = `live-${++this.n}`
-    this.spawned.push({ id, name, cwd, sessionId })
+    this.spawned.push({ id, name, cwd, sessionId, resumeConvId })
     return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const }
   }
   kill(id: string) { this.killed.push(id); return true }
@@ -357,6 +357,22 @@ describe("SessionService convo recording", () => {
 
     const ref = svc.get(session.id)!.terminals.find((t) => t.id === terminalId)
     expect(ref?.ccConversationId).toBe("abc-123")
+  })
+
+  it("reopenTerminal forwards the stored ccConversationId to spawn", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    term.emit({ type: "convo", id: terminalId, ccConversationId: "keep-me" })
+    // simulate app-close: terminal exits, ref goes dead but stays (the resume path)
+    term.emit({ type: "exit", id: terminalId })
+
+    const ref = svc.get(session.id)!.terminals[0]
+    svc.reopenTerminal(session.id, ref.id)
+
+    const last = term.spawned[term.spawned.length - 1]
+    expect(last.resumeConvId).toBe("keep-me")
   })
 })
 

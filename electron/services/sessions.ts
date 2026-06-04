@@ -43,7 +43,7 @@ export interface SessionServiceOpts {
 
 /** The slice of TerminalService the container drives. */
 export interface TerminalLike {
-  create(name?: string, cwd?: string, sessionId?: string): { id: string; name: string; cwd: string; state: string }
+  create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string): { id: string; name: string; cwd: string; state: string }
   kill(id: string): boolean
   onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string }) => void): () => void
 }
@@ -166,7 +166,7 @@ export class SessionService {
     if (!s || !this.terminals) return undefined
     const ref = s.terminals.find((t) => t.id === terminalId)
     if (!ref) return undefined
-    const info = this.terminals.create(ref.name, ref.cwd, s.id)
+    const info = this.terminals.create(ref.name, ref.cwd, s.id, ref.ccConversationId)
     ref.id = info.id
     ref.lastState = "active"
     s.status = "active"

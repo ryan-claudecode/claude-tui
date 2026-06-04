@@ -50,6 +50,21 @@ export function resolveTranscriptId(
   return best?.id
 }
 
+/**
+ * The extra CLI args to reattach a terminal to its prior Claude Code chat:
+ * ["--resume", id] when we have an id AND its transcript still exists on disk,
+ * otherwise [] (spawn fresh — the always-works fallback).
+ */
+export function resumeArgs(
+  projectsRoot: string,
+  cwd: string,
+  ccConversationId: string | undefined,
+): string[] {
+  if (!ccConversationId) return []
+  const file = join(projectsRoot, encodeProjectDir(cwd), `${ccConversationId}.jsonl`)
+  return existsSync(file) ? ["--resume", ccConversationId] : []
+}
+
 export interface TerminalInfo {
   id: string
   name: string
@@ -261,7 +276,7 @@ export class TerminalService {
     })
   }
 
-  create(name?: string, cwd?: string, sessionId?: string): TerminalInfo {
+  create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string): TerminalInfo {
     // Unique, collision-proof id. Must NOT be a resettable counter: nextId
     // resets to 1 on every app restart, so a counter-based id collides with
     // terminal refs persisted by prior runs — two work sessions would then
@@ -273,6 +288,7 @@ export class TerminalService {
     const sessionCwd = cwd || process.cwd()
 
     const args = [...this.defaultArgs]
+    for (const a of resumeArgs(this.ccProjectsRoot, sessionCwd, resumeConvId)) args.push(a)
     // Prefer a per-terminal, identity-bound MCP config so this terminal's
     // work-session tools default to its own ids; fall back to the shared config.
     const mcpConfig = this.mcpConfigFor(id, sessionId)
