@@ -224,9 +224,9 @@ export function registerTools(
 
   server.tool(
     "show_panel",
-    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, git, or kanban). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams. For notes: props = { title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] } — the cross-session scratchpad (prefer the show_notes tool, which loads saved notes for you). For stat: props = { title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] } — a dashboard of big-number KPI cards (test counts, coverage %, build time, bundle size); distinct from chart, which is for series viz.",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, git, or kanban). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams. For notes: props = { title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] } — the cross-session scratchpad (prefer the show_notes tool, which loads saved notes for you). For stat: props = { title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] } — a dashboard of big-number KPI cards (test counts, coverage %, build time, bundle size); distinct from chart, which is for series viz. For log: props = { title?, lines: [string | { text, level?: 'info'|'warn'|'error'|'debug'|'success', time? }], showLevel? } — a scrollable monospace log viewer with per-line severity coloring (command output, test streams, server logs).",
     {
-      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban", "notes", "stat"]).describe("Panel type"),
+      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban", "notes", "stat", "log"]).describe("Panel type"),
       props: z.record(z.any()).describe("Panel-specific data"),
       position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
     },
@@ -603,6 +603,39 @@ export function registerTools(
         return { content: [{ type: "text" as const, text: JSON.stringify(branches, null, 2) }] }
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `git branches failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_tags",
+    "List tags (newest first), each resolved to its target commit hash, date, and message. The release-marker counterpart of git_branches: answers 'what versions are tagged?'.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to inspect"),
+      limit: z.number().optional().describe("Max tags to return (default 50)"),
+    },
+    async ({ session_id, limit }) => {
+      try {
+        const tags = git.tags(resolveCwd(session_id), limit)
+        return { content: [{ type: "text" as const, text: JSON.stringify(tags, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git tags failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_remotes",
+    "List configured remotes with their fetch/push URLs. Answers 'where does this repo push/pull from?' — the remote-config counterpart of git_branches.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to inspect"),
+    },
+    async ({ session_id }) => {
+      try {
+        const remotes = git.remotes(resolveCwd(session_id))
+        return { content: [{ type: "text" as const, text: JSON.stringify(remotes, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git remotes failed: ${e.message}` }] }
       }
     },
   )

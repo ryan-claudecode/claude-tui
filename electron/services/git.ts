@@ -46,6 +46,26 @@ export interface GitBranch {
   remote: boolean
 }
 
+export interface GitTag {
+  /** Tag name (e.g. "v1.2.0"). */
+  name: string
+  /** Commit the tag points at (abbreviated hash). */
+  hash: string
+  /** Tagger/commit date (YYYY-MM-DD). */
+  date: string
+  /** Annotation message (annotated tags) or commit subject (lightweight tags). */
+  subject: string
+}
+
+export interface GitRemote {
+  /** Remote name (e.g. "origin"). */
+  name: string
+  /** Fetch URL. */
+  fetchUrl: string
+  /** Push URL (often identical to fetchUrl). */
+  pushUrl: string
+}
+
 export interface GitBlameLine {
   /** 1-based line number in the final file. */
   line: number
@@ -346,5 +366,48 @@ export class GitService {
       const [hash, author, date, subject] = line.split(sep)
       return { hash, author, date, subject }
     })
+  }
+
+  /**
+   * List tags (newest first by creation), each resolved to its target commit.
+   * Fills the release-marker gap alongside git_branches: answers "what versions
+   * are tagged?". `subject` is the annotation for annotated tags, else the
+   * pointed-at commit's subject.
+   */
+  tags(cwd: string, limit = 50): GitTag[] {
+    const sep = "\x1f"
+    const raw = this.run(cwd, [
+      "for-each-ref",
+      `--count=${limit}`,
+      "--sort=-creatordate",
+      `--format=%(refname:short)${sep}%(objectname:short)${sep}%(creatordate:short)${sep}%(contents:subject)`,
+      "refs/tags",
+    ])
+    if (!raw) return []
+    const out: GitTag[] = []
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue
+      const [name, hash, date, subject] = line.split(sep)
+      out.push({ name, hash, date, subject: subject ?? "" })
+    }
+    return out
+  }
+
+  /** List configured remotes with their fetch/push URLs. */
+  remotes(cwd: string): GitRemote[] {
+    const raw = this.run(cwd, ["remote", "-v"])
+    if (!raw) return []
+    const map = new Map<string, GitRemote>()
+    for (const line of raw.split("\n")) {
+      // Format: "origin\thttps://...\t(fetch)"
+      const m = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/)
+      if (!m) continue
+      const [, name, url, kind] = m
+      const existing = map.get(name) ?? { name, fetchUrl: "", pushUrl: "" }
+      if (kind === "fetch") existing.fetchUrl = url
+      else existing.pushUrl = url
+      map.set(name, existing)
+    }
+    return [...map.values()]
   }
 }
