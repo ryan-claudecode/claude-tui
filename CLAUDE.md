@@ -150,6 +150,12 @@ Additional tool groups:
 - `list_session_templates` — list pre-configured session types (code review, debugging, frontend, planning)
 - `create_session_from_template` — spawn a session from a template and seed its starter prompt once Claude boots
 
+**Saved layouts** (`LayoutService`):
+- `save_layout` / `list_layouts` / `restore_layout` / `delete_layout` — snapshot the open sessions (names + working dirs) to `~/.claude-tui/layouts.json` and recreate them on demand (e.g. to restore a working setup after an app restart). Only uses `SessionService.list()`/`create()` — no session-layer changes.
+
+**Snippets** (`SnippetService`):
+- `save_snippet` / `list_snippets` / `send_snippet` / `delete_snippet` — a library of reusable prompt snippets persisted to `~/.claude-tui/snippets.json`. Unlike templates (which spawn a new session), `send_snippet` injects text into an **existing** session's input via `SessionService.write()`.
+
 ## Panel System
 
 Claude renders rich UI alongside terminals via panels. State flows:
