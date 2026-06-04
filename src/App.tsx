@@ -166,6 +166,7 @@ export default function App() {
         onKillSession={handleKillSession}
         onHandoff={handleHandoff}
         onSelectSession={handleSelectSession}
+        onSelectWorkspace={(index) => window.api.activateWorkspace(index)}
       />
       <div className="main-area">
         <TabBar
@@ -202,7 +203,19 @@ export default function App() {
               {sessions.length === 0 && (
                 <div className="empty-state">
                   <p>No active session.</p>
-                  <p>Press Ctrl+N to create one.</p>
+                  <p>Create a session to get started.</p>
+                  <div className="shortcut-hints">
+                    <span className="shortcut-key">Ctrl+N</span>
+                    <span className="shortcut-desc">New session</span>
+                    <span className="shortcut-key">Ctrl+K</span>
+                    <span className="shortcut-desc">Kill session</span>
+                    <span className="shortcut-key">Ctrl+H</span>
+                    <span className="shortcut-desc">Handoff</span>
+                    <span className="shortcut-key">Ctrl+\</span>
+                    <span className="shortcut-desc">Split panes</span>
+                    <span className="shortcut-key">Ctrl+1-9</span>
+                    <span className="shortcut-desc">Switch session</span>
+                  </div>
                 </div>
               )}
             </>
