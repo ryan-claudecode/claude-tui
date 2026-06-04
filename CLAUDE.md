@@ -44,6 +44,8 @@ Three layers — service layer is the core, everything else is a thin adapter on
 | `electron/preload.ts` | contextBridge — exposes API to renderer |
 | `electron/services/sessions.ts` | **SessionService** — all session ops (create, kill, rename, handoff, split, etc.) |
 | `electron/services/workspaces.ts` | **WorkspaceService** — workspace discovery + activation |
+| `electron/services/panels.ts` | **PanelService** — rich UI panel state + form callbacks |
+| `electron/services/app.ts` | **AppService** — app-level ops (screenshot, app state, build) |
 | `electron/mcp/server.ts` | MCP HTTP/SSE server lifecycle |
 | `electron/mcp/tools.ts` | MCP tool definitions — calls services |
 | `electron/config.ts` | Loads ~/.claude-tui/config.json |
@@ -59,7 +61,10 @@ Three layers — service layer is the core, everything else is a thin adapter on
 | `src/components/TerminalPane.tsx` | xterm.js terminal wrapper |
 | `src/components/SplitView.tsx` | Side-by-side terminal panes |
 | `src/components/StatusBar.tsx` | Bottom info bar |
-| `src/App.css` | All styles |
+| `src/components/PanelDrawer.tsx` | Sliding drawer — routes panel `type` to a component |
+| `src/components/panels/*.tsx` | Panel components — Diff, Form, Image, Markdown, Table |
+| `src/components/DropZone.tsx` | Drag-and-drop image overlay |
+| `src/App.css` | All styles (design-token system at the top) |
 
 ## How to Add a New Feature
 
@@ -123,6 +128,43 @@ The `--mcp-config` flag auto-connects Claude to the ClaudeTUI MCP server so Clau
 - Each spawned Claude session gets `--mcp-config` pointing to this file
 - Tools map 1:1 to service methods
 
+### MCP Tools
+
+Session/workspace tools map 1:1 to `SessionService` / `WorkspaceService` methods.
+Additional tool groups:
+
+**Panels** (`PanelService`):
+- `show_panel` — show a `diff`, `image`, `markdown`, or `table` panel
+- `show_form` — show an interactive form and **wait** for the user to submit; returns the field values (or `{ cancelled: true }`)
+- `update_panel` / `hide_panel` / `hide_all_panels` / `list_panels`
+
+**Testing/self-verification** (`AppService`):
+- `take_screenshot` — capture the ClaudeTUI window as a PNG
+- `get_app_state` — current window/session/workspace state for assertions
+- `run_build` — build the project and return success/error output
+
+## Panel System
+
+Claude renders rich UI alongside terminals via panels. State flows:
+**Claude → MCP tool → PanelService → IPC → React drawer** (`PanelDrawer`).
+
+Panels live in a sliding drawer (right or bottom). `PanelDrawer` routes each
+panel's `type` to a component in `src/components/panels/`. Users can also drag an
+image onto the window (`DropZone`) to inject it into the active session.
+
+Forms are special: `show_form` keeps the MCP call open (a pending promise in
+`PanelService`). When the user submits, the renderer sends `panel:form-submit`
+over IPC, which resolves the promise and returns the data to Claude.
+
+### How to add a new panel type
+
+1. **Component** — create `src/components/panels/FooPanel.tsx`; it receives the
+   tool's `props` as React props.
+2. **Route it** — add a `case "foo"` to `PanelContent` in `PanelDrawer.tsx`.
+3. **Allow the type** — add `"foo"` to the `type` enum of `show_panel` in
+   `electron/mcp/tools.ts` (no service change needed — `PanelService` is generic).
+4. **Style** — add a `.foo-panel` block in `src/App.css` using the design tokens.
+
 ## Config
 
 `~/.claude-tui/config.json`:
@@ -157,7 +199,9 @@ Uses electron-vite. Config in `electron.vite.config.ts`.
 | Ctrl+H | Trigger handoff |
 | Ctrl+\ | Toggle split panes |
 | Ctrl+1-9 | Switch to session by index |
+| Ctrl+P | Toggle (collapse/restore) the panel drawer |
+| Escape | Close the most recently shown panel |
 
 ## Tech Stack
 
-Electron, React, TypeScript, xterm.js, node-pty, @modelcontextprotocol/sdk, electron-vite
+Electron, React, TypeScript, xterm.js, node-pty, @modelcontextprotocol/sdk, react-markdown, electron-vite
