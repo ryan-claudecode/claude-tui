@@ -138,6 +138,42 @@ export class MissionService {
     return m
   }
 
+  /** Spawn (or reuse) a worker for a task, inject its prompt, mark in-progress. */
+  dispatch(missionId: string, taskId: string, prompt: string): { sessionId: string } | undefined {
+    const m = this.missions.get(missionId)
+    const task = m?.tasks.find((t) => t.id === taskId)
+    if (!m || !task) return undefined
+    const info = this.sessions.create(`${m.goal.slice(0, 20)} · ${task.title.slice(0, 20)}`, m.cwd)
+    this.sessions.write(info.id, `${prompt}\r`)
+    task.status = "in-progress"
+    task.assignedTo = info.id
+    task.attempts += 1
+    if (!m.workers.some((w) => w.sessionId === info.id)) {
+      m.workers.push({ sessionId: info.id, currentTaskId: taskId })
+    }
+    this.log(m, "worker", `Dispatched "${task.title}" to ${info.id}`)
+    this.persist(m)
+    return { sessionId: info.id }
+  }
+
+  /** Block until the task's worker goes idle; return its recent output. */
+  async await(
+    missionId: string,
+    taskId: string,
+    timeoutMs?: number,
+  ): Promise<{ idle: boolean; timedOut: boolean; output: string } | undefined> {
+    const m = this.missions.get(missionId)
+    const task = m?.tasks.find((t) => t.id === taskId)
+    if (!m || !task || !task.assignedTo) return undefined
+    const r = await this.sessions.waitForIdle(task.assignedTo, { timeoutMs })
+    const output = this.sessions.getOutput(task.assignedTo, 8000) ?? ""
+    if (r.idle) {
+      task.status = "review"
+      this.persist(m)
+    }
+    return { idle: r.idle, timedOut: r.timedOut, output }
+  }
+
   finish(id: string): Mission | undefined {
     const m = this.missions.get(id)
     if (!m) return undefined

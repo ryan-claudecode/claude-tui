@@ -74,3 +74,45 @@ describe("MissionService plan", () => {
     expect(svc.plan("nope", [{ title: "x" }])).toBeUndefined()
   })
 })
+
+describe("MissionService dispatch/await", () => {
+  it("dispatch creates a worker, injects prompt, marks in-progress", () => {
+    const writes: Array<{ id: string; data: string }> = []
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        write: (id, data) => writes.push({ id, data }),
+      }),
+      { dir },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "do thing" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    const res = svc.dispatch(m.id, taskId, "please do thing")!
+    expect(res.sessionId).toBe("w1")
+    const task = svc.get(m.id)!.tasks[0]
+    expect(task.status).toBe("in-progress")
+    expect(task.assignedTo).toBe("w1")
+    expect(task.attempts).toBe(1)
+    expect(svc.get(m.id)!.workers).toContainEqual({ sessionId: "w1", currentTaskId: taskId })
+    expect(writes).toEqual([{ id: "w1", data: "please do thing\r" }])
+  })
+
+  it("await returns worker output once idle", async () => {
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        waitForIdle: async () => ({ idle: true, timedOut: false }),
+        getOutput: () => "worker result text",
+      }),
+      { dir },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    const out = await svc.await(m.id, taskId)
+    expect(out).toEqual({ idle: true, timedOut: false, output: "worker result text" })
+    expect(svc.get(m.id)!.tasks[0].status).toBe("review")
+  })
+})
