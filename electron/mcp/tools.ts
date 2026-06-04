@@ -224,9 +224,9 @@ export function registerTools(
 
   server.tool(
     "show_panel",
-    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, or timeline). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress.",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, or git). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview.",
     {
-      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline"]).describe("Panel type"),
+      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git"]).describe("Panel type"),
       props: z.record(z.any()).describe("Panel-specific data"),
       position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
     },
