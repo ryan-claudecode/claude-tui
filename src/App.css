@@ -798,6 +798,94 @@ body {
 .diff-del .diff-marker { color: var(--red); }
 .diff-ctx { color: var(--text-1); }
 
+/* Interactive review: lines are clickable to build a review request. */
+.diff-body .diff-line { cursor: pointer; }
+.diff-body .diff-line:hover { box-shadow: inset 2px 0 0 var(--accent-dim); }
+.diff-selected {
+  background: var(--accent-soft) !important;
+  box-shadow: inset 2px 0 0 var(--accent) !important;
+}
+.diff-selected .diff-lineno { color: var(--accent-bright); }
+
+.diff-review-hint {
+  flex-shrink: 0;
+  padding: var(--s-2) var(--s-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-4);
+  user-select: none;
+}
+
+.diff-review {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border-top: 1px solid var(--border-strong);
+  background: linear-gradient(180deg, var(--accent-soft), transparent);
+}
+
+.diff-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.diff-review-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-bright);
+  letter-spacing: -0.1px;
+}
+
+.diff-review-clear {
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.diff-review-clear:hover { color: var(--text-0); background: var(--border-subtle); }
+
+.diff-review-note {
+  width: 100%;
+  min-height: 56px;
+  resize: vertical;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--s-2);
+  color: var(--text-0);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.diff-review-note:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.diff-review-copy {
+  align-self: flex-start;
+  background: var(--accent);
+  color: #06121f;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, transform 0.05s;
+}
+.diff-review-copy:hover { background: var(--accent-bright); box-shadow: 0 0 12px var(--accent-glow); }
+.diff-review-copy:active { transform: translateY(1px); }
+
 /* ============================================================
    Form panel
    ============================================================ */
