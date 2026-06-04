@@ -39,7 +39,8 @@ export default function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [workspaces, setWorkspaces] = useState<any[]>([])
-  const [splitId, setSplitId] = useState<string | null>(null)
+  const [splitLeft, setSplitLeft] = useState<string | null>(null)
+  const [splitRight, setSplitRight] = useState<string | null>(null)
   const [config, setConfig] = useState<any>(null)
 
   // Load workspaces and config on mount
@@ -95,11 +96,11 @@ export default function App() {
 
   const handleKillSessionById = useCallback(async (id: string) => {
     await window.api.killSession(id)
-    // If we killed the split pane session, close split
-    if (id === splitId) {
-      setSplitId(null)
+    if (id === splitLeft || id === splitRight) {
+      setSplitLeft(null)
+      setSplitRight(null)
     }
-  }, [splitId])
+  }, [splitLeft, splitRight])
 
   const handleRenameSession = useCallback(async (id: string, newName: string) => {
     await window.api.renameSession(id, newName)
@@ -136,12 +137,17 @@ export default function App() {
       } else if (e.ctrlKey && e.key === "\\") {
         e.preventDefault()
         e.stopPropagation()
-        // Toggle split: if split is active, close it. Otherwise split with next session.
-        if (splitId) {
-          setSplitId(null)
-        } else {
+        if (splitLeft) {
+          // Close split
+          setSplitLeft(null)
+          setSplitRight(null)
+        } else if (sessions.length >= 2 && activeId) {
+          // Open split: active session on left, next session on right
           const other = sessions.find(s => s.id !== activeId)
-          if (other) setSplitId(other.id)
+          if (other) {
+            setSplitLeft(activeId)
+            setSplitRight(other.id)
+          }
         }
       } else if (e.ctrlKey && e.key >= "1" && e.key <= "9") {
         e.preventDefault()
@@ -154,7 +160,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleKillSession, handleHandoff, sessions, splitId, activeId])
+  }, [handleNewSession, handleKillSession, handleHandoff, sessions, splitLeft, activeId])
 
   return (
     <div className="app">
@@ -172,17 +178,17 @@ export default function App() {
         <TabBar
           sessions={sessions}
           activeId={activeId}
-          splitId={splitId}
+          splitId={splitRight}
           onSelectSession={handleSelectSession}
           onKillSession={handleKillSessionById}
           onRenameSession={handleRenameSession}
         />
         <div className="terminal-container">
-          {splitId && activeId ? (
+          {splitLeft && splitRight ? (
             <SplitView
-              leftId={activeId}
-              rightId={splitId}
-              activeId={activeId}
+              leftId={splitLeft}
+              rightId={splitRight}
+              activeId={activeId ?? splitLeft}
               onSelectSession={handleSelectSession}
               theme={config?.theme}
               fontFamily={config?.fontFamily}

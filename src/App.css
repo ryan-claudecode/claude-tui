@@ -331,6 +331,11 @@ html, body, #root {
   min-width: 0;
 }
 
+/* Both split panes must be visible regardless of active state */
+.split-pane .terminal-pane.hidden {
+  visibility: visible;
+}
+
 .split-pane.focused {
   outline: 1px solid #58a6ff;
   outline-offset: -1px;

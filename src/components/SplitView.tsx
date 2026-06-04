@@ -1,3 +1,4 @@
+import { useCallback } from "react"
 import TerminalPane from "./TerminalPane"
 
 interface Props {
@@ -19,15 +20,18 @@ export default function SplitView({
   fontFamily,
   fontSize,
 }: Props) {
+  const handleLeftClick = useCallback(() => onSelectSession(leftId), [onSelectSession, leftId])
+  const handleRightClick = useCallback(() => onSelectSession(rightId), [onSelectSession, rightId])
+
   return (
     <div className="split-view">
       <div
         className={`split-pane ${activeId === leftId ? "focused" : ""}`}
-        onClick={() => onSelectSession(leftId)}
+        onMouseDown={handleLeftClick}
       >
         <TerminalPane
           sessionId={leftId}
-          active={true}
+          active={activeId === leftId}
           theme={theme}
           fontFamily={fontFamily}
           fontSize={fontSize}
@@ -36,11 +40,11 @@ export default function SplitView({
       <div className="split-divider" />
       <div
         className={`split-pane ${activeId === rightId ? "focused" : ""}`}
-        onClick={() => onSelectSession(rightId)}
+        onMouseDown={handleRightClick}
       >
         <TerminalPane
           sessionId={rightId}
-          active={true}
+          active={activeId === rightId}
           theme={theme}
           fontFamily={fontFamily}
           fontSize={fontSize}
