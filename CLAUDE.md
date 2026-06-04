@@ -47,6 +47,7 @@ Three layers — service layer is the core, everything else is a thin adapter on
 | `electron/services/panels.ts` | **PanelService** — rich UI panel state + form callbacks |
 | `electron/services/app.ts` | **AppService** — app-level ops (screenshot, app state, build) |
 | `electron/services/ui.ts` | **UiService** — bridges renderer-only view actions (focus mode, drawer, palette, etc.) to MCP by emitting `ui:*` events |
+| `electron/services/mission.ts` | **MissionService** — durable, on-disk orchestration missions + Supervisor loop (Conductor respawn, stalled-worker reaping, usage-limit pause/resume) |
 | `electron/mcp/server.ts` | MCP HTTP/SSE server lifecycle |
 | `electron/mcp/tools.ts` | MCP tool definitions — calls services |
 | `electron/config.ts` | Loads ~/.claude-tui/config.json |
@@ -229,6 +230,15 @@ When a feature lives purely in React state (no service), expose it through `UiSe
 2. **Preload listener** — add `onUiFoo` to `electron/preload.ts` (`ipcRenderer.on("ui:foo", ...)`, `?? undefined` so omitted = toggle).
 3. **MCP tool** — add `server.tool("foo", ...)` in `electron/mcp/tools.ts` calling `ui.setFoo(...)`.
 4. **Renderer wiring** — in `App.tsx`'s mount `useEffect`, register `window.api.onUiFoo(...)` to update React state, and add a `removeAllListeners("ui:foo")` to the cleanup. If the handler needs a fresh closure (like `export_session_log` does over `activeId`), stash it in a ref synced by its own effect.
+
+**Mission orchestration** (`MissionService`):
+The self-orchestration layer — a long-running goal driven by Claude but kept alive by code, so it survives context limits, usage limits, and restarts. Four roles:
+- **Mission** — durable JSON state persisted to `~/.claude-tui/missions/<id>.json` (goal, autonomy, status, `tasks[]`, `workers[]`, `eventLog[]`). The source of truth; lives on disk, **not** in a Claude context window.
+- **Conductor** — a Claude session that *is the brain*: loads the mission with `mission_status`, decomposes the goal, dispatches/reviews workers, commits, and loops until done. Stateless across restarts — a fresh Conductor resumes purely from `mission_status`.
+- **Supervisor** — a code loop (`tick()` every 5s, started in `ipc.ts`) that guarantees a live Conductor: (re)spawns it for any `running` mission, reaps workers idle past `workerStallMs` (10 min) and requeues their tasks, and detects usage-limit output to `mission_pause` with a `resumeAt` backoff, then auto-resumes once it passes. **Code guarantees continuity; Claude provides intelligence.**
+- **Workers** — Claude sessions spawned per task via `mission_dispatch`, awaited via `mission_await`.
+
+Tools: `mission_create` (status `planning`), `mission_plan` (set tasks → `running`), `mission_dispatch`/`mission_await`/`mission_resolve` (drive one task), `mission_status` (the resume entry point — omit `mission_id` for the most-recently-updated active mission), `mission_list`, `mission_log`, `mission_pause`/`mission_resume`, `mission_stop` (kills workers + conductor), `mission_finish`. The `show_panel` `mission` type renders a live dashboard. Autonomy (`hands-off`/`checkpoints`/`supervised`) is surfaced to the Conductor via its seed prompt; the Conductor enforces checkpoints with `show_form`. Replaces the old `scripts/overnight-run.sh`.
 
 ## Panel System
 

@@ -52,6 +52,7 @@ Tool groups (all prefixed mcp__claudetui__):
 - Utilities — JSON, CSV, regex, text, encode/hash, math, color, URL, and time helpers.
 - Self-verification — take_screenshot (capture the app window), get_app_state (assert on window/session state), notify (toast that surfaces even when the terminal isn't focused).
 - App UI control — drive the same view actions the user can: set_focus_mode (distraction-free), toggle_panel_drawer, open_command_palette, show_keyboard_shortcuts, open_history_search, export_session_log, get_config.
+- Mission orchestration — mission_create/status/list/plan/dispatch/await/resolve/log/pause/resume/stop/finish: run a durable, on-disk mission where you (or another Conductor session) decompose a goal, dispatch worker sessions, review results, and commit — surviving context/usage limits. If spawned as a Conductor, call mission_status first to load state and continue.
 
 Notes: tool schemas may be deferred — if a tool isn't loaded yet, search for it by exact name to load its schema before calling. Prefer these structured tools over shelling out (e.g. git_status over running \`git status\`). See CLAUDE.md for full per-tool detail and the panel prop schemas.`
 
