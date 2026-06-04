@@ -5,6 +5,7 @@ import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
 import type { NotificationService } from "../services/notifications"
+import type { GitService } from "../services/git"
 
 export function registerTools(
   server: McpServer,
@@ -13,7 +14,19 @@ export function registerTools(
   appService: AppService,
   panels: PanelService,
   notifications: NotificationService,
+  git: GitService,
 ) {
+  // Resolve a working directory for git ops: prefer the named session's cwd,
+  // fall back to the first open session, then the app's own cwd.
+  const resolveCwd = (sessionId?: string): string => {
+    const list = sessions.list()
+    if (sessionId) {
+      const match = list.find((s) => s.id === sessionId)
+      if (match) return match.cwd
+    }
+    return list[0]?.cwd ?? process.cwd()
+  }
+
   server.tool(
     "create_session",
     "Create a new Claude Code session in ClaudeTUI",
@@ -260,6 +273,64 @@ export function registerTools(
     async ({ message, level, title, timeout }) => {
       const notification = notifications.notify(message, level, title, timeout)
       return { content: [{ type: "text" as const, text: JSON.stringify(notification) }] }
+    },
+  )
+
+  // Git tools — structured, read-only repo state for the session's working dir
+
+  server.tool(
+    "git_status",
+    "Get structured git status (branch, ahead/behind, staged & unstaged changes) for a session's working directory. Use this to inspect repo state without parsing raw terminal output.",
+    {
+      session_id: z
+        .string()
+        .optional()
+        .describe("Session whose cwd to inspect (defaults to the first open session)"),
+    },
+    async ({ session_id }) => {
+      try {
+        const status = git.status(resolveCwd(session_id))
+        return { content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git status failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_log",
+    "Get recent commits (hash, author, date, subject) for a session's working directory.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to inspect"),
+      limit: z.number().optional().describe("Number of commits to return (default: 15)"),
+    },
+    async ({ session_id, limit }) => {
+      try {
+        const commits = git.log(resolveCwd(session_id), limit)
+        return { content: [{ type: "text" as const, text: JSON.stringify(commits, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git log failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_diff",
+    "Get the git diff for a session's working directory. Optionally scope to one file and/or staged changes.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to inspect"),
+      file: z.string().optional().describe("Limit the diff to a single file path"),
+      staged: z.boolean().optional().describe("Show staged changes (--staged) instead of unstaged"),
+    },
+    async ({ session_id, file, staged }) => {
+      try {
+        const diff = git.diff(resolveCwd(session_id), file, staged)
+        return {
+          content: [{ type: "text" as const, text: diff || "(no changes)" }],
+        }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git diff failed: ${e.message}` }] }
+      }
     },
   )
 }

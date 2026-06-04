@@ -5,6 +5,7 @@ import { WorkspaceService } from "./services/workspaces"
 import { AppService } from "./services/app"
 import { PanelService } from "./services/panels"
 import { NotificationService } from "./services/notifications"
+import { GitService } from "./services/git"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -13,6 +14,7 @@ export const workspaceService = new WorkspaceService(sessionService)
 export const appService = new AppService()
 export const panelService = new PanelService()
 export const notificationService = new NotificationService()
+export const gitService = new GitService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -38,6 +40,7 @@ export async function setupIpc(win: BrowserWindow) {
     appService,
     panelService,
     notificationService,
+    gitService,
   )
   sessionService.setMcpConfigPath(configPath)
 
