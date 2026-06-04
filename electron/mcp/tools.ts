@@ -10,6 +10,7 @@ import type { TemplateService } from "../services/templates"
 import type { TestRunnerService } from "../services/tests"
 import type { LayoutService } from "../services/layouts"
 import type { SnippetService } from "../services/snippets"
+import type { BroadcastService } from "../services/broadcast"
 
 export function registerTools(
   server: McpServer,
@@ -23,6 +24,7 @@ export function registerTools(
   tests: TestRunnerService,
   layouts: LayoutService,
   snippets: SnippetService,
+  broadcast: BroadcastService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -517,6 +519,28 @@ export function registerTools(
           { type: "text" as const, text: ok ? "Snippet deleted" : `Snippet not found: ${name}` },
         ],
       }
+    },
+  )
+
+  // Broadcast — fan one input out to many sessions at once (synchronize panes)
+
+  server.tool(
+    "broadcast_input",
+    "Send the same input to multiple sessions at once (the 'synchronize panes' move). By default it goes to every open session; pass session_ids to scope it to a subset. Set submit=true to press Enter and actually run/send the text, or leave it false to just stage the text in each prompt. Returns which sessions received it.",
+    {
+      content: z.string().describe("Text to send to each session"),
+      session_ids: z
+        .array(z.string())
+        .optional()
+        .describe("Sessions to target (defaults to all open sessions)"),
+      submit: z
+        .boolean()
+        .optional()
+        .describe("Append Enter to submit the input instead of just staging it (default: false)"),
+    },
+    async ({ content, session_ids, submit }) => {
+      const result = broadcast.broadcast(content, session_ids, submit)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
 }

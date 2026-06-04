@@ -11,6 +11,7 @@ import type { TemplateService } from "../services/templates"
 import type { TestRunnerService } from "../services/tests"
 import type { LayoutService } from "../services/layouts"
 import type { SnippetService } from "../services/snippets"
+import type { BroadcastService } from "../services/broadcast"
 import { registerTools } from "./tools"
 
 export async function startMcpServer(
@@ -24,6 +25,7 @@ export async function startMcpServer(
   testRunnerService: TestRunnerService,
   layoutService: LayoutService,
   snippetService: SnippetService,
+  broadcastService: BroadcastService,
 ): Promise<{ port: number; configPath: string }> {
   const server = new McpServer({
     name: "claudetui",
@@ -42,6 +44,7 @@ export async function startMcpServer(
     testRunnerService,
     layoutService,
     snippetService,
+    broadcastService,
   )
 
   // Create HTTP server with SSE transport

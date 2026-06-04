@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld("api", {
   submitForm: (id: string, data: Record<string, any>) =>
     ipcRenderer.send("panel:form-submit", id, data),
 
+  // Broadcast -- send one input to many sessions at once
+  broadcastInput: (content: string, sessionIds?: string[], submit?: boolean) =>
+    ipcRenderer.invoke("broadcast:send", content, sessionIds, submit),
+
   // Notifications
   listNotifications: () => ipcRenderer.invoke("notification:list"),
   dismissNotification: (id: string) => ipcRenderer.invoke("notification:dismiss", id),

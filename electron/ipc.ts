@@ -10,6 +10,7 @@ import { TemplateService } from "./services/templates"
 import { TestRunnerService } from "./services/tests"
 import { LayoutService } from "./services/layouts"
 import { SnippetService } from "./services/snippets"
+import { BroadcastService } from "./services/broadcast"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -23,6 +24,7 @@ export const templateService = new TemplateService(sessionService)
 export const testRunnerService = new TestRunnerService()
 export const layoutService = new LayoutService(sessionService)
 export const snippetService = new SnippetService(sessionService)
+export const broadcastService = new BroadcastService(sessionService)
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -53,6 +55,7 @@ export async function setupIpc(win: BrowserWindow) {
     testRunnerService,
     layoutService,
     snippetService,
+    broadcastService,
   )
   sessionService.setMcpConfigPath(configPath)
 
@@ -132,6 +135,13 @@ export async function setupIpc(win: BrowserWindow) {
     snippetService.send(name, sessionId),
   )
   ipcMain.handle("snippet:delete", (_e, name: string) => snippetService.delete(name))
+
+  // Broadcast IPC -- fan one input out to many sessions at once
+  ipcMain.handle(
+    "broadcast:send",
+    (_e, content: string, sessionIds?: string[], submit?: boolean) =>
+      broadcastService.broadcast(content, sessionIds, submit),
+  )
 
   // Notification IPC
   ipcMain.handle("notification:list", () => notificationService.list())
