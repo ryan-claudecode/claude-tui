@@ -185,6 +185,9 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("worksession:context", (_e, sessionId: string) =>
     workSessionService.getContext(sessionId),
   )
+  ipcMain.handle("worksession:overview", (_e, sessionId: string) =>
+    workSessionService.getOverview(sessionId),
+  )
 
   // Workspace IPC
   ipcMain.handle("workspace:list", () =>

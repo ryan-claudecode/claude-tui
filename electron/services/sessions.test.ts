@@ -432,6 +432,26 @@ describe("SessionService effective activity", () => {
   })
 })
 
+describe("SessionService.getOverview", () => {
+  it("returns structured summary, notes, ruled-out pairs, terminals", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const { session } = svc.openSession("/repo")
+    svc.setSummary(session.id, "Fixing the auth race")
+    const n1 = svc.addNote(session.id, "race is in spawnInto")!
+    svc.addNote(session.id, "actually it's in reconcile", { corrects: n1.id })
+
+    const ov = svc.getOverview(session.id)!
+    expect(ov.summary).toBe("Fixing the auth race")
+    expect(ov.notes.map((n) => n.text)).toContain("actually it's in reconcile")
+    expect(ov.ruledOut[0].text).toBe("race is in spawnInto")
+    expect(ov.ruledOut[0].correction).toBe("actually it's in reconcile")
+    expect(ov.terminals.length).toBe(1)
+    expect(ov.provisionalFindings).toEqual([])
+  })
+})
+
 const tick = () => new Promise((r) => setTimeout(r, 5))
 
 describe("SessionService idle-flush", () => {

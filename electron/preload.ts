@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("api", {
   killWorkSession: (sessionId: string) => ipcRenderer.invoke("worksession:kill", sessionId),
   getWorkSessionContext: (sessionId: string) =>
     ipcRenderer.invoke("worksession:context", sessionId),
+  getSessionOverview: (sessionId: string) =>
+    ipcRenderer.invoke("worksession:overview", sessionId),
 
   // Workspace management
   getWorkspaces: () => ipcRenderer.invoke("workspace:list"),

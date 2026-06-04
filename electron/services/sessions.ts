@@ -37,6 +37,17 @@ export interface WorkSession {
   updatedAt: number
 }
 
+export interface SessionOverview {
+  id: string
+  name: string
+  status: "active" | "stopped"
+  summary: string
+  notes: Note[]
+  ruledOut: Array<{ id: string; text: string; correction?: string }>
+  provisionalFindings: Note[]
+  terminals: Array<TerminalRef & { activity?: string }>
+}
+
 export interface SessionServiceOpts {
   dir?: string
   now?: () => number
@@ -381,6 +392,28 @@ export class SessionService {
     s.summary = summary
     this.summaryDirty.delete(sessionId)
     this.persist(s)
+  }
+
+  getOverview(sessionId: string): SessionOverview | undefined {
+    const s = this.sessions.get(sessionId)
+    if (!s) return undefined
+    const ruledOut = s.notes
+      .filter((n) => n.status === "superseded")
+      .map((n) => ({
+        id: n.id,
+        text: n.text,
+        correction: s.notes.find((c) => c.id === n.supersededBy)?.text,
+      }))
+    return {
+      id: s.id,
+      name: s.name,
+      status: s.status,
+      summary: s.summary,
+      notes: s.notes.filter((n) => n.status === "active"),
+      ruledOut,
+      provisionalFindings: s.provisionalFindings,
+      terminals: s.terminals.map((t) => ({ ...t, activity: this.effectiveActivity(s.id, t.id) })),
+    }
   }
 
   /** The primer a terminal pulls: summary, then active notes, then ruled-out (with corrections). */
