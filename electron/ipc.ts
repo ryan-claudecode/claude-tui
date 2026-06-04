@@ -1,9 +1,10 @@
 import { app, ipcMain, BrowserWindow } from "electron"
 import * as pty from "node-pty"
 import { existsSync } from "fs"
+import { spawn } from "child_process"
 import { join } from "path"
 import { discoverWorkspaces, type Workspace } from "./workspace/discovery"
-import { loadConfig } from "./config"
+import { loadConfig, type TuiConfig } from "./config"
 
 interface Session {
   id: string
@@ -17,6 +18,7 @@ const sessions: Map<string, Session> = new Map()
 let nextId = 1
 let workspaces: Workspace[] = []
 let mainWin: BrowserWindow | null = null
+let cachedConfig: TuiConfig | null = null
 
 function sendToRenderer(channel: string, ...args: unknown[]) {
   if (mainWin && !mainWin.isDestroyed()) {
@@ -65,9 +67,11 @@ function createSessionInternal(name: string, cwd: string): { id: string; name: s
   const sessionName = name || id
   const sessionCwd = cwd || process.cwd()
 
-  const shell = process.platform === "win32" ? "powershell.exe" : "bash"
+  const config = cachedConfig ?? loadConfig()
+  const command = config.defaultCommand ?? "claude"
+  const args = config.defaultArgs ?? ["--dangerously-skip-permissions"]
 
-  const proc = pty.spawn(shell, [], {
+  const proc = pty.spawn(command, args, {
     name: "xterm-256color",
     cols: 120,
     rows: 30,
@@ -97,9 +101,9 @@ function createSessionInternal(name: string, cwd: string): { id: string; name: s
 export function setupIpc(win: BrowserWindow) {
   mainWin = win
 
-  // Load workspaces
-  const config = loadConfig()
-  workspaces = discoverWorkspaces(config.workspaceScanPaths)
+  // Load config and workspaces
+  cachedConfig = loadConfig()
+  workspaces = discoverWorkspaces(cachedConfig.workspaceScanPaths)
 
   // Create session
   ipcMain.handle("session:create", (_e, name: string, cwd: string) => {
@@ -157,6 +161,19 @@ export function setupIpc(win: BrowserWindow) {
     const ws = workspaces[index]
     if (!ws) return null
 
+    // Open editors for repos marked open_on_boot
+    for (const repo of ws.repos) {
+      if (repo.open_on_boot) {
+        const editorRepoPath = repo.path.replace(/^~/, process.env.HOME ?? process.env.USERPROFILE ?? "")
+        const editorCmd = ws.editor?.toLowerCase() ?? "code"
+        spawn(editorCmd, ["--new-window", editorRepoPath], {
+          detached: true,
+          stdio: "ignore",
+        }).unref()
+      }
+    }
+
+    // Create Claude sessions for each repo
     const created = []
     for (const repo of ws.repos) {
       const repoPath = repo.path.replace(/^~/, process.env.HOME ?? process.env.USERPROFILE ?? "")
@@ -164,6 +181,19 @@ export function setupIpc(win: BrowserWindow) {
       created.push(info)
     }
     return { workspace: ws.name, sessions: created }
+  })
+
+  // Rename session
+  ipcMain.handle("session:rename", (_e, id: string, newName: string) => {
+    const session = sessions.get(id)
+    if (!session) return false
+    session.name = newName
+    return true
+  })
+
+  // Get config (for renderer to read theme, etc.)
+  ipcMain.handle("config:get", () => {
+    return cachedConfig ?? loadConfig()
   })
 
   // Handoff

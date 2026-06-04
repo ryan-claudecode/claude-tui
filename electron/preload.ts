@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld("api", {
   getWorkspaces: () => ipcRenderer.invoke("workspace:list"),
   activateWorkspace: (index: number) => ipcRenderer.invoke("workspace:activate", index),
 
+  // Session rename
+  renameSession: (id: string, newName: string) => ipcRenderer.invoke("session:rename", id, newName),
+
+  // Config
+  getConfig: () => ipcRenderer.invoke("config:get"),
+
   // Handoff
   triggerHandoff: (id: string) => ipcRenderer.invoke("session:handoff", id),
 
