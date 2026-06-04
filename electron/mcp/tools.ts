@@ -352,6 +352,93 @@ export function registerTools(
     },
   )
 
+  server.tool(
+    "git_stage",
+    "Stage changes in a session's working directory. Pass specific file paths, or omit `files` to stage everything (git add -A). Returns the refreshed git status.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+      files: z.array(z.string()).optional().describe("File paths to stage (omit to stage all)"),
+    },
+    async ({ session_id, files }) => {
+      try {
+        const status = git.stage(resolveCwd(session_id), files)
+        return { content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git stage failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_unstage",
+    "Unstage changes in a session's working directory (keeps working-tree edits). Pass specific file paths, or omit `files` to unstage everything. Returns the refreshed git status.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+      files: z.array(z.string()).optional().describe("File paths to unstage (omit to unstage all)"),
+    },
+    async ({ session_id, files }) => {
+      try {
+        const status = git.unstage(resolveCwd(session_id), files)
+        return { content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git unstage failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_commit",
+    "Create a commit from staged changes in a session's working directory. Set `all` to also stage tracked modifications first (git commit -a). Returns the new commit and refreshed status.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+      message: z.string().describe("Commit message"),
+      all: z.boolean().optional().describe("Stage all tracked modifications before committing (-a)"),
+    },
+    async ({ session_id, message, all }) => {
+      try {
+        const result = git.commit(resolveCwd(session_id), message, all)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git commit failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_branch",
+    "Create a new branch in a session's working directory (checks it out by default). Returns the refreshed git status.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+      name: z.string().describe("New branch name"),
+      checkout: z.boolean().optional().describe("Check out the new branch (default: true)"),
+    },
+    async ({ session_id, name, checkout }) => {
+      try {
+        const status = git.createBranch(resolveCwd(session_id), name, checkout ?? true)
+        return { content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git branch failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_checkout",
+    "Switch to an existing branch or ref in a session's working directory. Returns the refreshed git status.",
+    {
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+      ref: z.string().describe("Branch name or ref to check out"),
+    },
+    async ({ session_id, ref }) => {
+      try {
+        const status = git.checkout(resolveCwd(session_id), ref)
+        return { content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git checkout failed: ${e.message}` }] }
+      }
+    },
+  )
+
   // Session template tools — spawn purpose-built sessions seeded with a prompt
 
   server.tool(

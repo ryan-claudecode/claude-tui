@@ -25,12 +25,14 @@ export interface GitCommit {
 }
 
 /**
- * GitService — structured, read-only git queries scoped to a working directory.
+ * GitService — structured git queries and operations scoped to a working dir.
  *
  * Gives Claude machine-readable repo state (branch, ahead/behind, staged vs.
  * unstaged changes, recent log, diffs) instead of forcing it to parse raw
- * terminal output. Read-only by design: mutating operations (commit/push) stay
- * the user's responsibility and Claude can still run them in the terminal.
+ * terminal output. Also exposes the common write operations (stage, unstage,
+ * commit, branch, checkout) so Claude can drive a review-and-commit flow from
+ * panels/tools instead of typing into the terminal. Mutating ops return the
+ * refreshed GitStatus so the caller sees the result immediately.
  */
 export class GitService {
   private run(cwd: string, args: string[]): string {
@@ -107,5 +109,45 @@ export class GitService {
     if (staged) args.push("--staged")
     if (file) args.push("--", file)
     return this.run(cwd, args)
+  }
+
+  /** Stage specific files, or everything (`git add -A`) when none are given. */
+  stage(cwd: string, files?: string[]): GitStatus {
+    if (files && files.length) this.run(cwd, ["add", "--", ...files])
+    else this.run(cwd, ["add", "-A"])
+    return this.status(cwd)
+  }
+
+  /** Unstage specific files, or everything, leaving working-tree changes intact. */
+  unstage(cwd: string, files?: string[]): GitStatus {
+    const args = ["restore", "--staged"]
+    if (files && files.length) args.push("--", ...files)
+    else args.push(".")
+    this.run(cwd, args)
+    return this.status(cwd)
+  }
+
+  /**
+   * Commit staged changes. When `all` is true, stages all tracked modifications
+   * first (`git commit -a`). Returns the new HEAD commit plus refreshed status.
+   */
+  commit(cwd: string, message: string, all = false): { commit: GitCommit; status: GitStatus } {
+    const args = ["commit", "-m", message]
+    if (all) args.push("-a")
+    this.run(cwd, args)
+    const commit = this.log(cwd, 1)[0]
+    return { commit, status: this.status(cwd) }
+  }
+
+  /** Create a branch (optionally checking it out) and return refreshed status. */
+  createBranch(cwd: string, name: string, checkout = true): GitStatus {
+    this.run(cwd, checkout ? ["checkout", "-b", name] : ["branch", name])
+    return this.status(cwd)
+  }
+
+  /** Switch to an existing branch/ref and return refreshed status. */
+  checkout(cwd: string, ref: string): GitStatus {
+    this.run(cwd, ["checkout", ref])
+    return this.status(cwd)
   }
 }
