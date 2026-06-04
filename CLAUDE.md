@@ -240,6 +240,14 @@ The self-orchestration layer — a long-running goal driven by Claude but kept a
 
 Tools: `mission_create` (status `planning`), `mission_plan` (set tasks → `running`), `mission_dispatch`/`mission_await`/`mission_resolve` (drive one task), `mission_status` (the resume entry point — omit `mission_id` for the most-recently-updated active mission), `mission_list`, `mission_log`, `mission_pause`/`mission_resume`, `mission_stop` (kills workers + conductor), `mission_finish`. The `show_panel` `mission` type renders a live dashboard. Autonomy (`hands-off`/`checkpoints`/`supervised`) is surfaced to the Conductor via its seed prompt; the Conductor enforces checkpoints with `show_form`. Replaces the old `scripts/overnight-run.sh`.
 
+**Work sessions / context engine** (`SessionService` in `electron/services/sessions.ts` — the durable *container*):
+A two-tier model sits beneath the terminals: a **work session** is a durable container (persisted to `~/.claude-tui/sessions/<id>.json`) that groups many **terminals** (runtime PTYs owned by `TerminalService` in `terminals.ts`) and accumulates knowledge that outlives any single terminal. Tools: `create_work_session` / `list_work_sessions` / `work_session_status`, `register_terminal`, `set_terminal_activity`, `session_note` (pass `corrects` to supersede a wrong note), `set_session_summary`, `get_session_context` (the primer a fresh terminal reads to inherit summary + findings + ruled-out). Spawned terminals bind identity via the SSE URL (`?sid=&tid=`) so these tools default to the caller's own ids. Resume-fidelity features layered on top:
+- **Conversation resume** — when a terminal spawns, `SessionService` watches the Claude transcript dir (`~/.claude/projects/<encoded-cwd>/`) and records the terminal's `ccConversationId` (via a `convo` event from `TerminalService`). On app restart, clicking a dead terminal ref calls `reopenTerminal`, which passes `--resume <id>` so Claude lands back in the same chat. If the transcript is gone, it falls back to a fresh primed terminal that still inherits state via `get_session_context`.
+- **Idle-flush summary** — when a terminal goes idle with unsaved findings (`summaryDirty`), after a grace period it gets a bracketed-paste prompt asking it to refresh the summary via `set_session_summary` (debounced to ≥60s between flushes), so a fresh terminal inherits the latest progress.
+- **Parsed-activity fallback** — `effectiveActivity` prefers a terminal's fresh self-reported `set_terminal_activity` (<20s old); otherwise it parses the last tool-call line (`● Edit(...)`) from terminal output, so heads-down terminals still show live activity in the sidebar instead of going stale.
+- **Session Overview panel** — the `session-overview` `show_panel` type (and `getOverview`) renders a bird's-eye view of a session: summary, active findings, ruled-out (with corrections), provisional findings (observer seam), and terminals with effective activity. The ⊕ button on a session in the sidebar opens it.
+- **Ctrl+H handoff** — "retire & continue": `handoffTerminal` force-flushes the summary, spawns a fresh terminal in the same session, and retires the old one — useful when a terminal's context fills up.
+
 ## Panel System
 
 Claude renders rich UI alongside terminals via panels. State flows:
@@ -293,7 +301,7 @@ Uses electron-vite. Config in `electron.vite.config.ts`.
 |----------|--------|
 | Ctrl+N | New session |
 | Ctrl+K | Kill active session |
-| Ctrl+H | Trigger handoff |
+| Ctrl+H | Retire & continue (handoff) — flush summary, fresh terminal, retire old |
 | Ctrl+\ | Toggle split panes |
 | Ctrl+1-9 | Switch to session by index |
 | Ctrl+P | Toggle (collapse/restore) the panel drawer |
