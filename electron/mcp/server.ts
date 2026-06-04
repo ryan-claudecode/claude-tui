@@ -30,6 +30,7 @@ import type { TimeService } from "../services/time"
 import type { CsvService } from "../services/csv"
 import type { RegexService } from "../services/regex"
 import type { TextService } from "../services/text"
+import type { ColorService } from "../services/color"
 import { registerTools } from "./tools"
 
 export async function startMcpServer(
@@ -62,6 +63,7 @@ export async function startMcpServer(
   csvService: CsvService,
   regexService: RegexService,
   textService: TextService,
+  colorService: ColorService,
 ): Promise<{ port: number; configPath: string }> {
   const server = new McpServer({
     name: "claudetui",
@@ -99,6 +101,7 @@ export async function startMcpServer(
     csvService,
     regexService,
     textService,
+    colorService,
   )
 
   // Create HTTP server with SSE transport

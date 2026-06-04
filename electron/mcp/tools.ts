@@ -29,6 +29,7 @@ import type { TimeService } from "../services/time"
 import type { CsvService } from "../services/csv"
 import type { RegexService } from "../services/regex"
 import type { TextService } from "../services/text"
+import type { ColorService } from "../services/color"
 import { isAbsolute, join } from "path"
 
 export function registerTools(
@@ -62,6 +63,7 @@ export function registerTools(
   csv: CsvService,
   regex: RegexService,
   text: TextService,
+  color: ColorService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -2004,6 +2006,18 @@ export function registerTools(
     },
     async ({ text: input, op, case_insensitive }) => {
       const result = text.lines(input, op, { caseInsensitive: case_insensitive })
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "color_convert",
+    "Convert a color between formats — the no-devtools color picker. Accepts hex (#rgb/#rgba/#rrggbb/#rrggbbaa), rgb()/rgba(), or hsl()/hsla() and returns it in all of them at once: { hex, rgb, hsl, rgbString, hslString }. Throws on an unrecognized notation.",
+    {
+      input: z.string().describe("A color: hex, rgb()/rgba(), or hsl()/hsla()"),
+    },
+    async ({ input }) => {
+      const result = color.convert(input)
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
