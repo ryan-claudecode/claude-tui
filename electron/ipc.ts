@@ -13,6 +13,7 @@ import { SnippetService } from "./services/snippets"
 import { BroadcastService } from "./services/broadcast"
 import { CommandService } from "./services/commands"
 import { ClipboardService } from "./services/clipboard"
+import { ShellService } from "./services/shell"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -29,6 +30,7 @@ export const snippetService = new SnippetService(sessionService)
 export const broadcastService = new BroadcastService(sessionService)
 export const commandService = new CommandService()
 export const clipboardService = new ClipboardService()
+export const shellService = new ShellService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -62,6 +64,7 @@ export async function setupIpc(win: BrowserWindow) {
     broadcastService,
     commandService,
     clipboardService,
+    shellService,
   )
   sessionService.setMcpConfigPath(configPath)
 

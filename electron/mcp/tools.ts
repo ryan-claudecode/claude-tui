@@ -13,6 +13,7 @@ import type { SnippetService } from "../services/snippets"
 import type { BroadcastService } from "../services/broadcast"
 import type { CommandService } from "../services/commands"
 import type { ClipboardService } from "../services/clipboard"
+import type { ShellService } from "../services/shell"
 
 export function registerTools(
   server: McpServer,
@@ -29,6 +30,7 @@ export function registerTools(
   broadcast: BroadcastService,
   commands: CommandService,
   clipboard: ClipboardService,
+  shellService: ShellService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -707,6 +709,39 @@ export function registerTools(
           },
         ],
       }
+    },
+  )
+
+  // Shell — hand a URL or file off to the user's operating system
+
+  server.tool(
+    "open_external",
+    "Open a URL in the user's default browser (or other default external app for the scheme). Use this to pop open a localhost dev server you just started, documentation, or any link — instead of asking the user to copy/paste it.",
+    {
+      url: z.string().describe("URL to open, e.g. 'http://localhost:5173' or 'https://...'"),
+    },
+    async ({ url }) => {
+      const result = await shellService.openExternal(url)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: result.ok ? `Opened ${url}` : `Failed to open ${url}: ${result.error}`,
+          },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "reveal_path",
+    "Reveal a file or folder in the user's OS file manager (Explorer/Finder), selecting it. Use this to show the user where a file you created or modified lives on disk.",
+    {
+      path: z.string().describe("Absolute path to the file or folder to reveal"),
+    },
+    async ({ path }) => {
+      shellService.revealPath(path)
+      return { content: [{ type: "text" as const, text: `Revealed ${path}` }] }
     },
   )
 }
