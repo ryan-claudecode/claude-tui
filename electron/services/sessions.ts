@@ -8,6 +8,10 @@ export interface TerminalRef {
   cwd: string
   ccConversationId?: string
   lastState: "active" | "idle" | "dead"
+  /** Rich-presence "what this terminal is doing now" line (Claude self-reports it). */
+  activity?: string
+  /** Epoch ms when `activity` was last set. */
+  activityAt?: number
 }
 
 export interface Note {
@@ -68,6 +72,14 @@ export class SessionService {
   get(id: string): WorkSession | undefined { return this.sessions.get(id) }
   list(): WorkSession[] { return [...this.sessions.values()] }
 
+  /** Lookup by id; with no id, the most-recently-updated *active* session (resume entry point). */
+  status(id?: string): WorkSession | undefined {
+    if (id) return this.sessions.get(id)
+    return [...this.sessions.values()]
+      .filter((s) => s.status === "active")
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+  }
+
   load(): void {
     let files: string[]
     try { files = readdirSync(this.dir) } catch { return }
@@ -102,6 +114,25 @@ export class SessionService {
     t.name = name
     // Session inherits its name from the FIRST terminal while still a placeholder.
     if (s.name === "Untitled session" && s.terminals[0]?.id === terminalId) s.name = name
+    this.persist(s)
+  }
+
+  setTerminalActivity(sessionId: string, terminalId: string, activity: string): void {
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    const t = s.terminals.find((x) => x.id === terminalId)
+    if (!t) return
+    t.activity = activity
+    t.activityAt = this.now()
+    this.persist(s)
+  }
+
+  setTerminalState(sessionId: string, terminalId: string, state: "active" | "idle" | "dead"): void {
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    const t = s.terminals.find((x) => x.id === terminalId)
+    if (!t) return
+    t.lastState = state
     this.persist(s)
   }
 

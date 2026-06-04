@@ -162,3 +162,66 @@ describe("SessionService.getContext", () => {
     expect(svc.getContext(s.id)!).not.toContain("Ruled out")
   })
 })
+
+describe("SessionService terminal activity & state", () => {
+  it("setTerminalActivity sets the rich-presence line + timestamp and persists", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "idle" })
+    svc.setTerminalActivity(s.id, "t1", "running the test suite")
+    const t = svc.get(s.id)!.terminals[0]
+    expect(t.activity).toBe("running the test suite")
+    expect(t.activityAt).toBe(1000)
+    // persisted
+    const stored = JSON.parse(readFileSync(join(dir, `${s.id}.json`), "utf-8"))
+    expect(stored.terminals[0].activity).toBe("running the test suite")
+  })
+
+  it("setTerminalActivity is a no-op for unknown session/terminal", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    expect(() => svc.setTerminalActivity(s.id, "nope", "x")).not.toThrow()
+    expect(() => svc.setTerminalActivity("nope", "t1", "x")).not.toThrow()
+  })
+
+  it("setTerminalState updates lastState (drives deriveStatus) and persists", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "idle" })
+    expect(svc.deriveStatus(s.id)).toBe("Idle")
+    svc.setTerminalState(s.id, "t1", "active")
+    expect(svc.get(s.id)!.terminals[0].lastState).toBe("active")
+    expect(svc.deriveStatus(s.id)).toBe("1 Terminal Working")
+  })
+})
+
+describe("SessionService.status", () => {
+  it("returns the session by id when given one", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    expect(svc.status(s.id)!.id).toBe(s.id)
+  })
+
+  it("returns the most-recently-updated active session when id omitted", () => {
+    let t = 1000
+    const svc = new SessionService({ dir, now: () => t })
+    const a = svc.create()
+    t = 2000
+    const b = svc.create()
+    // touch a so it becomes most-recent again
+    t = 3000
+    svc.setSummary(a.id, "newer")
+    expect(svc.status()!.id).toBe(a.id)
+    // stopping a should make b the most-recent active
+    t = 4000
+    svc.setStatus(a.id, "stopped")
+    expect(svc.status()!.id).toBe(b.id)
+  })
+
+  it("returns undefined when there are no active sessions", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    svc.setStatus(s.id, "stopped")
+    expect(svc.status()).toBeUndefined()
+  })
+})
