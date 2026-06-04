@@ -214,8 +214,14 @@ export class TerminalService {
   }
 
   create(name?: string, cwd?: string, sessionId?: string): TerminalInfo {
-    const id = `session-${this.nextId++}`
-    const sessionName = name || id
+    // Unique, collision-proof id. Must NOT be a resettable counter: nextId
+    // resets to 1 on every app restart, so a counter-based id collides with
+    // terminal refs persisted by prior runs — two work sessions would then
+    // share an id and reconcile() would fold one terminal's state into the
+    // wrong session (the shared-green-dot bug). The display name keeps the
+    // friendly per-run sequence.
+    const id = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const sessionName = name || `session-${this.nextId++}`
     const sessionCwd = cwd || process.cwd()
 
     const args = [...this.defaultArgs]
