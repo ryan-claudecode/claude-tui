@@ -27,6 +27,8 @@ declare global {
       onSessionData: (callback: (id: string, data: string) => void) => void
       onSessionExit: (callback: (id: string) => void) => void
       onSessionCreated: (callback: (session: any) => void) => void
+      onSessionState: (callback: (id: string, state: string) => void) => void
+      getSessionActivity: () => Promise<any[]>
       onSplitSet: (callback: (leftId: string, rightId: string) => void) => void
       onSplitClose: (callback: () => void) => void
       renameSession: (id: string, newName: string) => Promise<boolean>
@@ -103,6 +105,13 @@ export default function App() {
       })
     })
 
+    // Live activity state (active = working, idle = waiting for input)
+    window.api.onSessionState((id, state) => {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, state } : s))
+      )
+    })
+
     // Split pane events from main process (triggered by MCP tools)
     window.api.onSplitSet((leftId, rightId) => {
       setSplitLeft(leftId)
@@ -136,6 +145,7 @@ export default function App() {
     return () => {
       window.api.removeAllListeners("session:created")
       window.api.removeAllListeners("session:exit")
+      window.api.removeAllListeners("session:state")
       window.api.removeAllListeners("split:set")
       window.api.removeAllListeners("split:close")
       window.api.removeAllListeners("panel:show")
