@@ -13,6 +13,19 @@ contextBridge.exposeInMainWorld("api", {
   searchSessionOutput: (query: string, sessionId?: string, limit?: number) =>
     ipcRenderer.invoke("session:search-output", query, sessionId, limit),
 
+  // Work-session (container) management -- the durable session tier above terminals
+  listWorkSessions: () => ipcRenderer.invoke("worksession:list"),
+  openWorkSession: (cwd?: string) => ipcRenderer.invoke("worksession:open", cwd),
+  addTerminal: (sessionId: string, cwd?: string) =>
+    ipcRenderer.invoke("worksession:add-terminal", sessionId, cwd),
+  reopenTerminal: (sessionId: string, terminalId: string) =>
+    ipcRenderer.invoke("worksession:reopen-terminal", sessionId, terminalId),
+  closeTerminal: (sessionId: string, terminalId: string) =>
+    ipcRenderer.invoke("worksession:close-terminal", sessionId, terminalId),
+  killWorkSession: (sessionId: string) => ipcRenderer.invoke("worksession:kill", sessionId),
+  getWorkSessionContext: (sessionId: string) =>
+    ipcRenderer.invoke("worksession:context", sessionId),
+
   // Workspace management
   getWorkspaces: () => ipcRenderer.invoke("workspace:list"),
   activateWorkspace: (index: number) => ipcRenderer.invoke("workspace:activate", index),
@@ -77,6 +90,12 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("session:state", (_e, id, state) => callback(id, state)),
   onSessionRenamed: (callback: (id: string, newName: string) => void) =>
     ipcRenderer.on("session:renamed", (_e, id, newName) => callback(id, newName)),
+
+  // Work-session (container) update events from main
+  onWorkSessionUpdated: (callback: (session: any) => void) =>
+    ipcRenderer.on("worksession:updated", (_e, session) => callback(session)),
+  onWorkSessionRemoved: (callback: (id: string) => void) =>
+    ipcRenderer.on("worksession:removed", (_e, id) => callback(id)),
 
   // Session focus event from main (triggered by the focus_session MCP tool)
   onSessionFocus: (callback: (id: string) => void) =>
