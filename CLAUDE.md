@@ -176,7 +176,7 @@ Additional tool groups:
 
 **Git** (`GitService`):
 All tools resolve a working dir from `session_id` (falls back to the first open session, then the app cwd) and return structured JSON — no parsing raw terminal output.
-- *Read:* `git_status` (branch, ahead/behind, staged vs. unstaged changes), `git_log` (recent commits), `git_diff` (optionally scoped to one file and/or `--staged`).
+- *Read:* `git_status` (branch, ahead/behind, staged vs. unstaged changes), `git_log` (recent commits), `git_diff` (optionally scoped to one file and/or `--staged`), `git_show` (drill into a single commit/`ref` — full metadata, the `--stat` summary, and the patch; defaults to HEAD).
 - *Write:* `git_stage` / `git_unstage` (specific files or all), `git_commit` (`all` flag = `commit -a`; returns the new commit), `git_branch` (create + checkout), `git_checkout` (switch ref). Each returns the refreshed status so Claude sees the result immediately.
 - *Remote/stash:* `git_push` (`--porcelain`), `git_pull` (`--ff-only`), `git_stash` / `git_stash_pop` / `git_stash_list`.
 
@@ -189,6 +189,7 @@ All tools resolve a working dir from `session_id` (same fallback as Git) and ret
 Structured read/write scoped to a session's working dir (relative paths resolve against it; absolute paths allowed). The no-shell counterpart to `run_command` for file access; pairs with the file-search tools.
 - `read_file` — read a file (optionally a 1-based inclusive `start_line`/`end_line` slice); returns the slice plus `totalLines` for paging. Refuses files > 2MB.
 - `write_file` — write content to a file, creating parent dirs; overwrites if present. Returns resolved path, bytes written, and whether it was newly `created`.
+- `diff_files` — open the interactive (review-enabled) diff panel comparing two files: `old_path` + `new_path` (two files on disk), `old_path` + `new_content` (preview a proposed rewrite), or just `new_path`/`new_content` (show as all additions). Unlike `git_diff` (tracked working-tree changes only) this compares any files. Reads via `FileService`, renders via the shared `DiffPanel` (so users can select hunks and send a review request).
 
 **File editing** (`EditService`):
 Surgical, in-place edits scoped to a session's working dir — the middle ground between `read_file` (whole-file read) and `write_file` (whole-file overwrite), so a small change doesn't risk clobbering the rest of the file. Same path resolution as the file-search/IO tools; no shell, no persistence; refuses files > 2MB.
@@ -198,6 +199,7 @@ Surgical, in-place edits scoped to a session's working dir — the middle ground
 **Network** (`HttpService` + `PortService`):
 Probe the network without spawning `curl`/`netstat` and scraping output — structured JSON results. The dev-server workflow trio with `run_command`/`open_external`: launch a server, wait for its port, then hit it.
 - `http_request` — make an HTTP(S) request (`method`/`headers`/`body`/`timeout_ms`) and get back `status`, `statusText`, `headers`, `contentType`, `body` (UTF-8, capped at 1MB), `bodyBytes`, `truncated`, and `durationMs`. Only http/https URLs; follows redirects.
+- `download_file` — download a URL straight to disk (`path` resolves against the session's working dir or absolute, parent dirs created). The fetch-to-disk counterpart of `http_request` (inline body, 1MB cap): only writes on a 2xx response, follows redirects, enforces a 100MB cap (`max_bytes`). Returns resolved `path`, `bytesWritten`, `contentType`, `finalUrl`, and `durationMs`. Use for binary assets/release artifacts.
 - `check_port` — single TCP connect to see if something is listening on `host:port` (default host `127.0.0.1`); returns `{ open, durationMs }`.
 - `wait_for_port` — poll a port until it opens or `timeout_ms` elapses (`interval_ms` between attempts); returns `{ open, waitedMs, attempts }`. Use after launching a dev server to block until it's ready before `http_request`.
 
