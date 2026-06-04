@@ -9,6 +9,7 @@ import type { GitService } from "../services/git"
 import type { TemplateService } from "../services/templates"
 import type { TestRunnerService } from "../services/tests"
 import type { LayoutService } from "../services/layouts"
+import type { SnippetService } from "../services/snippets"
 
 export function registerTools(
   server: McpServer,
@@ -21,6 +22,7 @@ export function registerTools(
   templates: TemplateService,
   tests: TestRunnerService,
   layouts: LayoutService,
+  snippets: SnippetService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -456,6 +458,63 @@ export function registerTools(
       return {
         content: [
           { type: "text" as const, text: ok ? "Layout deleted" : `Layout not found: ${name}` },
+        ],
+      }
+    },
+  )
+
+  // Snippet tools — reusable prompt snippets injected into an existing session
+
+  server.tool(
+    "list_snippets",
+    "List saved prompt snippets. A snippet is a named, reusable piece of text that can be injected into an open session's input with send_snippet.",
+    {},
+    async () => {
+      return { content: [{ type: "text" as const, text: JSON.stringify(snippets.list(), null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "save_snippet",
+    "Save a reusable prompt snippet under a name (overwrites an existing one with the same name).",
+    {
+      name: z.string().describe("Snippet name, e.g. 'run-and-fix' or 'pr-checklist'"),
+      content: z.string().describe("The snippet text"),
+    },
+    async ({ name, content }) => {
+      const snippet = snippets.save(name, content)
+      return { content: [{ type: "text" as const, text: JSON.stringify(snippet) }] }
+    },
+  )
+
+  server.tool(
+    "send_snippet",
+    "Inject a saved snippet's text into a session's input (does not press Enter). Use list_snippets to see available names.",
+    {
+      name: z.string().describe("Name of the snippet to send"),
+      session_id: z.string().describe("Session to inject the snippet into"),
+    },
+    async ({ name, session_id }) => {
+      const ok = snippets.send(name, session_id)
+      return {
+        content: [
+          { type: "text" as const, text: ok ? `Sent snippet '${name}'` : `Snippet not found: ${name}` },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "delete_snippet",
+    "Delete a saved snippet by name.",
+    {
+      name: z.string().describe("Name of the snippet to delete"),
+    },
+    async ({ name }) => {
+      const ok = snippets.delete(name)
+      return {
+        content: [
+          { type: "text" as const, text: ok ? "Snippet deleted" : `Snippet not found: ${name}` },
         ],
       }
     },

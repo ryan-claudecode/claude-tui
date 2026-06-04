@@ -9,6 +9,7 @@ import { GitService } from "./services/git"
 import { TemplateService } from "./services/templates"
 import { TestRunnerService } from "./services/tests"
 import { LayoutService } from "./services/layouts"
+import { SnippetService } from "./services/snippets"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -21,6 +22,7 @@ export const gitService = new GitService()
 export const templateService = new TemplateService(sessionService)
 export const testRunnerService = new TestRunnerService()
 export const layoutService = new LayoutService(sessionService)
+export const snippetService = new SnippetService(sessionService)
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -50,6 +52,7 @@ export async function setupIpc(win: BrowserWindow) {
     templateService,
     testRunnerService,
     layoutService,
+    snippetService,
   )
   sessionService.setMcpConfigPath(configPath)
 
@@ -119,6 +122,16 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("layout:save", (_e, name: string) => layoutService.save(name))
   ipcMain.handle("layout:restore", (_e, name: string) => layoutService.restore(name))
   ipcMain.handle("layout:delete", (_e, name: string) => layoutService.delete(name))
+
+  // Snippet IPC -- reusable prompt snippets
+  ipcMain.handle("snippet:list", () => snippetService.list())
+  ipcMain.handle("snippet:save", (_e, name: string, content: string) =>
+    snippetService.save(name, content),
+  )
+  ipcMain.handle("snippet:send", (_e, name: string, sessionId: string) =>
+    snippetService.send(name, sessionId),
+  )
+  ipcMain.handle("snippet:delete", (_e, name: string) => snippetService.delete(name))
 
   // Notification IPC
   ipcMain.handle("notification:list", () => notificationService.list())
