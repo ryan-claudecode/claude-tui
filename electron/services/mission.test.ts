@@ -83,7 +83,7 @@ describe("MissionService dispatch/await", () => {
         create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
         write: (id, data) => writes.push({ id, data }),
       }),
-      { dir },
+      { dir, enterDelayMs: 0, seedDelayMs: 0 },
     )
     const m = svc.create("g", "/r")
     svc.plan(m.id, [{ title: "do thing" }])
@@ -95,7 +95,8 @@ describe("MissionService dispatch/await", () => {
     expect(task.assignedTo).toBe("w1")
     expect(task.attempts).toBe(1)
     expect(svc.get(m.id)!.workers).toContainEqual({ sessionId: "w1", currentTaskId: taskId })
-    expect(writes).toEqual([{ id: "w1", data: "please do thing\r" }])
+    // Prompt text and Enter are sent as separate writes so the TUI submits it.
+    expect(writes).toEqual([{ id: "w1", data: "please do thing" }, { id: "w1", data: "\r" }])
   })
 
   it("await returns worker output once idle", async () => {
@@ -176,6 +177,21 @@ describe("MissionService supervisor — conductor", () => {
     expect(created.length).toBe(1)
   })
 
+  it("spawns a conductor for a planning mission so it can decompose the goal", () => {
+    const created: Array<{ name?: string; cwd?: string }> = []
+    const svc = new MissionService(
+      fakeDriver({
+        create: (name, cwd) => { created.push({ name, cwd }); return { id: "c1", name: name ?? "", cwd: cwd ?? "", state: "active" } },
+        getActivity: () => [{ id: "c1", name: "c", state: "active", idleMs: 0 }],
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r") // status "planning", no plan() call
+    svc.tick()
+    expect(svc.get(m.id)!.conductorSessionId).toBe("c1")
+    expect(created.length).toBe(1)
+  })
+
   it("respawns the conductor if its session has died", () => {
     let nextId = 1
     const svc = new MissionService(
@@ -239,6 +255,15 @@ describe("detectUsageLimit", () => {
     expect(detectUsageLimit("Claude usage limit reached. Try again later.").limited).toBe(true)
     expect(detectUsageLimit("5-hour limit reached").limited).toBe(true)
     expect(detectUsageLimit("normal output").limited).toBe(false)
+  })
+
+  it("does not false-positive on the Conductor seed prompt echo", () => {
+    // The seed instructs the Conductor about pausing; that echoed text must not
+    // be mistaken for an actual limit (this used to pause missions instantly).
+    const seedEcho =
+      "If the model becomes unavailable and you cannot continue, call mission_pause. " +
+      "Drive the mission and mind the usage."
+    expect(detectUsageLimit(seedEcho).limited).toBe(false)
   })
 })
 

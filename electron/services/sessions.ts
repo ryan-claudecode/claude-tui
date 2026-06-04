@@ -337,6 +337,7 @@ export class SessionService {
     const session = this.sessions.get(id)
     if (!session) return false
     session.name = newName
+    this.sendToRenderer("session:renamed", id, newName)
     return true
   }
 

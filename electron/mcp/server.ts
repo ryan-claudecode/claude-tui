@@ -94,51 +94,58 @@ export async function startMcpServer(
   uiService: UiService,
   missionService: MissionService,
 ): Promise<{ port: number; configPath: string }> {
-  const server = new McpServer(
-    {
-      name: "claudetui",
-      version: "0.1.0",
-    },
-    { instructions: SERVER_INSTRUCTIONS },
-  )
-
-  registerTools(
-    server,
-    sessionService,
-    workspaceService,
-    appService,
-    panelService,
-    notificationService,
-    gitService,
-    templateService,
-    testRunnerService,
-    layoutService,
-    snippetService,
-    broadcastService,
-    commandService,
-    clipboardService,
-    shellService,
-    notesService,
-    taskQueueService,
-    systemService,
-    fileSearchService,
-    fileService,
-    httpService,
-    portService,
-    editService,
-    processService,
-    encodeService,
-    jsonService,
-    timeService,
-    csvService,
-    regexService,
-    textService,
-    colorService,
-    mathService,
-    urlService,
-    uiService,
-    missionService,
-  )
+  // A single McpServer can only be bound to one transport at a time, so we
+  // build a fresh server (with all tools registered) PER SSE connection. The
+  // services are shared singletons — they own the real state — only the MCP
+  // protocol wrapper is per-connection. This lets many Claude sessions (a
+  // mission's Conductor + its workers) connect concurrently without colliding.
+  const makeServer = () => {
+    const server = new McpServer(
+      {
+        name: "claudetui",
+        version: "0.1.0",
+      },
+      { instructions: SERVER_INSTRUCTIONS },
+    )
+    registerTools(
+      server,
+      sessionService,
+      workspaceService,
+      appService,
+      panelService,
+      notificationService,
+      gitService,
+      templateService,
+      testRunnerService,
+      layoutService,
+      snippetService,
+      broadcastService,
+      commandService,
+      clipboardService,
+      shellService,
+      notesService,
+      taskQueueService,
+      systemService,
+      fileSearchService,
+      fileService,
+      httpService,
+      portService,
+      editService,
+      processService,
+      encodeService,
+      jsonService,
+      timeService,
+      csvService,
+      regexService,
+      textService,
+      colorService,
+      mathService,
+      urlService,
+      uiService,
+      missionService,
+    )
+    return server
+  }
 
   // Create HTTP server with SSE transport
   const httpServer = createServer()
@@ -150,6 +157,9 @@ export async function startMcpServer(
     if (url === "/sse" && req.method === "GET") {
       const transport = new SSEServerTransport("/messages", res)
       transports.set(transport.sessionId, transport)
+      // Drop the transport when the client disconnects so the map doesn't leak.
+      res.on("close", () => transports.delete(transport.sessionId))
+      const server = makeServer()
       await server.connect(transport)
     } else if (url.startsWith("/messages") && req.method === "POST") {
       const parsed = new URL(url, "http://localhost")

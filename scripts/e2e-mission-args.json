@@ -1,0 +1,5 @@
+{
+  "goal": "Connectivity test only. Do exactly one task: create a file named PROOF.txt in the current working directory whose entire contents are the single line MISSION_E2E_OK. Then finish the mission. Do not do anything else.",
+  "cwd": "C:\\Users\\ryguy\\projects\\mission-e2e",
+  "autonomy": "hands-off"
+}

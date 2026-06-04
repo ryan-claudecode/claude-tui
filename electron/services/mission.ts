@@ -50,7 +50,11 @@ export interface Mission {
 
 const TERMINAL: MissionStatus[] = ["done", "stopped"]
 
-const USAGE_LIMIT_RE = /usage limit|limit reached|rate limit|too many requests/i
+// Require a phrase that only appears when a limit is actually HIT — not the
+// bare words "usage limit", which would false-positive on the Conductor's own
+// seed prompt echoing in the terminal (it used to say "if you hit a usage
+// limit…", which tripped this and paused the mission instantly).
+const USAGE_LIMIT_RE = /limit reached|rate limit exceeded|too many requests/i
 export function detectUsageLimit(text: string): { limited: boolean } {
   return { limited: USAGE_LIMIT_RE.test(text) }
 }
@@ -59,6 +63,7 @@ export interface MissionServiceOpts {
   dir?: string
   now?: () => number
   seedDelayMs?: number
+  enterDelayMs?: number
   workerStallMs?: number
   usageBackoffMs?: number
   notify?: (text: string, level?: string) => void
@@ -68,6 +73,7 @@ export class MissionService {
   private dir: string
   private now: () => number
   private seedDelayMs: number
+  private enterDelayMs: number
   private workerStallMs: number
   private usageBackoffMs: number
   private notify?: (text: string, level?: string) => void
@@ -78,6 +84,7 @@ export class MissionService {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "missions")
     this.now = opts.now ?? (() => Date.now())
     this.seedDelayMs = opts.seedDelayMs ?? 4000
+    this.enterDelayMs = opts.enterDelayMs ?? 600
     this.workerStallMs = opts.workerStallMs ?? 10 * 60_000
     this.usageBackoffMs = opts.usageBackoffMs ?? 60 * 60_000
     this.notify = opts.notify
@@ -104,6 +111,18 @@ export class MissionService {
 
   private log(m: Mission, kind: EventKind, text: string): void {
     m.eventLog.push({ time: this.now(), kind, text })
+  }
+
+  /**
+   * Send a prompt to a Claude session and submit it. Claude Code's TUI treats a
+   * single "text\r" burst as a bracketed paste and swallows the trailing CR —
+   * leaving the prompt typed but unsent. So we write the text, then send Enter
+   * as a separate keystroke after a short beat so the TUI registers it.
+   */
+  private send(id: string, text: string): void {
+    this.sessions.write(id, text)
+    if (this.enterDelayMs > 0) setTimeout(() => this.sessions.write(id, "\r"), this.enterDelayMs)
+    else this.sessions.write(id, "\r")
   }
 
   create(goal: string, cwd: string, autonomy: Autonomy = "hands-off"): Mission {
@@ -155,7 +174,11 @@ export class MissionService {
     const task = m?.tasks.find((t) => t.id === taskId)
     if (!m || !task) return undefined
     const info = this.sessions.create(`${m.goal.slice(0, 20)} · ${task.title.slice(0, 20)}`, m.cwd)
-    this.sessions.write(info.id, `${prompt}\r`)
+    // A freshly-spawned worker's Claude Code TUI needs a moment to boot before
+    // it can accept input — the same boot delay the Conductor gets. Sending the
+    // prompt immediately lands it mid-boot, where the Enter doesn't submit.
+    if (this.seedDelayMs > 0) setTimeout(() => this.send(info.id, prompt), this.seedDelayMs)
+    else this.send(info.id, prompt)
     task.status = "in-progress"
     task.assignedTo = info.id
     task.attempts += 1
@@ -279,7 +302,8 @@ export class MissionService {
       `if planning, decompose the goal with mission_plan; otherwise pick the next pending task, ` +
       `mission_dispatch it to a worker, mission_await it, review the output, and mission_resolve it. ` +
       `Commit completed work with the git_* tools. Loop until every task is done, then mission_finish. ` +
-      `If you hit a usage limit, call mission_pause. You may stop anytime — a fresh Conductor resumes from mission_status.`
+      `If the model becomes unavailable and you cannot continue, call mission_pause with a resumeAt timestamp. ` +
+      `You may stop anytime — a fresh Conductor resumes from mission_status.`
   }
 
   private liveSessionIds(): Set<string> {
@@ -292,8 +316,8 @@ export class MissionService {
     m.conductorSessionId = info.id
     this.log(m, "info", `Conductor (re)spawned: ${info.id}`)
     const seed = this.conductorSeed(m)
-    if (this.seedDelayMs > 0) setTimeout(() => this.sessions.write(info.id, `${seed}\r`), this.seedDelayMs)
-    else this.sessions.write(info.id, `${seed}\r`)
+    if (this.seedDelayMs > 0) setTimeout(() => this.send(info.id, seed), this.seedDelayMs)
+    else this.send(info.id, seed)
     this.persist(m)
   }
 
@@ -324,7 +348,9 @@ export class MissionService {
         if (m.resumeAt != null && now >= m.resumeAt) this.resume(m.id)
         continue
       }
-      if (m.status !== "running") continue
+      // "planning" missions need a Conductor too — it's the Conductor that
+      // calls mission_plan to decompose the goal and flip status to "running".
+      if (m.status !== "running" && m.status !== "planning") continue
       if (this.checkUsageLimit(m)) continue
       this.reapStalledWorkers(m, activity)
       this.ensureConductor(m, live)
