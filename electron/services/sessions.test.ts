@@ -330,3 +330,30 @@ describe("SessionService orchestration", () => {
     expect(ref.name).toBe(oldRef.name) // name carried over
   })
 })
+
+describe("SessionService seed prompt", () => {
+  it("buildSeedPrompt embeds the session id + the three context-engine tools", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    const seed = svc.buildSeedPrompt(s)
+    expect(seed).toContain(s.id)
+    expect(seed).toContain("get_session_context")
+    expect(seed).toContain("set_terminal_activity")
+    expect(seed).toContain("session_note")
+  })
+
+  it("seeds a freshly spawned terminal after the boot delay", () => {
+    vi.useFakeTimers()
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    expect(term.written).toHaveLength(0) // not yet — waiting for boot
+    vi.advanceTimersByTime(5000)
+    const w = term.written.find((x) => x.id === terminalId)
+    expect(w).toBeDefined()
+    expect(w!.data).toContain("get_session_context")
+    expect(w!.data.endsWith("\r")).toBe(true)
+    vi.useRealTimers()
+  })
+})

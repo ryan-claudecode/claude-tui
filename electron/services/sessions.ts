@@ -2,6 +2,9 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, unlink
 import { join } from "path"
 import { homedir } from "os"
 
+/** How long to wait for Claude to boot before writing the seed preamble. */
+const SEED_DELAY_MS = 4000
+
 export interface TerminalRef {
   id: string
   name: string
@@ -162,7 +165,23 @@ export class SessionService {
     return { terminalId: info.id }
   }
 
-  private seedTerminal(_s: WorkSession, _liveId: string): void { /* implemented in Task 4 */ }
+  /** The session-aware preamble: read on entry, narrate + write on insight. */
+  buildSeedPrompt(s: WorkSession): string {
+    return [
+      `You are a terminal in work session "${s.name}" (id: ${s.id}).`,
+      `First, call get_session_context with session_id "${s.id}" to load what prior terminals discovered — root causes, gotchas, and ruled-out approaches.`,
+      `As you work: call set_terminal_activity with a short present-tense phrase whenever your focus changes (e.g. "running the test suite").`,
+      `Whenever you learn something a fresh terminal would otherwise re-discover, call session_note to pin it; if an earlier note was wrong, call session_note with "corrects" to set the record straight.`,
+      `Then wait for my first instruction.`,
+    ].join(" ")
+  }
+
+  private seedTerminal(s: WorkSession, liveId: string): void {
+    if (!this.terminals) return
+    const terminals = this.terminals
+    const prompt = this.buildSeedPrompt(s)
+    setTimeout(() => terminals.write(liveId, `${prompt}\r`), SEED_DELAY_MS)
+  }
 
   create(): WorkSession {
     const t = this.now()
