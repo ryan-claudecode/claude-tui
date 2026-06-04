@@ -27,6 +27,7 @@ import type { EncodeService } from "../services/encode"
 import type { JsonService } from "../services/json"
 import type { TimeService } from "../services/time"
 import type { CsvService } from "../services/csv"
+import type { RegexService } from "../services/regex"
 import { isAbsolute, join } from "path"
 
 export function registerTools(
@@ -58,6 +59,7 @@ export function registerTools(
   json: JsonService,
   time: TimeService,
   csv: CsvService,
+  regex: RegexService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1909,6 +1911,35 @@ export function registerTools(
     },
     async ({ text, delimiter, has_header, limit }) => {
       const result = csv.preview(text, { delimiter, hasHeader: has_header, limit })
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "regex_test",
+    "Test a regular expression against text and see exactly what it matches — the no-shell, interactive counterpart to grep_code. `g` is added automatically so all matches are returned; each carries its start index, positional `groups`, and `named` groups (from `(?<name>...)`). Returns { matches, count, truncated } (capped at 1000). Throws a clear error on an invalid pattern.",
+    {
+      pattern: z.string().describe("The regular expression source (no slashes)"),
+      text: z.string().describe("The text to search"),
+      flags: z.string().optional().describe("Regex flags, e.g. 'i', 'm', 's' (g is always applied)"),
+    },
+    async ({ pattern, text, flags }) => {
+      const result = regex.test(pattern, text, flags ?? "")
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "regex_replace",
+    "Replace every match of a regex in text with a replacement string (supports JS substitution syntax: $1, $<name>, $&, $$). `g` is always applied. Returns { result, replacements }. Throws on an invalid pattern.",
+    {
+      pattern: z.string().describe("The regular expression source (no slashes)"),
+      text: z.string().describe("The text to transform"),
+      replacement: z.string().describe("Replacement string (may use $1, $<name>, $&)"),
+      flags: z.string().optional().describe("Regex flags, e.g. 'i', 'm', 's' (g is always applied)"),
+    },
+    async ({ pattern, text, replacement, flags }) => {
+      const result = regex.replace(pattern, text, replacement, flags ?? "")
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
