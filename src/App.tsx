@@ -247,6 +247,22 @@ export default function App() {
     if (panels.some((p) => p.visible)) setDrawerCollapsed((c) => !c)
   }, [panels])
 
+  // Save the active session's captured scrollback to a downloaded .txt file —
+  // a quick way to keep a record of what Claude did in a session.
+  const handleExportLog = useCallback(async () => {
+    if (!activeId) return
+    const text = await window.api.getSessionOutput(activeId, 100000)
+    if (text == null) return
+    const name = sessions.find((s) => s.id === activeId)?.name ?? activeId
+    const blob = new Blob([text], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${name}-output.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [activeId, sessions])
+
   // Commands surfaced in the Ctrl+Shift+P command palette. Static app actions
   // plus a dynamic "Switch to…" entry per open session.
   const commands = useMemo<Command[]>(() => {
@@ -258,6 +274,7 @@ export default function App() {
       { id: "drawer", label: "Toggle Panel Drawer", hint: "Ctrl+P", run: toggleDrawer },
       { id: "hide-panels", label: "Close All Panels", keywords: "hide clear", run: () => { setPanels([]); window.api.hideAllPanels() } },
       { id: "history", label: "Search Session History", hint: "Ctrl+Shift+F", keywords: "find output log scrollback", run: () => setHistoryOpen(true) },
+      { id: "export-log", label: "Export Active Session Log", keywords: "save download output history file", run: handleExportLog },
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
     ]
     const sessionCmds: Command[] = sessions.map((s, i) => ({
@@ -268,7 +285,7 @@ export default function App() {
       run: () => setActiveId(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, splitLeft, sessions])
+  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, splitLeft, sessions])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
