@@ -1,21 +1,17 @@
 #!/bin/bash
 # ClaudeTUI Overnight Autonomous Runner
-# Spawns sequential Claude sessions that work through the implementation plan.
-# Each session checks git log to see what's done, picks up the next task.
-# Runs for 4-6 hours (configurable).
+# Spawns sequential Claude sessions, each completing 1-3 tasks.
+# Uses --print mode for clean exit after each chunk of work.
 
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-MIN_HOURS=4
 MAX_HOURS=6
-MIN_SECONDS=$((MIN_HOURS * 3600))
 MAX_SECONDS=$((MAX_HOURS * 3600))
 START_TIME=$(date +%s)
 SESSION_COUNT=0
-PLAN_FILE="docs/superpowers/plans/2026-06-03-rich-panels.md"
 MODEL="claude-opus-4-8"
 LOG_FILE="$PROJECT_DIR/logs/overnight-$(date +%Y%m%d-%H%M%S).log"
 
@@ -34,107 +30,79 @@ elapsed_human() {
   printf '%dh %dm %ds' $((s/3600)) $((s%3600/60)) $((s%60))
 }
 
-should_continue() {
-  local elapsed=$(elapsed_seconds)
-  if [ $elapsed -gt $MAX_SECONDS ]; then
-    log "Max time reached (${MAX_HOURS}h). Stopping."
-    return 1
-  fi
-  return 0
-}
-
 log "=== ClaudeTUI Overnight Run Started ==="
 log "Project: $PROJECT_DIR"
 log "Model: $MODEL"
-log "Min runtime: ${MIN_HOURS}h, Max runtime: ${MAX_HOURS}h"
-log "Plan: $PLAN_FILE"
+log "Max runtime: ${MAX_HOURS}h"
 log "Log: $LOG_FILE"
-log ""
 
-while should_continue; do
-  SESSION_COUNT=$((SESSION_COUNT + 1))
+while true; do
   ELAPSED=$(elapsed_seconds)
+  if [ $ELAPSED -gt $MAX_SECONDS ]; then
+    log "Max time reached. Stopping."
+    break
+  fi
+
+  SESSION_COUNT=$((SESSION_COUNT + 1))
   REMAINING=$((MAX_SECONDS - ELAPSED))
 
-  log "--- Session #$SESSION_COUNT starting (elapsed: $(elapsed_human), remaining: $((REMAINING/60))m) ---"
+  log ""
+  log "--- Session #$SESSION_COUNT (elapsed: $(elapsed_human), remaining: $((REMAINING/60))m) ---"
 
-  # Get recent git history for context
-  RECENT_COMMITS=$(git log --oneline -20 2>/dev/null || echo "No commits yet")
+  # Get what's been done
+  RECENT_COMMITS=$(git log --oneline -15 2>/dev/null)
+  LAST_COMMIT_MSG=$(git log --oneline -1 2>/dev/null)
 
-  PROMPT="You are an autonomous developer working on ClaudeTUI, a cross-platform Electron desktop app for managing Claude Code sessions.
+  # Build the prompt — focused, actionable, explicit about pushing
+  PROMPT="You are an autonomous developer working on ClaudeTUI (~/projects/claude-tui-app).
 
-PROJECT: $PROJECT_DIR
-PLAN: $PLAN_FILE
+READ FIRST:
+- CLAUDE.md for architecture
+- docs/superpowers/plans/2026-06-03-rich-panels.md for the full plan
 
-## What's been done (recent commits):
+RECENT COMMITS (to know what's done):
 $RECENT_COMMITS
 
-## Your instructions:
+YOUR JOB THIS SESSION:
+1. Figure out what's the NEXT uncompleted task in the plan (Phase 0 is done)
+2. Implement it
+3. Build: npx electron-vite build
+4. Fix any build errors
+5. Commit AND PUSH: git add -A && git commit -m 'descriptive message' && git push
+6. If time allows, do the next task too (up to 3 tasks per session)
+7. Exit when done
 
-1. Read the CLAUDE.md file for project architecture.
-2. Read the plan at $PLAN_FILE.
-3. Check the git log above to see what's already been completed.
-4. Pick up the NEXT uncompleted task. Phase 0 (testing infrastructure) is done. If you're unsure what's done, check if the files/features from each task exist.
-5. Implement the task following the plan's instructions.
-6. After each task:
-   - Build: npx electron-vite build
-   - If build fails, fix the errors before committing
-   - Commit with a descriptive message
-   - Push: git push
-7. Move to the next task and repeat.
+IMPORTANT:
+- You MUST push after each commit. This is authorized. Do not ask for confirmation.
+- Follow the 4-step pattern: service → IPC → MCP tool → UI
+- Keep code DRY and scalable
+- If a task needs npm packages, install with: npm install <pkg> --legacy-peer-deps
+- If stuck on a task for more than 5 minutes, skip it and move to the next one
 
-## Testing
-- To visually test: build, then launch with 'npx electron . &', use MCP tools (take_screenshot, get_app_state), then kill with 'taskkill //F //IM electron.exe'
-- The MCP config is at /tmp/claudetui/mcp-config.json
-- Always verify builds pass before committing
+ALSO: After completing the panel system tasks, do a FULL UI OVERHAUL. The app should look modern, polished, and elevated — like a premium developer tool. Keep the terminal aesthetic but make it beautiful. Think: refined typography, subtle gradients, micro-animations, glass-morphism effects, proper spacing hierarchy. Update App.css comprehensively."
 
-## When you've completed all Phase 1-4 tasks
-Move to Phase 5 (Creative Features). Read the Phase 5 section of the plan for inspiration. Build features that make ClaudeTUI stand out. Follow the 4-step pattern (service → IPC → MCP → UI) for each feature. Be creative and ambitious.
+  log "Prompt sent. Waiting for Claude..."
 
-## Session management
-- You have approximately $((REMAINING/60)) minutes remaining in the overall run.
-- Work efficiently. Complete 2-4 tasks per session.
-- When you've completed several tasks and your context is getting large, exit cleanly so a fresh session can continue.
-- DO NOT spend excessive time on any single task. If stuck for more than 10 minutes, skip and move on.
-
-## Code quality
-- Follow existing patterns in the codebase
-- DRY — extract shared logic into services
-- Every new feature: service → IPC → MCP tool → preload → UI
-- Commit after each completed task
-- Push after each commit"
-
-  # Run Claude session
-  claude --dangerously-skip-permissions --model "$MODEL" "$PROMPT" 2>&1 | tee -a "$LOG_FILE" || true
+  # Run in print mode — exits cleanly when done
+  claude --dangerously-skip-permissions --model "$MODEL" -p "$PROMPT" 2>&1 | tee -a "$LOG_FILE" || true
 
   log "Session #$SESSION_COUNT ended."
+  log "Last commit: $(git log --oneline -1 2>/dev/null)"
 
-  # Brief pause between sessions
-  sleep 10
-
-  # Check minimum time — if we've been running long enough and there's nothing left, we can stop
-  ELAPSED=$(elapsed_seconds)
-  if [ $ELAPSED -gt $MIN_SECONDS ]; then
-    # Check if Phase 5 creative features have been started (indication main work is done)
-    PHASE5_COMMITS=$(git log --oneline --all | grep -ci "creative\|phase.5\|notification\|command.palette\|timeline\|git.integration" || true)
-    if [ "$PHASE5_COMMITS" -gt 3 ]; then
-      log "Minimum time reached and Phase 5 well underway. Good stopping point."
-      # Continue anyway — let it keep being creative until max time
-    fi
+  # Check if anything was actually committed
+  NEW_LAST=$(git log --oneline -1 2>/dev/null)
+  if [ "$NEW_LAST" = "$LAST_COMMIT_MSG" ]; then
+    log "WARNING: No new commits this session. May be stuck."
+    # Give it one more try with a simpler prompt
   fi
-done
 
-TOTAL_ELAPSED=$(elapsed_human)
-TOTAL_COMMITS=$(git log --oneline | head -50 | wc -l)
+  sleep 5
+done
 
 log ""
 log "=== Overnight Run Complete ==="
-log "Total time: $TOTAL_ELAPSED"
+log "Total time: $(elapsed_human)"
 log "Total sessions: $SESSION_COUNT"
-log "Recent commits: $TOTAL_COMMITS"
-log "Log saved to: $LOG_FILE"
-
-# Final summary
 log ""
-log "Commits made during this run:"
-git log --oneline --since="$(($(date +%s) - $(elapsed_seconds))) seconds ago" 2>/dev/null | tee -a "$LOG_FILE" || true
+log "All commits during run:"
+git log --oneline --since="$(date -d "@$START_TIME" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r "$START_TIME" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '6 hours ago')" 2>/dev/null | tee -a "$LOG_FILE" || true

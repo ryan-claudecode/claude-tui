@@ -461,6 +461,41 @@ Option A is simpler and works immediately.
 
 ## Phase 4: Integration and Polish
 
+### Task 4.0: Full UI Overhaul
+
+**This is a priority task.** Redesign the entire app CSS to look like a premium, modern developer tool. Keep the terminal aesthetic but elevate it significantly.
+
+**Files:**
+- Rewrite: `src/App.css`
+- May modify component TSX files if structural changes are needed for the design
+
+**Design direction:**
+- Refined typography — better font hierarchy, letter-spacing, font weights
+- Subtle background gradients — not flat colors, slight gradients for depth
+- Glass-morphism / frosted glass effects on sidebar and panels (backdrop-filter: blur)
+- Micro-animations — smooth transitions on everything, subtle hover glow effects
+- Proper spacing hierarchy — 4px/8px/16px/24px consistent spacing scale
+- Elevated buttons — not flat blocks, subtle borders + shadows + hover states
+- Status bar polish — subtle top glow, refined layout
+- Tab bar — sleeker tabs, better active/inactive contrast
+- Sidebar — refined section headers, better visual hierarchy
+- Panel drawer — beautiful slide-in animation, proper shadows
+- Color refinements — not just GitHub dark, but a more refined palette with subtle color accents
+- Focus states — visible, beautiful focus rings for accessibility
+
+**Inspiration:** Think VS Code meets Linear meets Warp terminal. Modern, clean, but still unmistakably a developer tool.
+
+- [ ] Redesign global styles (typography, spacing scale, color palette)
+- [ ] Redesign sidebar (glass effect, refined headers, better hover/active states)
+- [ ] Redesign tab bar (sleeker, better transitions)
+- [ ] Redesign status bar (gradient, refined layout)
+- [ ] Redesign buttons and interactive elements
+- [ ] Add panel drawer styles (slide animation, shadows)
+- [ ] Add empty state redesign (more visually appealing)
+- [ ] Verify all components look cohesive
+- [ ] Build and verify
+- [ ] Commit: `style: full UI overhaul — modern premium developer tool aesthetic`
+
 ### Task 4.1: Update CLAUDE.md
 
 - [ ] Add panel system documentation to CLAUDE.md
