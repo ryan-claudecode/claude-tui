@@ -11,7 +11,7 @@ export default defineConfig({
       outDir: "out/main",
       rollupOptions: {
         input: resolve(__dirname_, "electron/main.ts"),
-        external: ["node-pty"],
+        external: ["electron", "node-pty"],
         output: {
           format: "cjs",
           entryFileNames: "index.js",
