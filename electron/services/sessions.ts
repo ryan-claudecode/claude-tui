@@ -123,6 +123,28 @@ export class SessionService {
     return "Idle"
   }
 
+  addNote(sessionId: string, text: string, opts: { corrects?: string } = {}): Note | undefined {
+    const s = this.sessions.get(sessionId)
+    if (!s) return undefined
+    const note: Note = {
+      id: `note-${this.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      text,
+      createdAt: this.now(),
+      source: "self",
+      status: "active",
+    }
+    if (opts.corrects) {
+      const target = s.notes.find((n) => n.id === opts.corrects)
+      if (target) {
+        target.status = "superseded"
+        target.supersededBy = note.id
+      }
+    }
+    s.notes.push(note)
+    this.persist(s)
+    return note
+  }
+
   private persist(s: WorkSession): void {
     s.updatedAt = this.now()
     mkdirSync(this.dir, { recursive: true })

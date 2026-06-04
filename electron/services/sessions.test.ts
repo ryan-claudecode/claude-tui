@@ -108,3 +108,27 @@ describe("SessionService.deriveStatus", () => {
     expect(svc.deriveStatus(s.id)).toBe("2 Terminals Working")
   })
 })
+
+describe("SessionService notes", () => {
+  it("addNote appends an active self-sourced note", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    const n = svc.addNote(s.id, "root cause is the N+1 query")
+    expect(n!.text).toBe("root cause is the N+1 query")
+    expect(n!.status).toBe("active")
+    expect(n!.source).toBe("self")
+    expect(svc.get(s.id)!.notes).toHaveLength(1)
+  })
+
+  it("addNote with corrects supersedes the referenced note and links it", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    const first = svc.addNote(s.id, "bug is in auth")!
+    const second = svc.addNote(s.id, "actually it's the list endpoint", { corrects: first.id })!
+    const notes = svc.get(s.id)!.notes
+    const stored = notes.find((x) => x.id === first.id)!
+    expect(stored.status).toBe("superseded")
+    expect(stored.supersededBy).toBe(second.id)
+    expect(notes.find((x) => x.id === second.id)!.status).toBe("active")
+  })
+})
