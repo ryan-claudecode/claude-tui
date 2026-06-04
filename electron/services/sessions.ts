@@ -32,8 +32,27 @@ function shellWrap(command: string, args: string[]): { shell: string; shellArgs:
   }
 }
 
+/** Strip ANSI escape sequences so captured output is searchable plain text. */
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g
+
+export interface OutputMatch {
+  /** Session the match came from. */
+  sessionId: string
+  /** Session name for display. */
+  name: string
+  /** 0-based line index within the captured buffer. */
+  line: number
+  /** The matching line text. */
+  text: string
+}
+
 export class SessionService {
   private sessions = new Map<string, Session>()
+  /** Bounded plain-text scrollback per session, for history search/review. */
+  private outputBuffers = new Map<string, string>()
+  /** Max characters of scrollback retained per session. */
+  private readonly maxBufferChars = 100_000
   private nextId = 1
   private mainWin: BrowserWindow | null = null
   private mcpConfigPath: string | null = null
@@ -62,6 +81,7 @@ export class SessionService {
   private attachPtyListeners(session: Session) {
     session.pty.onData((data) => {
       this.sendToRenderer("session:data", session.id, data)
+      this.captureOutput(session.id, data)
     })
 
     session.pty.onExit(() => {
@@ -148,7 +168,51 @@ export class SessionService {
     if (!session) return false
     session.pty.kill()
     this.sessions.delete(id)
+    this.outputBuffers.delete(id)
     return true
+  }
+
+  /** Append stripped terminal output to a session's bounded scrollback buffer. */
+  private captureOutput(id: string, data: string): void {
+    const clean = data.replace(ANSI_RE, "")
+    if (!clean) return
+    const prev = this.outputBuffers.get(id) ?? ""
+    let next = prev + clean
+    if (next.length > this.maxBufferChars) {
+      next = next.slice(next.length - this.maxBufferChars)
+    }
+    this.outputBuffers.set(id, next)
+  }
+
+  /** Return the tail of a session's captured output, or null if unknown. */
+  getOutput(id: string, maxChars = 8000): string | null {
+    const buf = this.outputBuffers.get(id)
+    if (buf == null) return this.sessions.has(id) ? "" : null
+    return buf.length > maxChars ? buf.slice(buf.length - maxChars) : buf
+  }
+
+  /**
+   * Search captured session output for `query` (case-insensitive). Scoped to one
+   * session when `sessionId` is given, otherwise across all sessions. Returns the
+   * matching lines so a user can review what Claude did while they were away.
+   */
+  searchOutput(query: string, sessionId?: string, limit = 50): OutputMatch[] {
+    const needle = query.toLowerCase()
+    const ids = sessionId ? [sessionId] : Array.from(this.outputBuffers.keys())
+    const results: OutputMatch[] = []
+    for (const id of ids) {
+      const buf = this.outputBuffers.get(id)
+      if (!buf) continue
+      const name = this.sessions.get(id)?.name ?? id
+      const lines = buf.split("\n")
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].toLowerCase().includes(needle)) {
+          results.push({ sessionId: id, name, line: i, text: lines[i].trimEnd() })
+          if (results.length >= limit) return results
+        }
+      }
+    }
+    return results
   }
 
   list(): SessionInfo[] {
@@ -210,5 +274,6 @@ export class SessionService {
       }
     }
     this.sessions.clear()
+    this.outputBuffers.clear()
   }
 }
