@@ -15,6 +15,7 @@ import { CommandService } from "./services/commands"
 import { ClipboardService } from "./services/clipboard"
 import { ShellService } from "./services/shell"
 import { NotesService } from "./services/notes"
+import { TaskQueueService } from "./services/taskqueue"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -33,6 +34,7 @@ export const commandService = new CommandService()
 export const clipboardService = new ClipboardService()
 export const shellService = new ShellService()
 export const notesService = new NotesService()
+export const taskQueueService = new TaskQueueService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -68,6 +70,7 @@ export async function setupIpc(win: BrowserWindow) {
     clipboardService,
     shellService,
     notesService,
+    taskQueueService,
   )
   sessionService.setMcpConfigPath(configPath)
 
@@ -180,6 +183,18 @@ export async function setupIpc(win: BrowserWindow) {
       notesService.save(title, body, opts),
   )
   ipcMain.handle("notes:delete", (_e, id: string) => notesService.delete(id))
+
+  // Task queue IPC -- shared job board across sessions
+  ipcMain.handle("tasks:list", (_e, status?: any) => taskQueueService.list(status))
+  ipcMain.handle("tasks:enqueue", (_e, title: string, detail?: string) =>
+    taskQueueService.enqueue(title, detail),
+  )
+  ipcMain.handle("tasks:claim", (_e, id: string, by?: string) =>
+    taskQueueService.claim(id, by),
+  )
+  ipcMain.handle("tasks:complete", (_e, id: string) => taskQueueService.complete(id))
+  ipcMain.handle("tasks:delete", (_e, id: string) => taskQueueService.delete(id))
+  ipcMain.handle("tasks:clear-done", () => taskQueueService.clearDone())
 
   // Notification IPC
   ipcMain.handle("notification:list", () => notificationService.list())

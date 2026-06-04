@@ -15,6 +15,7 @@ import type { CommandService } from "../services/commands"
 import type { ClipboardService } from "../services/clipboard"
 import type { ShellService } from "../services/shell"
 import type { NotesService } from "../services/notes"
+import type { TaskQueueService } from "../services/taskqueue"
 
 export function registerTools(
   server: McpServer,
@@ -33,6 +34,7 @@ export function registerTools(
   clipboard: ClipboardService,
   shellService: ShellService,
   notes: NotesService,
+  taskQueue: TaskQueueService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -977,6 +979,96 @@ export function registerTools(
     async ({ id }) => {
       const ok = notes.delete(id)
       return { content: [{ type: "text" as const, text: ok ? "Note deleted" : "Note not found" }] }
+    },
+  )
+
+  // Task queue — a shared job board across the open sessions. ClaudeTUI runs
+  // several sessions at once; use this to coordinate: enqueue work, then let any
+  // session claim and complete items. Persists to disk, so a backlog survives
+  // restarts.
+
+  server.tool(
+    "enqueue_task",
+    "Add a work item to the shared task queue for other sessions (or a later one) to pick up. Use this to hand off or stash work you can't do now.",
+    {
+      title: z.string().describe("Short summary of the task"),
+      detail: z.string().optional().describe("Optional longer description / acceptance notes"),
+    },
+    async ({ title, detail }) => {
+      const task = taskQueue.enqueue(title, detail)
+      return { content: [{ type: "text" as const, text: JSON.stringify(task, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "list_tasks",
+    "List tasks on the shared queue (pending first). Optionally filter by status. Check this to find work waiting to be done.",
+    {
+      status: z
+        .enum(["pending", "claimed", "done"])
+        .optional()
+        .describe("Filter to a single status"),
+    },
+    async ({ status }) => {
+      const list = taskQueue.list(status)
+      return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "claim_task",
+    "Claim a pending task so other sessions know you're working on it. Fails if the task is already claimed or done.",
+    {
+      id: z.string().describe("Task id"),
+      by: z.string().optional().describe("Who's claiming it — a session id or label"),
+    },
+    async ({ id, by }) => {
+      const task = taskQueue.claim(id, by)
+      const text =
+        task === undefined
+          ? "Task not found"
+          : task === null
+            ? "Task already claimed or done"
+            : JSON.stringify(task, null, 2)
+      return { content: [{ type: "text" as const, text }] }
+    },
+  )
+
+  server.tool(
+    "complete_task",
+    "Mark a task done.",
+    {
+      id: z.string().describe("Task id"),
+    },
+    async ({ id }) => {
+      const task = taskQueue.complete(id)
+      return {
+        content: [
+          { type: "text" as const, text: task ? JSON.stringify(task, null, 2) : "Task not found" },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "delete_task",
+    "Remove a task from the queue entirely.",
+    {
+      id: z.string().describe("Task id"),
+    },
+    async ({ id }) => {
+      const ok = taskQueue.delete(id)
+      return { content: [{ type: "text" as const, text: ok ? "Task deleted" : "Task not found" }] }
+    },
+  )
+
+  server.tool(
+    "clear_done_tasks",
+    "Remove all completed tasks from the queue. Returns how many were cleared.",
+    {},
+    async () => {
+      const n = taskQueue.clearDone()
+      return { content: [{ type: "text" as const, text: `Cleared ${n} completed task(s)` }] }
     },
   )
 }
