@@ -17,6 +17,7 @@ import type { ShellService } from "../services/shell"
 import type { NotesService } from "../services/notes"
 import type { TaskQueueService } from "../services/taskqueue"
 import type { SystemService } from "../services/system"
+import type { FileSearchService } from "../services/filesearch"
 
 export function registerTools(
   server: McpServer,
@@ -37,6 +38,7 @@ export function registerTools(
   notes: NotesService,
   taskQueue: TaskQueueService,
   system: SystemService,
+  fileSearch: FileSearchService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1099,6 +1101,58 @@ export function registerTools(
         ? `${command} found:\n${result.paths.join("\n")}`
         : `${command} not found on PATH`
       return { content: [{ type: "text" as const, text }] }
+    },
+  )
+
+  // File search — structured file discovery + content grep scoped to a
+  // session's working dir (no shell, cross-platform, bounded results).
+  server.tool(
+    "find_files",
+    "Find files by glob pattern within a session's working directory. Supports *, ** and ?. Returns relative paths and sizes. Skips node_modules/.git/build output. Use this to locate files without scraping a terminal `find`/`dir`.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to search (defaults to the first open session)"),
+      pattern: z.string().describe("Glob pattern matched against forward-slash relative paths, e.g. '**/*.ts' or 'src/**/index.*'"),
+      limit: z.number().optional().describe("Max files to return (default 200)"),
+    },
+    async ({ session_id, pattern, limit }) => {
+      const cwd = resolveCwd(session_id)
+      const files = fileSearch.findFiles(cwd, pattern, limit)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ cwd, count: files.length, files }, null, 2),
+          },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "grep_code",
+    "Search file contents under a session's working directory for a regex pattern. Returns matching lines with file path and line number. Skips node_modules/.git/build output and files over 1MB. Optionally restrict to files matching a glob. Use this instead of a terminal grep/Select-String for portable, structured results.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to search (defaults to the first open session)"),
+      pattern: z.string().describe("Regex to search for in file contents (falls back to literal match if not a valid regex)"),
+      glob: z.string().optional().describe("Only search files whose relative path matches this glob, e.g. '**/*.ts'"),
+      case_insensitive: z.boolean().optional().describe("Ignore case when matching (default false)"),
+      max_matches: z.number().optional().describe("Max matches to return (default 200)"),
+    },
+    async ({ session_id, pattern, glob, case_insensitive, max_matches }) => {
+      const cwd = resolveCwd(session_id)
+      const result = fileSearch.grep(cwd, pattern, {
+        glob,
+        caseInsensitive: case_insensitive,
+        maxMatches: max_matches,
+      })
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ cwd, ...result }, null, 2),
+          },
+        ],
+      }
     },
   )
 }

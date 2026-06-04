@@ -18,6 +18,7 @@ import type { ShellService } from "../services/shell"
 import type { NotesService } from "../services/notes"
 import type { TaskQueueService } from "../services/taskqueue"
 import type { SystemService } from "../services/system"
+import type { FileSearchService } from "../services/filesearch"
 import { registerTools } from "./tools"
 
 export async function startMcpServer(
@@ -38,6 +39,7 @@ export async function startMcpServer(
   notesService: NotesService,
   taskQueueService: TaskQueueService,
   systemService: SystemService,
+  fileSearchService: FileSearchService,
 ): Promise<{ port: number; configPath: string }> {
   const server = new McpServer({
     name: "claudetui",
@@ -63,6 +65,7 @@ export async function startMcpServer(
     notesService,
     taskQueueService,
     systemService,
+    fileSearchService,
   )
 
   // Create HTTP server with SSE transport
