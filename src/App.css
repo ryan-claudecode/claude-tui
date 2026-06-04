@@ -2040,3 +2040,134 @@ body {
 .tree-number { color: var(--yellow); }
 .tree-boolean { color: var(--purple); }
 .tree-null { color: var(--text-3); font-style: italic; }
+
+/* ============================================================
+   Timeline panel — ordered steps with status (task progress)
+   ============================================================ */
+.timeline-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--s-4);
+  gap: var(--s-3);
+  overflow: auto;
+}
+.timeline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.timeline-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text-0);
+}
+.timeline-progress-label {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.timeline-progress-bar {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--bg-4);
+  overflow: hidden;
+}
+.timeline-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent-bright));
+  transition: width var(--med) var(--ease-out);
+}
+
+.timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.timeline-step {
+  display: flex;
+  gap: var(--s-3);
+}
+.timeline-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+.timeline-dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-2);
+  color: var(--text-3);
+  z-index: 1;
+}
+.timeline-connector {
+  flex: 1;
+  width: 2px;
+  min-height: 14px;
+  background: var(--border);
+  margin: 2px 0;
+}
+.timeline-content {
+  padding-bottom: var(--s-4);
+  min-width: 0;
+}
+.timeline-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+.timeline-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.timeline-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.timeline-detail {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.timeline-done .timeline-dot {
+  border-color: rgba(68, 196, 90, 0.5);
+  background: var(--green-soft);
+  color: var(--green);
+}
+.timeline-done .timeline-connector { background: rgba(68, 196, 90, 0.4); }
+.timeline-active .timeline-dot {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  animation: timeline-pulse 1.4s var(--ease) infinite;
+}
+.timeline-active .timeline-label { color: var(--text-0); }
+@keyframes timeline-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft); }
+  50% { box-shadow: 0 0 0 7px rgba(90, 166, 255, 0.04); }
+}
+.timeline-error .timeline-dot {
+  border-color: rgba(255, 95, 87, 0.5);
+  background: var(--red-soft);
+  color: var(--red);
+}
+.timeline-pending .timeline-label { color: var(--text-2); }
