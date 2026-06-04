@@ -14,6 +14,7 @@ import { BroadcastService } from "./services/broadcast"
 import { CommandService } from "./services/commands"
 import { ClipboardService } from "./services/clipboard"
 import { ShellService } from "./services/shell"
+import { NotesService } from "./services/notes"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -31,6 +32,7 @@ export const broadcastService = new BroadcastService(sessionService)
 export const commandService = new CommandService()
 export const clipboardService = new ClipboardService()
 export const shellService = new ShellService()
+export const notesService = new NotesService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -65,6 +67,7 @@ export async function setupIpc(win: BrowserWindow) {
     commandService,
     clipboardService,
     shellService,
+    notesService,
   )
   sessionService.setMcpConfigPath(configPath)
 
@@ -165,6 +168,18 @@ export async function setupIpc(win: BrowserWindow) {
   ipcMain.handle("command:run", (_e, command: string, cwd: string, timeoutMs?: number) =>
     commandService.run(command, cwd, timeoutMs),
   )
+
+  // Notes IPC -- persistent cross-session scratchpad
+  ipcMain.handle("notes:list", (_e, scope?: string, tag?: string) =>
+    notesService.list(scope, tag),
+  )
+  ipcMain.handle("notes:get", (_e, id: string) => notesService.get(id))
+  ipcMain.handle(
+    "notes:save",
+    (_e, title: string, body: string, opts?: { id?: string; scope?: string; tags?: string[] }) =>
+      notesService.save(title, body, opts),
+  )
+  ipcMain.handle("notes:delete", (_e, id: string) => notesService.delete(id))
 
   // Notification IPC
   ipcMain.handle("notification:list", () => notificationService.list())

@@ -14,6 +14,7 @@ import type { BroadcastService } from "../services/broadcast"
 import type { CommandService } from "../services/commands"
 import type { ClipboardService } from "../services/clipboard"
 import type { ShellService } from "../services/shell"
+import type { NotesService } from "../services/notes"
 
 export function registerTools(
   server: McpServer,
@@ -31,6 +32,7 @@ export function registerTools(
   commands: CommandService,
   clipboard: ClipboardService,
   shellService: ShellService,
+  notes: NotesService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -742,6 +744,70 @@ export function registerTools(
     async ({ path }) => {
       shellService.revealPath(path)
       return { content: [{ type: "text" as const, text: `Revealed ${path}` }] }
+    },
+  )
+
+  // Notes — a persistent cross-session scratchpad. Leave durable context for a
+  // future session (or yourself after a restart) that snippets/templates can't:
+  // gotchas, decisions, "the prod DB host is X", task hand-off notes.
+
+  server.tool(
+    "save_note",
+    "Save a durable note to the cross-session scratchpad (persisted to disk). Use this to leave context that a FUTURE Claude session should know — decisions made, gotchas discovered, where things live, or a hand-off summary. Pass an existing note's `id` to update it instead of creating a new one. Returns the saved note (with its id).",
+    {
+      title: z.string().describe("Short title for the note"),
+      body: z.string().describe("The note's content (markdown is fine)"),
+      scope: z
+        .string()
+        .optional()
+        .describe("Optional project/working-dir path this note pertains to, for later filtering"),
+      tags: z.array(z.string()).optional().describe("Optional tags for grouping/filtering"),
+      id: z.string().optional().describe("Existing note id to update; omit to create a new note"),
+    },
+    async ({ title, body, scope, tags, id }) => {
+      const note = notes.save(title, body, { id, scope, tags })
+      return { content: [{ type: "text" as const, text: JSON.stringify(note, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "list_notes",
+    "List saved scratchpad notes, most-recently-updated first. Optionally filter by `scope` (substring match on the note's project path) and/or `tag`. Call this at the start of work to recover context a prior session left behind.",
+    {
+      scope: z.string().optional().describe("Filter to notes whose scope contains this substring"),
+      tag: z.string().optional().describe("Filter to notes carrying this tag"),
+    },
+    async ({ scope, tag }) => {
+      const list = notes.list(scope, tag)
+      return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "get_note",
+    "Fetch a single scratchpad note by its id.",
+    {
+      id: z.string().describe("Note id"),
+    },
+    async ({ id }) => {
+      const note = notes.get(id)
+      return {
+        content: [
+          { type: "text" as const, text: note ? JSON.stringify(note, null, 2) : "Note not found" },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "delete_note",
+    "Delete a scratchpad note by its id once it's no longer relevant.",
+    {
+      id: z.string().describe("Note id"),
+    },
+    async ({ id }) => {
+      const ok = notes.delete(id)
+      return { content: [{ type: "text" as const, text: ok ? "Note deleted" : "Note not found" }] }
     },
   )
 }
