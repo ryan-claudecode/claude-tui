@@ -492,6 +492,33 @@ Option A is simpler and works immediately.
 
 ---
 
+## Phase 5: Creative Feature Exploration
+
+**When to start:** Only after Phases 0-4 are complete and all changes are pushed.
+
+**Goal:** You've built the panel system. Now think about what would make ClaudeTUI a genuinely competitive product — features that no other terminal multiplexer or AI coding tool offers. Be creative. Build what excites you.
+
+**Directions to explore (pick what resonates, or invent your own):**
+
+- **Interactive diff reviews** — Diff panel where users can click a specific line/hunk and tell Claude "change this part" or "revert this." Claude gets the selection context via MCP.
+- **Containerized test runners** — A panel that shows test results live, lets Claude re-run tests, shows coverage. Integrate with the terminal session's test framework.
+- **Session templates** — Pre-configured session types ("frontend dev", "debugging", "code review") that auto-set prompts, working directories, and panel layouts.
+- **Context injection** — Drag files, URLs, images onto a session to inject them as context. Claude sees them via MCP resources.
+- **Conversation timeline** — A panel that shows the conversation history across sessions, searchable. Useful for reviewing what Claude did while you were away.
+- **Git integration panel** — Show branch status, staged files, commit history. Claude can stage/unstage, create commits, push — all through the panel.
+- **Terminal multiplexer features** — Session groups, saved layouts, session persistence across app restarts.
+- **Notification system** — Toast notifications when Claude finishes a task, needs input, or encounters an error in a background session.
+- **Command palette** — Ctrl+Shift+P opens a searchable command palette (like VS Code) for all app actions.
+
+**Rules:**
+- Each feature must follow the 4-step pattern (service → IPC → MCP tool → preload/UI)
+- Commit after each feature
+- Update CLAUDE.md with any new tools/features
+- Build and verify after each commit
+- Push to GitHub when done
+
+---
+
 ## Execution Notes (for autonomous agents)
 
 ### Build verification
@@ -521,3 +548,15 @@ Commit after every completed task. This provides rollback points.
 - `diff` — for computing file diffs (Phase 2.1)
 - `react-markdown` or `marked` — for markdown rendering (Phase 2.4)
 - Install with `npm install <package> --legacy-peer-deps`
+
+### Visual testing workflow
+The app must be running for screenshot/state tools to work. To test visually:
+1. Build: `npx electron-vite build`
+2. Launch: `npx electron .` (runs in background)
+3. Use MCP tools via: `claude --print --dangerously-skip-permissions --mcp-config /tmp/claudetui/mcp-config.json -p "call take_screenshot and describe what you see"`
+4. Kill when done: `taskkill //F //IM electron.exe` (Windows) or `pkill -f electron` (macOS/Linux)
+
+### Overnight autonomous run command
+```bash
+cd ~/projects/claude-tui-app && claude --dangerously-skip-permissions --model claude-opus-4-8 "Read the implementation plan at docs/superpowers/plans/2026-06-03-rich-panels.md. Phase 0 is already complete. Start from Phase 1 and work through every task sequentially. After each task: build, commit, and push. Use take_screenshot and get_app_state MCP tools to verify visual changes when the app is running. If you finish all 4 phases, move to Phase 5 and build creative features. Keep working until you run out of ideas or hit a blocker you can't resolve."
+```
