@@ -190,6 +190,12 @@ Structured read/write scoped to a session's working dir (relative paths resolve 
 - `read_file` — read a file (optionally a 1-based inclusive `start_line`/`end_line` slice); returns the slice plus `totalLines` for paging. Refuses files > 2MB.
 - `write_file` — write content to a file, creating parent dirs; overwrites if present. Returns resolved path, bytes written, and whether it was newly `created`.
 
+**Network** (`HttpService` + `PortService`):
+Probe the network without spawning `curl`/`netstat` and scraping output — structured JSON results. The dev-server workflow trio with `run_command`/`open_external`: launch a server, wait for its port, then hit it.
+- `http_request` — make an HTTP(S) request (`method`/`headers`/`body`/`timeout_ms`) and get back `status`, `statusText`, `headers`, `contentType`, `body` (UTF-8, capped at 1MB), `bodyBytes`, `truncated`, and `durationMs`. Only http/https URLs; follows redirects.
+- `check_port` — single TCP connect to see if something is listening on `host:port` (default host `127.0.0.1`); returns `{ open, durationMs }`.
+- `wait_for_port` — poll a port until it opens or `timeout_ms` elapses (`interval_ms` between attempts); returns `{ open, waitedMs, attempts }`. Use after launching a dev server to block until it's ready before `http_request`.
+
 ## Panel System
 
 Claude renders rich UI alongside terminals via panels. State flows:
