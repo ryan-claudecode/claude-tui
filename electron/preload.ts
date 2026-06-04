@@ -30,6 +30,12 @@ contextBridge.exposeInMainWorld("api", {
   onSessionCreated: (callback: (session: any) => void) =>
     ipcRenderer.on("session:created", (_e, session) => callback(session)),
 
+  // Split pane events from main (triggered by MCP tools)
+  onSplitSet: (callback: (leftId: string, rightId: string) => void) =>
+    ipcRenderer.on("split:set", (_e, leftId, rightId) => callback(leftId, rightId)),
+  onSplitClose: (callback: () => void) =>
+    ipcRenderer.on("split:close", () => callback()),
+
   // Cleanup
   removeAllListeners: (channel: string) => ipcRenderer.removeAllListeners(channel),
 })

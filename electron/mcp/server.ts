@@ -1,0 +1,81 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js"
+import { createServer } from "http"
+import type { SessionService } from "../services/sessions"
+import type { WorkspaceService } from "../services/workspaces"
+import { registerTools } from "./tools"
+
+export async function startMcpServer(
+  sessionService: SessionService,
+  workspaceService: WorkspaceService,
+): Promise<{ port: number; configPath: string }> {
+  const server = new McpServer({
+    name: "claudetui",
+    version: "0.1.0",
+  })
+
+  registerTools(server, sessionService, workspaceService)
+
+  // Create HTTP server with SSE transport
+  const httpServer = createServer()
+  const transports = new Map<string, SSEServerTransport>()
+
+  httpServer.on("request", async (req, res) => {
+    const url = req.url ?? ""
+
+    if (url === "/sse" && req.method === "GET") {
+      const transport = new SSEServerTransport("/messages", res)
+      transports.set(transport.sessionId, transport)
+      await server.connect(transport)
+    } else if (url.startsWith("/messages") && req.method === "POST") {
+      const parsed = new URL(url, "http://localhost")
+      const sessionId = parsed.searchParams.get("sessionId")
+      const transport = transports.get(sessionId ?? "")
+      if (transport) {
+        await transport.handlePostMessage(req, res)
+      } else {
+        res.writeHead(404)
+        res.end("Transport not found")
+      }
+    } else {
+      res.writeHead(404)
+      res.end("Not found")
+    }
+  })
+
+  // Listen on random available port bound to localhost only
+  await new Promise<void>((resolve) => {
+    httpServer.listen(0, "127.0.0.1", resolve)
+  })
+
+  const addr = httpServer.address()
+  const port = typeof addr === "object" && addr ? addr.port : 0
+
+  // Write MCP config file for spawned Claude sessions to auto-connect
+  const { writeFileSync, mkdirSync } = await import("fs")
+  const { join } = await import("path")
+  const { tmpdir } = await import("os")
+
+  const configDir = join(tmpdir(), "claudetui")
+  mkdirSync(configDir, { recursive: true })
+  const configPath = join(configDir, "mcp-config.json")
+
+  writeFileSync(
+    configPath,
+    JSON.stringify(
+      {
+        mcpServers: {
+          claudetui: {
+            type: "sse",
+            url: `http://127.0.0.1:${port}/sse`,
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  )
+
+  console.log(`MCP server running on port ${port}`)
+  return { port, configPath }
+}

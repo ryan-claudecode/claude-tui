@@ -4,7 +4,7 @@ import { setupIpc } from "./ipc"
 
 let mainWindow: BrowserWindow | null = null
 
-function createWindow() {
+async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -21,7 +21,8 @@ function createWindow() {
     frame: true,
   })
 
-  setupIpc(mainWindow)
+  // setupIpc is async (starts MCP server)
+  await setupIpc(mainWindow)
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -34,7 +35,9 @@ function createWindow() {
   // Uncomment to debug: mainWindow.webContents.openDevTools()
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(async () => {
+  await createWindow()
+})
 
 app.on("window-all-closed", () => {
   app.quit()

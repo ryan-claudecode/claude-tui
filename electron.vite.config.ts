@@ -11,7 +11,16 @@ export default defineConfig({
       outDir: "out/main",
       rollupOptions: {
         input: resolve(__dirname_, "electron/main.ts"),
-        external: ["electron", "node-pty"],
+        external: [
+          "electron",
+          "node-pty",
+          "@modelcontextprotocol/sdk",
+          "@modelcontextprotocol/sdk/server/mcp.js",
+          "@modelcontextprotocol/sdk/server/sse.js",
+          "zod",
+          "raw-body",
+          "content-type",
+        ],
         output: {
           format: "cjs",
           entryFileNames: "index.js",

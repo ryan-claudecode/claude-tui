@@ -1,0 +1,136 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { z } from "zod"
+import type { SessionService } from "../services/sessions"
+import type { WorkspaceService } from "../services/workspaces"
+
+export function registerTools(
+  server: McpServer,
+  sessions: SessionService,
+  workspaces: WorkspaceService,
+) {
+  server.tool(
+    "create_session",
+    "Create a new Claude Code session in ClaudeTUI",
+    {
+      name: z.string().optional().describe("Session name"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ name, cwd }) => {
+      const info = sessions.create(name, cwd)
+      return { content: [{ type: "text" as const, text: JSON.stringify(info) }] }
+    },
+  )
+
+  server.tool(
+    "kill_session",
+    "Kill a ClaudeTUI session",
+    {
+      id: z.string().describe("Session ID"),
+    },
+    async ({ id }) => {
+      const ok = sessions.kill(id)
+      return {
+        content: [{ type: "text" as const, text: ok ? "Session killed" : "Session not found" }],
+      }
+    },
+  )
+
+  server.tool("list_sessions", "List all active ClaudeTUI sessions", {}, async () => {
+    const list = sessions.list()
+    return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
+  })
+
+  server.tool(
+    "focus_session",
+    "Switch focus to a ClaudeTUI session",
+    {
+      id: z.string().describe("Session ID"),
+    },
+    async ({ id }) => {
+      const ok = sessions.focus(id)
+      return {
+        content: [
+          { type: "text" as const, text: ok ? `Focused session ${id}` : "Session not found" },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "rename_session",
+    "Rename a ClaudeTUI session",
+    {
+      id: z.string().describe("Session ID"),
+      name: z.string().describe("New name"),
+    },
+    async ({ id, name }) => {
+      const ok = sessions.rename(id, name)
+      return {
+        content: [
+          { type: "text" as const, text: ok ? `Renamed to ${name}` : "Session not found" },
+        ],
+      }
+    },
+  )
+
+  server.tool(
+    "trigger_handoff",
+    "Trigger context handoff on a ClaudeTUI session",
+    {
+      id: z.string().describe("Session ID"),
+    },
+    async ({ id }) => {
+      sessions.handoff(id)
+      return { content: [{ type: "text" as const, text: "Handoff triggered" }] }
+    },
+  )
+
+  server.tool(
+    "split_panes",
+    "Split ClaudeTUI view showing two sessions side by side",
+    {
+      left_id: z.string().describe("Left pane session ID"),
+      right_id: z.string().describe("Right pane session ID"),
+    },
+    async ({ left_id, right_id }) => {
+      const ok = sessions.splitPanes(left_id, right_id)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: ok ? "Split view activated" : "One or both sessions not found",
+          },
+        ],
+      }
+    },
+  )
+
+  server.tool("close_split", "Close ClaudeTUI split view", {}, async () => {
+    sessions.closeSplit()
+    return { content: [{ type: "text" as const, text: "Split view closed" }] }
+  })
+
+  server.tool("list_workspaces", "List discovered ClaudeTUI workspaces", {}, async () => {
+    const list = workspaces.list()
+    return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
+  })
+
+  server.tool(
+    "activate_workspace",
+    "Boot a workspace (open editors + create sessions)",
+    {
+      index: z.number().describe("Workspace index from list_workspaces"),
+    },
+    async ({ index }) => {
+      const result = workspaces.activate(index)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: result ? JSON.stringify(result) : "Workspace not found",
+          },
+        ],
+      }
+    },
+  )
+}
