@@ -224,9 +224,9 @@ export function registerTools(
 
   server.tool(
     "show_panel",
-    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, or git). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview.",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, git, or kanban). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams.",
     {
-      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git"]).describe("Panel type"),
+      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban"]).describe("Panel type"),
       props: z.record(z.any()).describe("Panel-specific data"),
       position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
     },
@@ -1398,6 +1398,31 @@ export function registerTools(
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `http_request failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "download_file",
+    "Download an http(s) URL straight to disk. The path resolves against a session's working dir (or absolute) and parent directories are created as needed. Only writes on a 2xx response, follows redirects, and enforces a 100MB cap (override with max_bytes). Returns the resolved path, bytesWritten, content-type, final URL, and durationMs. Use this for binary assets/release artifacts where http_request (inline body, 1MB cap) won't do.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve a relative path against (defaults to the first open session)"),
+      url: z.string().describe("The full http:// or https:// URL to download"),
+      path: z.string().describe("Destination file path, relative to the working dir or absolute"),
+      headers: z.record(z.string()).optional().describe("Request headers as a key/value map"),
+      timeout_ms: z.number().optional().describe("Abort the download after this many ms (default 15000)"),
+      max_bytes: z.number().optional().describe("Refuse (write nothing) if the body exceeds this many bytes (default 100MB)"),
+    },
+    async ({ session_id, url, path: destPath, headers, timeout_ms, max_bytes }) => {
+      try {
+        const result = await http.download(resolveCwd(session_id), url, destPath, {
+          headers: headers as Record<string, string> | undefined,
+          timeoutMs: timeout_ms,
+          maxBytes: max_bytes,
+        })
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `download_file failed: ${e.message}` }] }
       }
     },
   )
