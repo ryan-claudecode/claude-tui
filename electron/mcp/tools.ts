@@ -24,6 +24,7 @@ import type { PortService } from "../services/ports"
 import type { EditService } from "../services/edit"
 import type { ProcessService } from "../services/process"
 import type { EncodeService } from "../services/encode"
+import type { JsonService } from "../services/json"
 import { isAbsolute, join } from "path"
 
 export function registerTools(
@@ -52,6 +53,7 @@ export function registerTools(
   edit: EditService,
   processes: ProcessService,
   encode: EncodeService,
+  json: JsonService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1787,6 +1789,46 @@ export function registerTools(
     async ({ token }) => {
       const parts = encode.decodeJwt(token)
       return { content: [{ type: "text" as const, text: JSON.stringify(parts, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "format_json",
+    "Pretty-print or minify a JSON string (optionally sorting object keys) — the no-`jq` reshaper for JSON you already have. Returns the reformatted JSON as text. Throws on invalid JSON.",
+    {
+      text: z.string().describe("The JSON string to reformat"),
+      minify: z.boolean().optional().describe("Collapse to a single line (default false = pretty-print)"),
+      indent: z.number().optional().describe("Spaces per indent level when pretty-printing (default 2)"),
+      sort_keys: z.boolean().optional().describe("Recursively sort object keys (default false)"),
+    },
+    async ({ text, minify, indent, sort_keys }) => {
+      const out = json.format(text, { minify, indent, sortKeys: sort_keys })
+      return { content: [{ type: "text" as const, text: out }] }
+    },
+  )
+
+  server.tool(
+    "query_json",
+    "Pluck a value out of a JSON string by a dot/bracket path (e.g. 'data.items[0].name'). Returns { value, type }. Throws if the JSON is invalid or the path doesn't resolve.",
+    {
+      text: z.string().describe("The JSON string to query"),
+      path: z.string().describe("Dot/bracket path, e.g. 'users[2].email'"),
+    },
+    async ({ text, path }) => {
+      const result = json.query(text, path)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "json_keys",
+    "Probe the shape of a JSON string: top-level object keys, array length, or primitive type. Returns { type, keys?, length? }. Throws on invalid JSON.",
+    {
+      text: z.string().describe("The JSON string to inspect"),
+    },
+    async ({ text }) => {
+      const result = json.keys(text)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
 }
