@@ -1,4 +1,8 @@
 #!/bin/bash
+# DEPRECATED: superseded by the in-app Mission orchestration layer
+# (electron/services/mission.ts). Missions now survive usage limits and
+# restarts in-app via the Supervisor. Kept for reference / headless use.
+#
 # ClaudeTUI Overnight Autonomous Runner
 # Spawns sequential Claude sessions, each completing 1-3 tasks.
 # Uses --print mode for clean exit after each chunk of work.
