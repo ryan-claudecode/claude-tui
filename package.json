@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "electron-vite build && electron .",
     "build": "electron-vite build",
-    "start": "electron ."
+    "start": "electron .",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -27,6 +29,7 @@
     "electron": "^42.3.3",
     "electron-vite": "^5.0.0",
     "typescript": "^6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8"
   }
 }
