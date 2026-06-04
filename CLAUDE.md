@@ -162,6 +162,11 @@ Additional tool groups:
 **Command runner** (`CommandService`):
 - `run_command` — run a one-off shell command in a session's working directory and get structured output back (exit code, stdout, stderr, duration, `timedOut`). The general-purpose sibling of `run_build`/`run_tests`; output is captured (via `spawnSync`), not streamed — use a real session for long-running/interactive processes.
 
+**Session activity / orchestration** (`SessionService`):
+- A session is marked **active** while it produces terminal output and flips to **idle** after `idleThresholdMs` (1.5s) of quiet — i.e. Claude finished or is waiting for input. A shared 1s timer drives this and emits `session:state` events, which the renderer uses to animate the status dot (active = pulsing green, idle = steady yellow).
+- `get_session_activity` — snapshot of every session's `state` and `idleMs` (ms since last output). Tells you at a glance which background session needs attention.
+- `wait_for_session_idle` — block until a session's output goes quiet (it finished working) or `timeout_ms` elapses, then return its recent output. Optionally inject `input` first (with `submit` to press Enter) to delegate a task and wait for completion instead of polling. Injecting input resets the quiet clock, sidestepping the startup race before the session's first output.
+
 ## Panel System
 
 Claude renders rich UI alongside terminals via panels. State flows:
