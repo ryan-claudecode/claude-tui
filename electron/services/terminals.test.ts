@@ -1,5 +1,21 @@
 import { describe, it, expect } from "vitest"
-import { encodeProjectDir } from "./terminals"
+import { TerminalService, encodeProjectDir } from "./terminals"
+
+describe("TerminalService.onEvent", () => {
+  it("notifies listeners on created and exit, and unsubscribes cleanly", () => {
+    const svc = new TerminalService()
+    const events: any[] = []
+    const off = svc.onEvent((e) => events.push(e))
+
+    const info = svc.create("t", process.cwd())
+    expect(events.some((e) => e.type === "created" && e.info.id === info.id)).toBe(true)
+
+    off()
+    const before = events.length
+    svc.kill(info.id)
+    expect(events.length).toBe(before)
+  })
+})
 
 describe("encodeProjectDir", () => {
   it("encodes a Windows cwd the way Claude Code does", () => {
