@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "fs"
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 import type { SessionInfo, SessionActivity } from "./sessions"
@@ -9,7 +9,7 @@ export interface SessionDriver {
   write(id: string, data: string): void
   waitForIdle(
     id: string,
-    opts: { input?: string; submit?: boolean; quietMs?: number; timeoutMs?: number },
+    opts: { input?: string; submit?: boolean; quietMs?: number; timeoutMs?: number; notBefore?: number },
   ): Promise<{ idle: boolean; timedOut: boolean; reason?: string }>
   getActivity(): SessionActivity[]
   getOutput(id: string, maxChars?: number): string | null
@@ -29,8 +29,11 @@ export interface MissionTask {
   assignedTo?: string
   result?: string
   attempts: number
+  /** When the worker's prompt is expected to land (now + boot delay). Used as
+   *  the await() idle floor so a booting worker isn't marked done prematurely. */
+  dispatchedAt?: number
 }
-export interface MissionWorker { sessionId: string; role?: string; currentTaskId?: string }
+export interface MissionWorker { sessionId: string; role?: string; currentTaskId?: string; startedAt?: number }
 export interface MissionEvent { time: number; kind: EventKind; text: string }
 
 export interface Mission {
@@ -106,11 +109,21 @@ export class MissionService {
   private persist(m: Mission): void {
     m.updatedAt = this.now()
     mkdirSync(this.dir, { recursive: true })
-    writeFileSync(join(this.dir, `${m.id}.json`), JSON.stringify(m, null, 2))
+    // Write-then-rename: a crash mid-write leaves the stale-but-valid file
+    // intact rather than a truncated one. The mission JSON is the durable
+    // source of truth, so a corrupt write would lose the whole mission.
+    const dest = join(this.dir, `${m.id}.json`)
+    const tmp = `${dest}.tmp`
+    writeFileSync(tmp, JSON.stringify(m, null, 2))
+    renameSync(tmp, dest)
   }
 
   private log(m: Mission, kind: EventKind, text: string): void {
     m.eventLog.push({ time: this.now(), kind, text })
+    // Cap the audit trail so a long unattended mission doesn't grow the JSON
+    // (rewritten in full every 5s tick) without bound.
+    const MAX_EVENTS = 500
+    if (m.eventLog.length > MAX_EVENTS) m.eventLog.splice(0, m.eventLog.length - MAX_EVENTS)
   }
 
   /**
@@ -173,6 +186,10 @@ export class MissionService {
     const m = this.missions.get(missionId)
     const task = m?.tasks.find((t) => t.id === taskId)
     if (!m || !task) return undefined
+    // Idempotent: re-dispatching an in-progress task (a confused Conductor, or a
+    // retry after a timed-out MCP call) must NOT spawn a second worker and
+    // orphan the first — hand back the existing assignment instead.
+    if (task.status === "in-progress" && task.assignedTo) return { sessionId: task.assignedTo }
     const info = this.sessions.create(`${m.goal.slice(0, 20)} · ${task.title.slice(0, 20)}`, m.cwd)
     // A freshly-spawned worker's Claude Code TUI needs a moment to boot before
     // it can accept input — the same boot delay the Conductor gets. Sending the
@@ -182,8 +199,11 @@ export class MissionService {
     task.status = "in-progress"
     task.assignedTo = info.id
     task.attempts += 1
+    // The prompt lands ~seedDelayMs from now; await() uses this as the idle floor
+    // so the pre-prompt welcome screen can't read as a finished task.
+    task.dispatchedAt = this.now() + this.seedDelayMs
     if (!m.workers.some((w) => w.sessionId === info.id)) {
-      m.workers.push({ sessionId: info.id, currentTaskId: taskId })
+      m.workers.push({ sessionId: info.id, currentTaskId: taskId, startedAt: this.now() })
     }
     this.log(m, "worker", `Dispatched "${task.title}" to ${info.id}`)
     this.persist(m)
@@ -199,7 +219,7 @@ export class MissionService {
     const m = this.missions.get(missionId)
     const task = m?.tasks.find((t) => t.id === taskId)
     if (!m || !task || !task.assignedTo) return undefined
-    const r = await this.sessions.waitForIdle(task.assignedTo, { timeoutMs })
+    const r = await this.sessions.waitForIdle(task.assignedTo, { timeoutMs, notBefore: task.dispatchedAt })
     const output = this.sessions.getOutput(task.assignedTo, 8000) ?? ""
     if (r.idle) {
       task.status = "review"
@@ -283,15 +303,20 @@ export class MissionService {
   }
 
   private checkUsageLimit(m: Mission): boolean {
-    const ids = [m.conductorSessionId, ...m.workers.map((w) => w.sessionId)].filter(Boolean) as string[]
-    for (const id of ids) {
-      const out = this.sessions.getOutput(id, 2000) ?? ""
-      if (detectUsageLimit(out).limited) {
-        this.pause(m.id, this.now() + this.usageBackoffMs)
-        if (m.conductorSessionId) { this.sessions.kill(m.conductorSessionId); m.conductorSessionId = undefined }
-        this.notify?.(`Mission paused (usage limit): ${m.goal}`, "warning")
-        return true
-      }
+    // Scan only the Conductor's output. It's the long-lived brain whose hitting
+    // a limit threatens continuity; a worker that hits one just times out its
+    // await and gets retried. Scoping here also avoids a re-pause loop: a paused
+    // mission keeps its workers (with the limit text still in their buffers), so
+    // scanning them would re-trigger on resume — whereas the Conductor is killed
+    // and respawned fresh, clearing its buffer.
+    if (!m.conductorSessionId) return false
+    const out = this.sessions.getOutput(m.conductorSessionId, 2000) ?? ""
+    if (detectUsageLimit(out).limited) {
+      this.pause(m.id, this.now() + this.usageBackoffMs)
+      this.sessions.kill(m.conductorSessionId)
+      m.conductorSessionId = undefined
+      this.notify?.(`Mission paused (usage limit): ${m.goal}`, "warning")
+      return true
     }
     return false
   }
@@ -323,9 +348,15 @@ export class MissionService {
 
   private reapStalledWorkers(m: Mission, activity: SessionActivity[]): void {
     const byId = new Map(activity.map((a) => [a.id, a]))
+    const now = this.now()
+    // A worker just spawned this/last tick may not appear in getActivity() yet —
+    // without a grace window the "absent => stalled" rule would kill it before
+    // it even boots. Protect young workers; real stalls surface after the grace.
+    const bootGrace = Math.max(this.seedDelayMs * 2, 15_000)
     for (const w of [...m.workers]) {
       const a = byId.get(w.sessionId)
-      const stalled = !a || a.idleMs > this.workerStallMs
+      const age = now - (w.startedAt ?? 0)
+      const stalled = age >= bootGrace && (!a || a.idleMs > this.workerStallMs)
       if (w.currentTaskId && stalled) {
         const task = m.tasks.find((t) => t.id === w.currentTaskId)
         if (task && task.status === "in-progress") {

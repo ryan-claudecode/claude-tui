@@ -83,7 +83,7 @@ describe("MissionService dispatch/await", () => {
         create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
         write: (id, data) => writes.push({ id, data }),
       }),
-      { dir, enterDelayMs: 0, seedDelayMs: 0 },
+      { dir, enterDelayMs: 0, seedDelayMs: 0, now: () => 1000 },
     )
     const m = svc.create("g", "/r")
     svc.plan(m.id, [{ title: "do thing" }])
@@ -94,9 +94,47 @@ describe("MissionService dispatch/await", () => {
     expect(task.status).toBe("in-progress")
     expect(task.assignedTo).toBe("w1")
     expect(task.attempts).toBe(1)
-    expect(svc.get(m.id)!.workers).toContainEqual({ sessionId: "w1", currentTaskId: taskId })
+    expect(task.dispatchedAt).toBe(1000) // now + seedDelayMs(0)
+    expect(svc.get(m.id)!.workers).toContainEqual({ sessionId: "w1", currentTaskId: taskId, startedAt: 1000 })
     // Prompt text and Enter are sent as separate writes so the TUI submits it.
     expect(writes).toEqual([{ id: "w1", data: "please do thing" }, { id: "w1", data: "\r" }])
+  })
+
+  it("await passes the task's dispatchedAt as the idle floor (boot race)", async () => {
+    let seenNotBefore: number | undefined = -1
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        waitForIdle: async (_id, opts) => { seenNotBefore = opts.notBefore; return { idle: true, timedOut: false } },
+        getOutput: () => "done",
+      }),
+      { dir, seedDelayMs: 5000, now: () => 1000 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    await svc.await(m.id, taskId)
+    // notBefore must be the prompt-land time (now + seedDelayMs), so a worker
+    // still showing its pre-prompt welcome screen isn't read as finished.
+    expect(seenNotBefore).toBe(6000)
+  })
+
+  it("dispatch is idempotent for an in-progress task (no orphaned worker)", () => {
+    let creates = 0
+    const svc = new MissionService(
+      fakeDriver({ create: () => { creates++; return { id: `w${creates}`, name: "w", cwd: "/r", state: "active" } } }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    const first = svc.dispatch(m.id, taskId, "go")!
+    const second = svc.dispatch(m.id, taskId, "go")!
+    expect(second.sessionId).toBe(first.sessionId)
+    expect(creates).toBe(1)
+    expect(svc.get(m.id)!.workers.length).toBe(1)
+    expect(svc.get(m.id)!.tasks[0].attempts).toBe(1)
   })
 
   it("await returns worker output once idle", async () => {
@@ -225,6 +263,7 @@ describe("MissionService supervisor — conductor", () => {
 describe("MissionService supervisor — stalled workers", () => {
   it("kills a worker idle beyond the threshold and frees its task", () => {
     const killed: string[] = []
+    let t = 0
     const svc = new MissionService(
       fakeDriver({
         create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
@@ -234,19 +273,44 @@ describe("MissionService supervisor — stalled workers", () => {
         ],
         kill: (id) => { killed.push(id); return true },
       }),
-      { dir, seedDelayMs: 0, workerStallMs: 10 * 60_000 },
+      { dir, seedDelayMs: 0, workerStallMs: 10 * 60_000, now: () => t },
     )
     const m = svc.create("g", "/r")
     svc.plan(m.id, [{ title: "t" }])
     const taskId = svc.get(m.id)!.tasks[0].id
-    svc.dispatch(m.id, taskId, "go")            // assigns w1, status in-progress
+    svc.dispatch(m.id, taskId, "go")            // assigns w1 at t=0, status in-progress
     svc.get(m.id)!.conductorSessionId = "c1"    // pretend conductor exists
+    t = 11 * 60_000                             // worker now old enough to clear boot grace
     svc.tick()
     expect(killed).toContain("w1")
     const task = svc.get(m.id)!.tasks[0]
     expect(task.status).toBe("pending")
     expect(task.assignedTo).toBeUndefined()
     expect(svc.get(m.id)!.workers.some((w) => w.sessionId === "w1")).toBe(false)
+  })
+
+  it("does not reap a just-spawned worker still within the boot grace", () => {
+    const killed: string[] = []
+    let t = 0
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        // Worker hasn't appeared in activity yet (just spawned) — the old
+        // "absent => stalled" rule would have killed it immediately.
+        getActivity: () => [{ id: "c1", name: "c", state: "active", idleMs: 0 }],
+        kill: (id) => { killed.push(id); return true },
+      }),
+      { dir, seedDelayMs: 0, workerStallMs: 10 * 60_000, now: () => t },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    svc.get(m.id)!.conductorSessionId = "c1"
+    t = 5000 // 5s later — within the 15s boot grace
+    svc.tick()
+    expect(killed).not.toContain("w1")
+    expect(svc.get(m.id)!.tasks[0].status).toBe("in-progress")
   })
 })
 

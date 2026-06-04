@@ -291,10 +291,15 @@ export class SessionService {
    *
    * Injecting input resets the quiet clock, which sidesteps the startup race
    * where a freshly-prompted session hasn't produced its first output yet.
+   *
+   * `notBefore`: don't treat the session as idle until it has produced output
+   * AT OR AFTER this timestamp. A caller that injected a prompt out-of-band
+   * (e.g. a deferred boot-delayed write) passes the prompt's send time so the
+   * pre-prompt welcome-screen quiet can't be mistaken for "finished the work".
    */
   waitForIdle(
     id: string,
-    opts: { input?: string; submit?: boolean; quietMs?: number; timeoutMs?: number } = {},
+    opts: { input?: string; submit?: boolean; quietMs?: number; timeoutMs?: number; notBefore?: number } = {},
   ): Promise<{ idle: boolean; timedOut: boolean; reason?: string }> {
     const session = this.sessions.get(id)
     if (!session) return Promise.resolve({ idle: false, timedOut: false, reason: "not found" })
@@ -304,6 +309,7 @@ export class SessionService {
 
     const quietMs = opts.quietMs ?? this.idleThresholdMs
     const timeoutMs = opts.timeoutMs ?? 120_000
+    const notBefore = opts.notBefore ?? 0
 
     if (opts.input != null) {
       // Start the quiet clock now so we wait for output that follows our input.
@@ -325,7 +331,7 @@ export class SessionService {
         } else if (Date.now() - start > timeoutMs) {
           clearInterval(timer)
           resolve({ idle: false, timedOut: true })
-        } else if (Date.now() - s.lastActivity >= quietMs) {
+        } else if (Date.now() - s.lastActivity >= quietMs && s.lastActivity >= notBefore) {
           clearInterval(timer)
           resolve({ idle: true, timedOut: false })
         }
