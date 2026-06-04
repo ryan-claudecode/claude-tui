@@ -41,6 +41,15 @@ contextBridge.exposeInMainWorld("api", {
   submitForm: (id: string, data: Record<string, any>) =>
     ipcRenderer.send("panel:form-submit", id, data),
 
+  // Mission orchestration
+  createMission: (goal: string, cwd: string, autonomy?: string) =>
+    ipcRenderer.invoke("mission:create", goal, cwd, autonomy),
+  listMissions: () => ipcRenderer.invoke("mission:list"),
+  getMissionStatus: (id?: string) => ipcRenderer.invoke("mission:status", id),
+  stopMission: (id: string) => ipcRenderer.invoke("mission:stop", id),
+  pauseMission: (id: string) => ipcRenderer.invoke("mission:pause", id),
+  resumeMission: (id: string) => ipcRenderer.invoke("mission:resume", id),
+
   // Broadcast -- send one input to many sessions at once
   broadcastInput: (content: string, sessionIds?: string[], submit?: boolean) =>
     ipcRenderer.invoke("broadcast:send", content, sessionIds, submit),
@@ -66,6 +75,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("session:created", (_e, session) => callback(session)),
   onSessionState: (callback: (id: string, state: string) => void) =>
     ipcRenderer.on("session:state", (_e, id, state) => callback(id, state)),
+  onSessionRenamed: (callback: (id: string, newName: string) => void) =>
+    ipcRenderer.on("session:renamed", (_e, id, newName) => callback(id, newName)),
 
   // Session focus event from main (triggered by the focus_session MCP tool)
   onSessionFocus: (callback: (id: string) => void) =>

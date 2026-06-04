@@ -28,6 +28,7 @@ declare global {
       onSessionExit: (callback: (id: string) => void) => void
       onSessionCreated: (callback: (session: any) => void) => void
       onSessionState: (callback: (id: string, state: string) => void) => void
+      onSessionRenamed: (callback: (id: string, newName: string) => void) => void
       getSessionActivity: () => Promise<any[]>
       onSessionFocus: (callback: (id: string) => void) => void
       onSplitSet: (callback: (leftId: string, rightId: string) => void) => void
@@ -58,6 +59,12 @@ declare global {
       onPanelUpdate: (callback: (payload: { id: string; props: any }) => void) => void
       onPanelHide: (callback: (id: string) => void) => void
       onPanelHideAll: (callback: () => void) => void
+      createMission: (goal: string, cwd: string, autonomy?: string) => Promise<any>
+      listMissions: () => Promise<any[]>
+      getMissionStatus: (id?: string) => Promise<any>
+      stopMission: (id: string) => Promise<any>
+      pauseMission: (id: string) => Promise<any>
+      resumeMission: (id: string) => Promise<any>
       removeAllListeners: (channel: string) => void
     }
   }
@@ -119,6 +126,13 @@ export default function App() {
       )
     })
 
+    // Rename event from main (triggered by the rename_session MCP tool)
+    window.api.onSessionRenamed((id, newName) => {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, name: newName } : s))
+      )
+    })
+
     // Split pane events from main process (triggered by MCP tools)
     window.api.onSplitSet((leftId, rightId) => {
       setSplitLeft(leftId)
@@ -173,6 +187,7 @@ export default function App() {
       window.api.removeAllListeners("session:created")
       window.api.removeAllListeners("session:exit")
       window.api.removeAllListeners("session:state")
+      window.api.removeAllListeners("session:renamed")
       window.api.removeAllListeners("split:set")
       window.api.removeAllListeners("split:close")
       window.api.removeAllListeners("session:focus")
@@ -329,6 +344,22 @@ export default function App() {
     exportLogRef.current = handleExportLog
   }, [handleExportLog])
 
+  // Start a new orchestration mission, then open its dashboard panel.
+  const startMission = useCallback(async () => {
+    const goal = window.prompt("Mission goal?")
+    if (!goal) return
+    const cwd = sessions.find((s) => s.id === activeId)?.cwd ?? ""
+    const m = await window.api.createMission(goal, cwd, "hands-off")
+    const panel: PanelState = {
+      id: `mission-${m.id}`,
+      type: "mission",
+      position: "right",
+      props: m,
+      visible: true,
+    }
+    setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), panel])
+  }, [sessions, activeId])
+
   // Commands surfaced in the Ctrl+Shift+P command palette. Static app actions
   // plus a dynamic "Switch to…" entry per open session.
   const commands = useMemo<Command[]>(() => {
@@ -343,6 +374,7 @@ export default function App() {
       { id: "export-log", label: "Export Active Session Log", keywords: "save download output history file", run: handleExportLog },
       { id: "zen", label: zenMode ? "Exit Focus Mode" : "Enter Focus Mode", hint: "Ctrl+Shift+Z", keywords: "zen distraction free hide sidebar fullscreen", run: () => setZenMode((z) => !z) },
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
+      { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: startMission },
     ]
     const sessionCmds: Command[] = sessions.map((s, i) => ({
       id: `switch-${s.id}`,
@@ -352,7 +384,7 @@ export default function App() {
       run: () => setActiveId(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, zenMode, splitLeft, sessions])
+  }, [handleNewSession, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, startMission, zenMode, splitLeft, sessions])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
@@ -534,6 +566,8 @@ export default function App() {
               panels={panels}
               onClose={handleClosePanel}
               onSendToSession={sendToActiveSession}
+              onMissionStop={(id) => window.api.stopMission(id)}
+              onMissionPause={(id) => window.api.pauseMission(id)}
             />
           )}
         </div>
