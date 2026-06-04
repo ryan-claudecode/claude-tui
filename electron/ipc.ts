@@ -20,6 +20,7 @@ import { SystemService } from "./services/system"
 import { FileSearchService } from "./services/filesearch"
 import { FileService } from "./services/files"
 import { HttpService } from "./services/http"
+import { PortService } from "./services/ports"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -43,6 +44,7 @@ export const systemService = new SystemService()
 export const fileSearchService = new FileSearchService()
 export const fileService = new FileService()
 export const httpService = new HttpService()
+export const portService = new PortService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -83,6 +85,7 @@ export async function setupIpc(win: BrowserWindow) {
     fileSearchService,
     fileService,
     httpService,
+    portService,
   )
   sessionService.setMcpConfigPath(configPath)
 

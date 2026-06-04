@@ -20,6 +20,7 @@ import type { SystemService } from "../services/system"
 import type { FileSearchService } from "../services/filesearch"
 import type { FileService } from "../services/files"
 import type { HttpService } from "../services/http"
+import type { PortService } from "../services/ports"
 
 export function registerTools(
   server: McpServer,
@@ -43,6 +44,7 @@ export function registerTools(
   fileSearch: FileSearchService,
   files: FileService,
   http: HttpService,
+  ports: PortService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1225,6 +1227,38 @@ export function registerTools(
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `http_request failed: ${e.message}` }] }
       }
+    },
+  )
+
+  // Port checks — answer "is something listening on this TCP port?" without
+  // shelling out to lsof/netstat/Test-NetConnection. Companion to http_request:
+  // start a dev server, wait_for_port until it comes up, then hit it.
+  server.tool(
+    "check_port",
+    "Check whether a TCP port is open (something is listening) by attempting a single connection. Returns { host, port, open, durationMs }. Defaults to host 127.0.0.1. Use this instead of lsof/netstat to see if a dev server/database is up.",
+    {
+      port: z.number().describe("TCP port number to check"),
+      host: z.string().optional().describe("Host to connect to (default 127.0.0.1)"),
+      timeout_ms: z.number().optional().describe("Give up on the connection after this many ms (default 2000)"),
+    },
+    async ({ port, host, timeout_ms }) => {
+      const result = await ports.check(port, host ?? "127.0.0.1", timeout_ms)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "wait_for_port",
+    "Poll a TCP port until something starts listening (port opens) or an overall timeout elapses. Returns { host, port, open, waitedMs, attempts }. Use after launching a dev server in a session to block until it's ready before calling http_request.",
+    {
+      port: z.number().describe("TCP port number to wait for"),
+      host: z.string().optional().describe("Host to connect to (default 127.0.0.1)"),
+      timeout_ms: z.number().optional().describe("Stop waiting after this many ms total (default 30000)"),
+      interval_ms: z.number().optional().describe("Delay between connection attempts in ms (default 500)"),
+    },
+    async ({ port, host, timeout_ms, interval_ms }) => {
+      const result = await ports.waitForOpen(port, host ?? "127.0.0.1", timeout_ms, interval_ms)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
 }
