@@ -1573,6 +1573,117 @@ body {
 }
 
 /* ============================================================
+   Keyboard shortcuts cheat sheet
+   ============================================================ */
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-5);
+  background: rgba(7, 9, 13, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: drop-fade 0.12s var(--ease-out);
+}
+
+.shortcuts-panel {
+  width: 640px;
+  max-width: calc(100vw - 48px);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(20, 25, 34, 0.96), rgba(11, 14, 20, 0.98));
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), 0 0 0 1px var(--accent-soft);
+  overflow: hidden;
+  animation: cmdk-pop 0.16s var(--ease-out);
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.shortcuts-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-0);
+  letter-spacing: 0.01em;
+}
+
+.shortcuts-close {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color var(--fast) var(--ease);
+}
+.shortcuts-close:hover { color: var(--text-0); }
+
+.shortcuts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s-4);
+  padding: var(--s-4);
+  overflow-y: auto;
+}
+
+.shortcuts-group-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  font-weight: 650;
+  margin-bottom: var(--s-2);
+  padding-bottom: var(--s-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: 6px 0;
+}
+
+.shortcuts-desc {
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.shortcuts-keys {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.shortcuts-kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* ============================================================
    Toast notifications
    ============================================================ */
 .toast-host {

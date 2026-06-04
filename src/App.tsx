@@ -8,6 +8,7 @@ import PanelDrawer, { PanelState } from "./components/PanelDrawer"
 import DropZone from "./components/DropZone"
 import CommandPalette, { Command } from "./components/CommandPalette"
 import ToastHost from "./components/ToastHost"
+import ShortcutsHelp from "./components/ShortcutsHelp"
 
 // TypeScript type for the API exposed by preload
 declare global {
@@ -66,6 +67,7 @@ export default function App() {
   const [dragActive, setDragActive] = useState(false)
   const [drawerCollapsed, setDrawerCollapsed] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   // Load workspaces and config on mount
   useEffect(() => {
@@ -249,6 +251,7 @@ export default function App() {
       { id: "split", label: splitLeft ? "Close Split View" : "Split Panes", hint: "Ctrl+\\", run: toggleSplit },
       { id: "drawer", label: "Toggle Panel Drawer", hint: "Ctrl+P", run: toggleDrawer },
       { id: "hide-panels", label: "Close All Panels", keywords: "hide clear", run: () => { setPanels([]); window.api.hideAllPanels() } },
+      { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
     ]
     const sessionCmds: Command[] = sessions.map((s, i) => ({
       id: `switch-${s.id}`,
@@ -268,6 +271,11 @@ export default function App() {
         e.preventDefault()
         e.stopPropagation()
         setPaletteOpen((o) => !o)
+      } else if (e.ctrlKey && e.key === "/") {
+        // Toggle the keyboard shortcuts cheat sheet.
+        e.preventDefault()
+        e.stopPropagation()
+        setHelpOpen((o) => !o)
       } else if (e.ctrlKey && e.key === "n") {
         e.preventDefault()
         e.stopPropagation()
@@ -302,6 +310,11 @@ export default function App() {
         if (panels.some((p) => p.visible)) {
           setDrawerCollapsed((c) => !c)
         }
+      } else if (e.key === "Escape" && helpOpen) {
+        // Close the shortcuts cheat sheet first if it's open.
+        e.preventDefault()
+        e.stopPropagation()
+        setHelpOpen(false)
       } else if (e.key === "Escape") {
         // Close the most recently shown visible panel
         const visible = panels.filter((p) => p.visible)
@@ -321,7 +334,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleKillSession, handleHandoff, sessions, splitLeft, activeId, panels, drawerCollapsed, handleClosePanel])
+  }, [handleNewSession, handleKillSession, handleHandoff, sessions, splitLeft, activeId, panels, drawerCollapsed, handleClosePanel, helpOpen])
 
   return (
     <div
@@ -333,6 +346,7 @@ export default function App() {
       <DropZone active={dragActive} />
       <ToastHost />
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
+      <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
       <Sidebar
         sessions={sessions}
         activeId={activeId}
