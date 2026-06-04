@@ -58,6 +58,7 @@ export default function App() {
   const [config, setConfig] = useState<any>(null)
   const [panels, setPanels] = useState<PanelState[]>([])
   const [dragActive, setDragActive] = useState(false)
+  const [drawerCollapsed, setDrawerCollapsed] = useState(false)
 
   // Load workspaces and config on mount
   useEffect(() => {
@@ -244,6 +245,21 @@ export default function App() {
             setSplitRight(other.id)
           }
         }
+      } else if (e.ctrlKey && e.key === "p") {
+        // Toggle the panel drawer (only meaningful when panels exist)
+        e.preventDefault()
+        e.stopPropagation()
+        if (panels.some((p) => p.visible)) {
+          setDrawerCollapsed((c) => !c)
+        }
+      } else if (e.key === "Escape") {
+        // Close the most recently shown visible panel
+        const visible = panels.filter((p) => p.visible)
+        if (visible.length > 0 && !drawerCollapsed) {
+          e.preventDefault()
+          e.stopPropagation()
+          handleClosePanel(visible[visible.length - 1].id)
+        }
       } else if (e.ctrlKey && e.key >= "1" && e.key <= "9") {
         e.preventDefault()
         e.stopPropagation()
@@ -255,7 +271,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleKillSession, handleHandoff, sessions, splitLeft, activeId])
+  }, [handleNewSession, handleKillSession, handleHandoff, sessions, splitLeft, activeId, panels, drawerCollapsed, handleClosePanel])
 
   return (
     <div
@@ -286,7 +302,9 @@ export default function App() {
         />
         <div
           className={`workspace-body ${
-            panels.some((p) => p.visible && p.position === "bottom") ? "col" : "row"
+            !drawerCollapsed && panels.some((p) => p.visible && p.position === "bottom")
+              ? "col"
+              : "row"
           }`}
         >
         <div className="terminal-container">
@@ -327,13 +345,17 @@ export default function App() {
                     <span className="shortcut-desc">Split panes</span>
                     <span className="shortcut-key">Ctrl+1-9</span>
                     <span className="shortcut-desc">Switch session</span>
+                    <span className="shortcut-key">Ctrl+P</span>
+                    <span className="shortcut-desc">Toggle panel drawer</span>
+                    <span className="shortcut-key">Esc</span>
+                    <span className="shortcut-desc">Close panel</span>
                   </div>
                 </div>
               )}
             </>
           )}
         </div>
-          <PanelDrawer panels={panels} onClose={handleClosePanel} />
+          {!drawerCollapsed && <PanelDrawer panels={panels} onClose={handleClosePanel} />}
         </div>
         <StatusBar
           session={sessions.find((s) => s.id === activeId) ?? null}
