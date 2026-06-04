@@ -11,6 +11,7 @@ import type { TestRunnerService } from "../services/tests"
 import type { LayoutService } from "../services/layouts"
 import type { SnippetService } from "../services/snippets"
 import type { BroadcastService } from "../services/broadcast"
+import type { CommandService } from "../services/commands"
 
 export function registerTools(
   server: McpServer,
@@ -25,6 +26,7 @@ export function registerTools(
   layouts: LayoutService,
   snippets: SnippetService,
   broadcast: BroadcastService,
+  commands: CommandService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -541,6 +543,32 @@ export function registerTools(
     async ({ content, session_ids, submit }) => {
       const result = broadcast.broadcast(content, session_ids, submit)
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  // Command runner — run a one-off shell command and capture structured output
+
+  server.tool(
+    "run_command",
+    "Run a one-off shell command in a session's working directory and get back structured output (exit code, stdout, stderr, duration). Use this for quick checks like lint, typecheck, or a git porcelain command without scraping the terminal. Output is captured, not streamed — for long-running or interactive processes, use a real session instead.",
+    {
+      command: z.string().describe("Shell command to run, e.g. 'npm run lint' or 'git status --short'"),
+      session_id: z
+        .string()
+        .optional()
+        .describe("Session whose cwd to run in (defaults to the first open session)"),
+      timeout_ms: z
+        .number()
+        .optional()
+        .describe("Max milliseconds before the command is killed (default: 60000)"),
+    },
+    async ({ command, session_id, timeout_ms }) => {
+      try {
+        const result = commands.run(command, resolveCwd(session_id), timeout_ms)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `run_command failed: ${e.message}` }] }
+      }
     },
   )
 }

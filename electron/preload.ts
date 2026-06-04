@@ -41,6 +41,10 @@ contextBridge.exposeInMainWorld("api", {
   broadcastInput: (content: string, sessionIds?: string[], submit?: boolean) =>
     ipcRenderer.invoke("broadcast:send", content, sessionIds, submit),
 
+  // Command runner -- run a one-off shell command and capture output
+  runCommand: (command: string, cwd: string, timeoutMs?: number) =>
+    ipcRenderer.invoke("command:run", command, cwd, timeoutMs),
+
   // Notifications
   listNotifications: () => ipcRenderer.invoke("notification:list"),
   dismissNotification: (id: string) => ipcRenderer.invoke("notification:dismiss", id),

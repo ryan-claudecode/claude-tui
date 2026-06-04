@@ -11,6 +11,7 @@ import { TestRunnerService } from "./services/tests"
 import { LayoutService } from "./services/layouts"
 import { SnippetService } from "./services/snippets"
 import { BroadcastService } from "./services/broadcast"
+import { CommandService } from "./services/commands"
 import { loadConfig } from "./config"
 import { startMcpServer } from "./mcp/server"
 
@@ -25,6 +26,7 @@ export const testRunnerService = new TestRunnerService()
 export const layoutService = new LayoutService(sessionService)
 export const snippetService = new SnippetService(sessionService)
 export const broadcastService = new BroadcastService(sessionService)
+export const commandService = new CommandService()
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -56,6 +58,7 @@ export async function setupIpc(win: BrowserWindow) {
     layoutService,
     snippetService,
     broadcastService,
+    commandService,
   )
   sessionService.setMcpConfigPath(configPath)
 
@@ -141,6 +144,11 @@ export async function setupIpc(win: BrowserWindow) {
     "broadcast:send",
     (_e, content: string, sessionIds?: string[], submit?: boolean) =>
       broadcastService.broadcast(content, sessionIds, submit),
+  )
+
+  // Command IPC -- run an arbitrary shell command and capture its output
+  ipcMain.handle("command:run", (_e, command: string, cwd: string, timeoutMs?: number) =>
+    commandService.run(command, cwd, timeoutMs),
   )
 
   // Notification IPC
