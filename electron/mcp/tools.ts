@@ -25,6 +25,7 @@ import type { EditService } from "../services/edit"
 import type { ProcessService } from "../services/process"
 import type { EncodeService } from "../services/encode"
 import type { JsonService } from "../services/json"
+import type { TimeService } from "../services/time"
 import { isAbsolute, join } from "path"
 
 export function registerTools(
@@ -54,6 +55,7 @@ export function registerTools(
   processes: ProcessService,
   encode: EncodeService,
   json: JsonService,
+  time: TimeService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1828,6 +1830,40 @@ export function registerTools(
     },
     async ({ text }) => {
       const result = json.keys(text)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "time_now",
+    "Get the current moment in every common representation (ISO, epoch ms/sec, UTC, local, and broken-out parts). The no-`date` clock lookup.",
+    {},
+    async () => {
+      return { content: [{ type: "text" as const, text: JSON.stringify(time.now(), null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "convert_time",
+    "Convert a timestamp into all representations. Accepts an epoch in seconds or milliseconds (numbers < 1e12 are treated as seconds) or any Date-parseable string (ISO 8601, etc). Returns { iso, epochMs, epochSec, utc, local, ...parts }.",
+    {
+      input: z.string().describe("Epoch (sec or ms) or a date string to convert"),
+    },
+    async ({ input }) => {
+      const result = time.convert(input)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "time_diff",
+    "Signed duration `to - from` (each an epoch or date string, parsed like convert_time). Returns the gap in ms/seconds/minutes/hours/days plus a humanized string (e.g. '2d 3h 4m'). Positive = `to` is later.",
+    {
+      from: z.string().describe("Start timestamp (epoch or date string)"),
+      to: z.string().describe("End timestamp (epoch or date string)"),
+    },
+    async ({ from, to }) => {
+      const result = time.diff(from, to)
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
