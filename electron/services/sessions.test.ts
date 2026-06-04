@@ -404,6 +404,34 @@ describe("SessionService identity-bound spawn", () => {
   })
 })
 
+describe("SessionService effective activity", () => {
+  it("falls back to parsed output when self-report is stale", () => {
+    const term = new FakeTerminals()
+    let clock = 1000
+    const svc = new SessionService({ dir, now: () => clock })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    term.output.set(terminalId, "● Edit(foo.ts)")
+
+    // self-report at t=1000
+    svc.setTerminalActivity(session.id, terminalId, "planning")
+    // advance well past the stale threshold; terminal still active
+    clock = 1000 + 60_000
+    svc.setTerminalState(session.id, terminalId, "active")
+
+    expect(svc.effectiveActivity(session.id, terminalId)).toBe("Edit(foo.ts)")
+  })
+
+  it("uses self-reported activity when fresh", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 5000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    svc.setTerminalActivity(session.id, terminalId, "running tests")
+    expect(svc.effectiveActivity(session.id, terminalId)).toBe("running tests")
+  })
+})
+
 const tick = () => new Promise((r) => setTimeout(r, 5))
 
 describe("SessionService idle-flush", () => {

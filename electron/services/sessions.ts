@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, unlinkSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
+import { parseActivityLine } from "./terminals"
 
 export interface TerminalRef {
   id: string
@@ -119,7 +120,7 @@ export class SessionService {
     s.status = s.terminals.some((x) => x.lastState === "active" || x.lastState === "idle") ? "active" : "stopped"
     if (state === "idle") this.scheduleIdleFlush(s.id, terminalId)
     this.persist(s)
-    this.emit("worksession:updated", s)
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
   }
 
   /**
@@ -174,7 +175,7 @@ export class SessionService {
     s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: "active" })
     s.status = "active"
     this.persist(s)
-    this.emit("worksession:updated", s)
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
     return info.id
   }
 
@@ -186,7 +187,7 @@ export class SessionService {
     s.terminals = s.terminals.filter((t) => t.id !== terminalId)
     s.status = s.terminals.some((t) => t.lastState === "active" || t.lastState === "idle") ? "active" : "stopped"
     this.persist(s)
-    this.emit("worksession:updated", s)
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
   }
 
   /** Kill the whole session: every PTY + the on-disk record. */
@@ -210,7 +211,7 @@ export class SessionService {
     ref.lastState = "active"
     s.status = "active"
     this.persist(s)
-    this.emit("worksession:updated", s)
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
     return { terminalId: info.id }
   }
 
@@ -284,6 +285,34 @@ export class SessionService {
     // Session inherits its name from the FIRST terminal while still a placeholder.
     if (s.name === "Untitled session" && s.terminals[0]?.id === terminalId) s.name = name
     this.persist(s)
+  }
+
+  private readonly activityStaleMs = 20_000
+
+  /**
+   * The activity line to display for a terminal: the self-reported phrase when
+   * it's fresh, otherwise the latest parsed CC tool-call line while the terminal
+   * is still active (so a heads-down terminal never looks frozen).
+   */
+  effectiveActivity(sessionId: string, terminalId: string): string | undefined {
+    const s = this.sessions.get(sessionId)
+    const t = s?.terminals.find((x) => x.id === terminalId)
+    if (!t) return undefined
+    const fresh = t.activity && this.now() - (t.activityAt ?? 0) < this.activityStaleMs
+    if (fresh) return t.activity
+    if (t.lastState === "active" && this.terminals) {
+      const parsed = parseActivityLine(this.terminals.getOutput(terminalId, 4000) ?? "")
+      if (parsed) return parsed
+    }
+    return t.activity // last-known (may be stale) if nothing parsed
+  }
+
+  /** A copy of the session with each terminal's activity resolved for display. */
+  private withEffectiveActivity(s: WorkSession): WorkSession {
+    return {
+      ...s,
+      terminals: s.terminals.map((t) => ({ ...t, activity: this.effectiveActivity(s.id, t.id) })),
+    }
   }
 
   setTerminalActivity(sessionId: string, terminalId: string, activity: string): void {

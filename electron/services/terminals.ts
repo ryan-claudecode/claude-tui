@@ -65,6 +65,20 @@ export function resumeArgs(
   return existsSync(file) ? ["--resume", ccConversationId] : []
 }
 
+/**
+ * Best-effort: pull the most recent Claude Code tool-call line ("● Edit(x)")
+ * from captured (ANSI-stripped) output, returning the part after the bullet.
+ * Used as the activity fallback when self-narration goes stale.
+ */
+export function parseActivityLine(output: string): string | undefined {
+  const lines = output.split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(/^\s*[●○*]\s+(.+\(.+\).*)$/)
+    if (m) return m[1].trim()
+  }
+  return undefined
+}
+
 export interface TerminalInfo {
   id: string
   name: string

@@ -88,3 +88,22 @@ describe("resumeArgs", () => {
     expect(resumeArgs(root, "C:\\x", "dead-id")).toEqual([])
   })
 })
+
+import { parseActivityLine } from "./terminals"
+
+describe("parseActivityLine", () => {
+  it("extracts the last tool-call line", () => {
+    const out = [
+      "some chatter",
+      "● Read(electron/services/sessions.ts)",
+      "more text",
+      "● Edit(electron/services/terminals.ts)",
+      "tail",
+    ].join("\n")
+    expect(parseActivityLine(out)).toBe("Edit(electron/services/terminals.ts)")
+  })
+
+  it("returns undefined when there is no tool-call line", () => {
+    expect(parseActivityLine("just\nplain\ntext")).toBeUndefined()
+  })
+})
