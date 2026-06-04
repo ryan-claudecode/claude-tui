@@ -22,6 +22,7 @@ import type { FileService } from "../services/files"
 import type { HttpService } from "../services/http"
 import type { PortService } from "../services/ports"
 import type { EditService } from "../services/edit"
+import type { ProcessService } from "../services/process"
 
 export function registerTools(
   server: McpServer,
@@ -47,6 +48,7 @@ export function registerTools(
   http: HttpService,
   ports: PortService,
   edit: EditService,
+  processes: ProcessService,
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -1203,6 +1205,79 @@ export function registerTools(
     },
   )
 
+  // Filesystem operations — move/copy/delete/mkdir without shelling out to
+  // mv/cp/rm/mkdir. Paths resolve against a session's working dir (same as
+  // read_file/write_file). Directories are handled recursively.
+  server.tool(
+    "move_path",
+    "Move or rename a file or directory (paths relative to a session's working dir, or absolute). Creates the destination's parent directories as needed. Returns the resolved from/to paths and whether it was a file or directory.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      from: z.string().describe("Source path, relative to the working dir or absolute"),
+      to: z.string().describe("Destination path, relative to the working dir or absolute"),
+    },
+    async ({ session_id, from, to }) => {
+      try {
+        const result = files.move(resolveCwd(session_id), from, to)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `move_path failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "copy_path",
+    "Copy a file or directory (paths relative to a session's working dir, or absolute). Directories are copied recursively. Creates the destination's parent directories as needed. Returns the resolved from/to paths and whether it was a file or directory.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      from: z.string().describe("Source path, relative to the working dir or absolute"),
+      to: z.string().describe("Destination path, relative to the working dir or absolute"),
+    },
+    async ({ session_id, from, to }) => {
+      try {
+        const result = files.copy(resolveCwd(session_id), from, to)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `copy_path failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "delete_path",
+    "Delete a file or directory (path relative to a session's working dir, or absolute). Directories are removed recursively. Throws if the path does not exist. Returns the resolved path and whether it was a file or directory.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      path: z.string().describe("Path to delete, relative to the working dir or absolute"),
+    },
+    async ({ session_id, path: filePath }) => {
+      try {
+        const result = files.remove(resolveCwd(session_id), filePath)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `delete_path failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "make_dir",
+    "Create a directory (path relative to a session's working dir, or absolute), including any missing parent directories. No error if it already exists. Returns the resolved path.",
+    {
+      session_id: z.string().optional().describe("Session whose working dir to resolve relative paths against (defaults to the first open session)"),
+      path: z.string().describe("Directory path to create, relative to the working dir or absolute"),
+    },
+    async ({ session_id, path: dirPath }) => {
+      try {
+        const result = files.makeDir(resolveCwd(session_id), dirPath)
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `make_dir failed: ${e.message}` }] }
+      }
+    },
+  )
+
   // Surgical edits — the middle ground between read_file and write_file. Change
   // a precise string or insert at a line without rewriting (and risking
   // clobbering) the whole file.
@@ -1302,6 +1377,33 @@ export function registerTools(
     },
     async ({ port, host, timeout_ms, interval_ms }) => {
       const result = await ports.waitForOpen(port, host ?? "127.0.0.1", timeout_ms, interval_ms)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  // Process-on-port — the follow-up to check_port/wait_for_port: when a port is
+  // taken, find out *who* holds it and reclaim it (the classic "EADDRINUSE on
+  // 3000, kill the zombie dev server" loop). Cross-platform, structured JSON.
+  server.tool(
+    "find_process_on_port",
+    "Find the process(es) listening on a TCP port. Returns { port, platform, processes: [{ pid, name }] }. Use this to identify what's holding a port (e.g. after check_port reports it's taken) without parsing netstat/lsof yourself.",
+    {
+      port: z.number().describe("TCP port number to inspect"),
+    },
+    async ({ port }) => {
+      const result = processes.findOnPort(port)
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "kill_process_on_port",
+    "Kill whatever process is listening on a TCP port (the 'reclaim a stuck port' move). Returns { port, platform, found, killed: [{ pid, name }], failed: [{ pid, name, error }] }. Destructive — it force-kills the process; use find_process_on_port first if you want to see what would be killed.",
+    {
+      port: z.number().describe("TCP port number to free up"),
+    },
+    async ({ port }) => {
+      const result = processes.killOnPort(port)
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
     },
   )
