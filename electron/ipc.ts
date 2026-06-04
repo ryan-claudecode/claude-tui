@@ -14,6 +14,20 @@ interface Session {
   state: "active" | "idle" | "dead"
 }
 
+/** Wrap a command in a shell so PATH resolution works reliably in Electron */
+function shellWrap(command: string, args: string[]): { shell: string; shellArgs: string[] } {
+  if (process.platform === "win32") {
+    return {
+      shell: "powershell.exe",
+      shellArgs: ["-NoLogo", "-NoProfile", "-Command", [command, ...args].join(" ")],
+    }
+  }
+  return {
+    shell: "bash",
+    shellArgs: ["-l", "-c", [command, ...args].join(" ")],
+  }
+}
+
 const sessions: Map<string, Session> = new Map()
 let nextId = 1
 let workspaces: Workspace[] = []
@@ -39,7 +53,11 @@ function attachPtyListeners(session: Session) {
     const handoffPath = join(session.cwd, "ephemeral", "handoff.md")
     if (existsSync(handoffPath)) {
       setTimeout(() => {
-        const newProc = pty.spawn("claude", ["--dangerously-skip-permissions", "continue from handoff"], {
+        const { shell: hShell, shellArgs: hShellArgs } = shellWrap(
+          "claude", ["--dangerously-skip-permissions", "continue from handoff"]
+        )
+
+        const newProc = pty.spawn(hShell, hShellArgs, {
           name: "xterm-256color",
           cols: session.pty.cols,
           rows: session.pty.rows,
@@ -71,7 +89,9 @@ function createSessionInternal(name: string, cwd: string): { id: string; name: s
   const command = config.defaultCommand ?? "claude"
   const args = config.defaultArgs ?? ["--dangerously-skip-permissions"]
 
-  const proc = pty.spawn(command, args, {
+  const { shell, shellArgs } = shellWrap(command, args)
+
+  const proc = pty.spawn(shell, shellArgs, {
     name: "xterm-256color",
     cols: 120,
     rows: 30,
