@@ -36,7 +36,7 @@ import type { UrlService } from "../services/url"
 import type { UiService } from "../services/ui"
 import type { MissionService } from "../services/mission"
 import type { SessionService } from "../services/sessions"
-import { registerTools } from "./tools"
+import { registerTools, type TerminalIdentity } from "./tools"
 
 // Injected into every connecting session's context via the MCP initialize
 // result (the "MCP Server Instructions" block Claude Code surfaces). Gives a
@@ -54,7 +54,9 @@ Tool groups (all prefixed mcp__claudetui__):
 - Self-verification — take_screenshot (capture the app window), get_app_state (assert on window/session state), notify (toast that surfaces even when the terminal isn't focused).
 - App UI control — drive the same view actions the user can: set_focus_mode (distraction-free), toggle_panel_drawer, open_command_palette, show_keyboard_shortcuts, open_history_search, export_session_log, get_config.
 - Mission orchestration — mission_create/status/list/plan/dispatch/await/resolve/log/pause/resume/stop/finish: run a durable, on-disk mission where you (or another Conductor session) decompose a goal, dispatch worker sessions, review results, and commit — surviving context/usage limits. If spawned as a Conductor, call mission_status first to load state and continue.
-- Work sessions (context engine) — create_work_session / list_work_sessions / work_session_status (omit session_id for the most-recent active one) build a durable *container* that groups many terminals and accumulates knowledge. register_terminal adds a terminal to it; set_terminal_activity reports what a terminal is doing now; session_note records authoritative findings (pass 'corrects' to supersede a wrong one); set_session_summary sets the running summary; get_session_context pulls the primer (summary + findings + ruled-out) a terminal reads to inherit what the session knows. Distinct from create_session et al., which manage individual terminals.
+- Work sessions (context engine) — create_work_session / list_work_sessions / work_session_status build a durable *container* that groups many terminals and accumulates knowledge. set_terminal_activity reports what a terminal is doing now; session_note records authoritative findings (pass 'corrects' to supersede a wrong one); set_session_summary sets the running summary; get_session_context pulls the primer (summary + findings + ruled-out) a terminal reads to inherit what the session knows. Distinct from create_session et al., which manage individual terminals.
+
+IF YOU WERE SPAWNED AS A TERMINAL IN A WORK SESSION: your identity is bound to this MCP connection — the work-session tools (get_session_context, set_terminal_activity, session_note, set_session_summary, work_session_status) all default to YOUR session and terminal, so call them with NO ids (e.g. set_terminal_activity({ activity: "running the test suite" })). On entry, call get_session_context to inherit what prior terminals discovered (root causes, gotchas, ruled-out approaches). As you work, call set_terminal_activity whenever your focus changes. Whenever you learn something a fresh terminal would otherwise re-discover, pin it with session_note (and session_note with 'corrects' if an earlier note was wrong). Then proceed with the user's instructions.
 
 Notes: tool schemas may be deferred — if a tool isn't loaded yet, search for it by exact name to load its schema before calling. Prefer these structured tools over shelling out (e.g. git_status over running \`git status\`). See CLAUDE.md for full per-tool detail and the panel prop schemas.`
 
@@ -102,7 +104,7 @@ export async function startMcpServer(
   // services are shared singletons — they own the real state — only the MCP
   // protocol wrapper is per-connection. This lets many Claude sessions (a
   // mission's Conductor + its workers) connect concurrently without colliding.
-  const makeServer = () => {
+  const makeServer = (identity: TerminalIdentity = {}) => {
     const server = new McpServer(
       {
         name: "claudetui",
@@ -147,6 +149,7 @@ export async function startMcpServer(
       uiService,
       missionService,
       workSessionService,
+      identity,
     )
     return server
   }
@@ -158,16 +161,23 @@ export async function startMcpServer(
   httpServer.on("request", async (req, res) => {
     const url = req.url ?? ""
 
-    if (url === "/sse" && req.method === "GET") {
+    const parsedReq = new URL(url, "http://localhost")
+
+    if (parsedReq.pathname === "/sse" && req.method === "GET") {
       const transport = new SSEServerTransport("/messages", res)
       transports.set(transport.sessionId, transport)
       // Drop the transport when the client disconnects so the map doesn't leak.
       res.on("close", () => transports.delete(transport.sessionId))
-      const server = makeServer()
+      // Bind this connection to the spawning terminal's identity (sid/tid carried
+      // on the URL), so its work-session tools default to its own ids.
+      const identity: TerminalIdentity = {
+        sessionId: parsedReq.searchParams.get("sid") ?? undefined,
+        terminalId: parsedReq.searchParams.get("tid") ?? undefined,
+      }
+      const server = makeServer(identity)
       await server.connect(transport)
-    } else if (url.startsWith("/messages") && req.method === "POST") {
-      const parsed = new URL(url, "http://localhost")
-      const sessionId = parsed.searchParams.get("sessionId")
+    } else if (parsedReq.pathname === "/messages" && req.method === "POST") {
+      const sessionId = parsedReq.searchParams.get("sessionId")
       const transport = transports.get(sessionId ?? "")
       if (transport) {
         await transport.handlePostMessage(req, res)

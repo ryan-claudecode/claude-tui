@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
@@ -245,14 +245,14 @@ describe("SessionService.status", () => {
 class FakeTerminals {
   private n = 0
   killed: string[] = []
-  written: Array<{ id: string; data: string }> = []
+  spawned: Array<{ id: string; name?: string; cwd?: string; sessionId?: string }> = []
   private cb: ((e: any) => void) | null = null
-  create(name?: string, cwd?: string) {
+  create(name?: string, cwd?: string, sessionId?: string) {
     const id = `live-${++this.n}`
+    this.spawned.push({ id, name, cwd, sessionId })
     return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const }
   }
   kill(id: string) { this.killed.push(id); return true }
-  write(id: string, data: string) { this.written.push({ id, data }) }
   onEvent(cb: (e: any) => void) { this.cb = cb; return () => { this.cb = null } }
   emit(e: any) { this.cb?.(e) }
 }
@@ -346,29 +346,26 @@ describe("SessionService orchestration", () => {
   })
 })
 
-describe("SessionService seed prompt", () => {
-  it("buildSeedPrompt embeds the session id + the three context-engine tools", () => {
+describe("SessionService identity-bound spawn", () => {
+  it("spawns terminals with their work-session id (for identity-bound MCP) and pastes nothing", () => {
+    const term = new FakeTerminals()
     const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    const seed = svc.buildSeedPrompt(s)
-    expect(seed).toContain(s.id)
-    expect(seed).toContain("get_session_context")
-    expect(seed).toContain("set_terminal_activity")
-    expect(seed).toContain("session_note")
+    svc.attachTerminals(term as any)
+    const { session } = svc.openSession("/repo")
+    svc.addTerminalToSession(session.id, "/repo")
+    // every spawn carries the session id so the PTY's MCP config is identity-bound
+    expect(term.spawned.every((sp) => sp.sessionId === session.id)).toBe(true)
+    // no write()/seed-paste API is used at all
+    expect("write" in term).toBe(false)
   })
 
-  it("seeds a freshly spawned terminal after the boot delay", () => {
-    vi.useFakeTimers()
+  it("reopenTerminal also spawns with the session id", () => {
     const term = new FakeTerminals()
     const svc = new SessionService({ dir, now: () => 1000 })
     svc.attachTerminals(term as any)
     const { session, terminalId } = svc.openSession("/repo")
-    expect(term.written).toHaveLength(0) // not yet — waiting for boot
-    vi.advanceTimersByTime(5000)
-    const w = term.written.find((x) => x.id === terminalId)
-    expect(w).toBeDefined()
-    expect(w!.data).toContain("get_session_context")
-    expect(w!.data.endsWith("\r")).toBe(true)
-    vi.useRealTimers()
+    term.emit({ type: "exit", id: terminalId })
+    svc.reopenTerminal(session.id, svc.get(session.id)!.terminals[0].id)
+    expect(term.spawned[term.spawned.length - 1].sessionId).toBe(session.id)
   })
 })

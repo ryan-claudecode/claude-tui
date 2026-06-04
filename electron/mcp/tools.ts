@@ -38,6 +38,17 @@ import type { SessionService } from "../services/sessions"
 import { loadConfig } from "../config"
 import { isAbsolute, join } from "path"
 
+/**
+ * The work-session + terminal a given MCP connection is bound to. Carried on the
+ * `/sse?sid=<session>&tid=<terminal>` URL each spawned terminal connects with, so
+ * the work-session tools can default their ids to the caller's own terminal — no
+ * need for Claude to discover or pass them.
+ */
+export interface TerminalIdentity {
+  sessionId?: string
+  terminalId?: string
+}
+
 export function registerTools(
   server: McpServer,
   sessions: TerminalService,
@@ -75,6 +86,7 @@ export function registerTools(
   ui: UiService,
   mission: MissionService,
   workSessions: SessionService,
+  identity: TerminalIdentity = {},
 ) {
   // Resolve a working directory for git ops: prefer the named session's cwd,
   // fall back to the first open session, then the app's own cwd.
@@ -438,10 +450,10 @@ export function registerTools(
 
   server.tool(
     "work_session_status",
-    "Load a work-session container's full state — the resume entry point. Omit session_id for the most-recently-updated active session.",
+    "Load a work-session container's full state — the resume entry point. Defaults to your own work session; omit session_id for the most-recently-updated active session.",
     { session_id: z.string().optional() },
     async ({ session_id }) => {
-      const s = workSessions.status(session_id)
+      const s = workSessions.status(session_id ?? identity.sessionId)
       return { content: [{ type: "text" as const, text: s ? JSON.stringify(s, null, 2) : "No active work session" }] }
     },
   )
@@ -466,50 +478,61 @@ export function registerTools(
 
   server.tool(
     "set_terminal_activity",
-    "Report what a registered terminal is doing right now (rich-presence line shown under the session). Optionally update its state (active/idle/dead).",
+    "Report what your terminal is doing right now (rich-presence line shown under the session). Ids default to your own terminal — just pass an activity. Optionally update state (active/idle/dead).",
     {
-      session_id: z.string(),
-      terminal_id: z.string(),
       activity: z.string().describe("Short present-tense line, e.g. 'running the test suite'"),
       state: z.enum(["active", "idle", "dead"]).optional(),
+      session_id: z.string().optional(),
+      terminal_id: z.string().optional(),
     },
     async ({ session_id, terminal_id, activity, state }) => {
-      workSessions.setTerminalActivity(session_id, terminal_id, activity)
-      if (state) workSessions.setTerminalState(session_id, terminal_id, state)
-      return { content: [{ type: "text" as const, text: workSessions.deriveStatus(session_id) }] }
+      const sid = session_id ?? identity.sessionId
+      const tid = terminal_id ?? identity.terminalId
+      if (!sid || !tid) {
+        return { content: [{ type: "text" as const, text: "No terminal identity bound to this connection — pass session_id and terminal_id." }] }
+      }
+      workSessions.setTerminalActivity(sid, tid, activity)
+      if (state) workSessions.setTerminalState(sid, tid, state)
+      return { content: [{ type: "text" as const, text: workSessions.deriveStatus(sid) }] }
     },
   )
 
   server.tool(
     "session_note",
-    "Record an authoritative finding into the work session's ledger. If this corrects an earlier note, pass its id as 'corrects' — the old note is demoted to ruled-out (never deleted) and linked to this one.",
+    "Record an authoritative finding into your work session's ledger (session_id defaults to your own). If this corrects an earlier note, pass its id as 'corrects' — the old note is demoted to ruled-out (never deleted) and linked to this one.",
     {
-      session_id: z.string(),
       text: z.string().describe("The finding, in your own words"),
       corrects: z.string().optional().describe("id of a prior note this supersedes"),
+      session_id: z.string().optional(),
     },
     async ({ session_id, text, corrects }) => {
-      const n = workSessions.addNote(session_id, text, corrects ? { corrects } : {})
+      const sid = session_id ?? identity.sessionId
+      if (!sid) return { content: [{ type: "text" as const, text: "No work session bound to this connection — pass session_id." }] }
+      const n = workSessions.addNote(sid, text, corrects ? { corrects } : {})
       return { content: [{ type: "text" as const, text: n ? JSON.stringify(n) : "Work session not found" }] }
     },
   )
 
   server.tool(
     "set_session_summary",
-    "Set/replace the work session's running summary (the top-of-context goal + current-state blurb).",
-    { session_id: z.string(), summary: z.string() },
+    "Set/replace your work session's running summary (the top-of-context goal + current-state blurb). session_id defaults to your own.",
+    { summary: z.string(), session_id: z.string().optional() },
     async ({ session_id, summary }) => {
-      workSessions.setSummary(session_id, summary)
+      const sid = session_id ?? identity.sessionId
+      if (!sid) return { content: [{ type: "text" as const, text: "No work session bound to this connection — pass session_id." }] }
+      workSessions.setSummary(sid, summary)
       return { content: [{ type: "text" as const, text: "ok" }] }
     },
   )
 
   server.tool(
     "get_session_context",
-    "Pull the work session's context primer: summary, then active findings, then a ruled-out/corrected section. This is what a terminal reads to inherit everything the session knows.",
-    { session_id: z.string() },
+    "Pull your work session's context primer: summary, then active findings, then a ruled-out/corrected section. This is what a terminal reads on entry to inherit everything the session knows. session_id defaults to your own.",
+    { session_id: z.string().optional() },
     async ({ session_id }) => {
-      const ctx = workSessions.getContext(session_id)
+      const sid = session_id ?? identity.sessionId
+      if (!sid) return { content: [{ type: "text" as const, text: "No work session bound to this connection — pass session_id." }] }
+      const ctx = workSessions.getContext(sid)
       return { content: [{ type: "text" as const, text: ctx ?? "Work session not found" }] }
     },
   )

@@ -1,6 +1,7 @@
 import * as pty from "node-pty"
-import { existsSync } from "fs"
+import { existsSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
+import { tmpdir } from "os"
 import { BrowserWindow } from "electron"
 
 export interface TerminalInfo {
@@ -72,6 +73,7 @@ export class TerminalService {
   private nextId = 1
   private mainWin: BrowserWindow | null = null
   private mcpConfigPath: string | null = null
+  private mcpServerUrl: string | null = null
   private defaultCommand = "claude"
   private defaultArgs = ["--dangerously-skip-permissions"]
   /** Quiet period after which a live session is considered idle (waiting). */
@@ -125,6 +127,30 @@ export class TerminalService {
 
   setMcpConfigPath(path: string) {
     this.mcpConfigPath = path
+  }
+
+  /** Base SSE URL (e.g. http://127.0.0.1:PORT/sse) used to mint per-terminal,
+   *  identity-bound MCP configs so a spawned terminal's tools know its own ids. */
+  setMcpServerUrl(url: string) {
+    this.mcpServerUrl = url
+  }
+
+  /**
+   * Write a per-terminal MCP config whose SSE URL carries this terminal's
+   * identity (sid/tid), and return its path. Falls back to the shared config
+   * (no identity) when we don't have a server URL or a work-session id yet.
+   */
+  private mcpConfigFor(terminalId: string, sessionId?: string): string | null {
+    if (!this.mcpServerUrl || !sessionId) return this.mcpConfigPath
+    const configDir = join(tmpdir(), "claudetui")
+    mkdirSync(configDir, { recursive: true })
+    const path = join(configDir, `mcp-config-${terminalId}.json`)
+    const url = `${this.mcpServerUrl}?sid=${encodeURIComponent(sessionId)}&tid=${encodeURIComponent(terminalId)}`
+    writeFileSync(
+      path,
+      JSON.stringify({ mcpServers: { claudetui: { type: "sse", url } } }, null, 2),
+    )
+    return path
   }
 
   setDefaults(command: string, args: string[]) {
@@ -187,14 +213,17 @@ export class TerminalService {
     })
   }
 
-  create(name?: string, cwd?: string): TerminalInfo {
+  create(name?: string, cwd?: string, sessionId?: string): TerminalInfo {
     const id = `session-${this.nextId++}`
     const sessionName = name || id
     const sessionCwd = cwd || process.cwd()
 
     const args = [...this.defaultArgs]
-    if (this.mcpConfigPath) {
-      args.push("--mcp-config", this.mcpConfigPath)
+    // Prefer a per-terminal, identity-bound MCP config so this terminal's
+    // work-session tools default to its own ids; fall back to the shared config.
+    const mcpConfig = this.mcpConfigFor(id, sessionId)
+    if (mcpConfig) {
+      args.push("--mcp-config", mcpConfig)
     }
 
     const { shell, shellArgs } = shellWrap(this.defaultCommand, args)
@@ -207,6 +236,8 @@ export class TerminalService {
       env: {
         ...process.env,
         CLAUDE_TUI: "1",
+        ...(sessionId ? { CLAUDETUI_SESSION_ID: sessionId } : {}),
+        CLAUDETUI_TERMINAL_ID: id,
       } as Record<string, string>,
     })
 

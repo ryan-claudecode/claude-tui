@@ -98,7 +98,7 @@ export async function setupIpc(win: BrowserWindow) {
   workSessionService.load()
 
   // Start MCP server and configure sessions to auto-connect
-  const { configPath } = await startMcpServer(
+  const { configPath, port } = await startMcpServer(
     sessionService,
     workspaceService,
     appService,
@@ -136,6 +136,7 @@ export async function setupIpc(win: BrowserWindow) {
     workSessionService,
   )
   sessionService.setMcpConfigPath(configPath)
+  sessionService.setMcpServerUrl(`http://127.0.0.1:${port}/sse`)
 
   missionService.start()
 

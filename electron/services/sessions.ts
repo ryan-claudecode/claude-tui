@@ -2,9 +2,6 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, unlink
 import { join } from "path"
 import { homedir } from "os"
 
-/** How long to wait for Claude to boot before writing the seed preamble. */
-const SEED_DELAY_MS = 4000
-
 export interface TerminalRef {
   id: string
   name: string
@@ -46,9 +43,8 @@ export interface SessionServiceOpts {
 
 /** The slice of TerminalService the container drives. */
 export interface TerminalLike {
-  create(name?: string, cwd?: string): { id: string; name: string; cwd: string; state: string }
+  create(name?: string, cwd?: string, sessionId?: string): { id: string; name: string; cwd: string; state: string }
   kill(id: string): boolean
-  write(id: string, data: string): void
   onEvent(cb: (e: { type: "created" | "state" | "exit"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string } }) => void): () => void
 }
 
@@ -116,15 +112,17 @@ export class SessionService {
     return { terminalId }
   }
 
-  /** Shared spawn path: create PTY, register a ref, seed it, persist + emit. */
+  /** Shared spawn path: create an identity-bound PTY, register a ref, persist + emit. */
   private spawnInto(s: WorkSession, cwd?: string): string {
     if (!this.terminals) throw new Error("terminals not attached")
-    const info = this.terminals.create(undefined, cwd)
+    // Pass the work-session id so the PTY connects with an identity-bound MCP
+    // config — the spawned Claude inherits context via SERVER_INSTRUCTIONS
+    // (no visible seed paste) and its work-session tools default to its own ids.
+    const info = this.terminals.create(undefined, cwd, s.id)
     s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: "active" })
     s.status = "active"
     this.persist(s)
     this.emit("worksession:updated", s)
-    this.seedTerminal(s, info.id)
     return info.id
   }
 
@@ -155,33 +153,15 @@ export class SessionService {
     if (!s || !this.terminals) return undefined
     const ref = s.terminals.find((t) => t.id === terminalId)
     if (!ref) return undefined
-    const info = this.terminals.create(ref.name, ref.cwd)
+    const info = this.terminals.create(ref.name, ref.cwd, s.id)
     ref.id = info.id
     ref.lastState = "active"
     s.status = "active"
     this.persist(s)
     this.emit("worksession:updated", s)
-    this.seedTerminal(s, info.id)
     return { terminalId: info.id }
   }
 
-  /** The session-aware preamble: read on entry, narrate + write on insight. */
-  buildSeedPrompt(s: WorkSession): string {
-    return [
-      `You are a terminal in work session "${s.name}" (id: ${s.id}).`,
-      `First, call get_session_context with session_id "${s.id}" to load what prior terminals discovered — root causes, gotchas, and ruled-out approaches.`,
-      `As you work: call set_terminal_activity with a short present-tense phrase whenever your focus changes (e.g. "running the test suite").`,
-      `Whenever you learn something a fresh terminal would otherwise re-discover, call session_note to pin it; if an earlier note was wrong, call session_note with "corrects" to set the record straight.`,
-      `Then wait for my first instruction.`,
-    ].join(" ")
-  }
-
-  private seedTerminal(s: WorkSession, liveId: string): void {
-    if (!this.terminals) return
-    const terminals = this.terminals
-    const prompt = this.buildSeedPrompt(s)
-    setTimeout(() => terminals.write(liveId, `${prompt}\r`), SEED_DELAY_MS)
-  }
 
   create(): WorkSession {
     const t = this.now()
