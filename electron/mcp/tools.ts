@@ -224,9 +224,9 @@ export function registerTools(
 
   server.tool(
     "show_panel",
-    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, git, or kanban). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams.",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, tree, timeline, git, or kanban). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams. For notes: props = { title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] } — the cross-session scratchpad (prefer the show_notes tool, which loads saved notes for you).",
     {
-      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban"]).describe("Panel type"),
+      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban", "notes"]).describe("Panel type"),
       props: z.record(z.any()).describe("Panel-specific data"),
       position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
     },
@@ -550,6 +550,43 @@ export function registerTools(
         return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `git stash list failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_blame",
+    "Line-by-line authorship for a file: which commit (hash, author, date, summary) last touched each line, plus the line content. Answers 'why is this line here / who changed it'. Optionally scope to a 1-based inclusive start_line/end_line range.",
+    {
+      file: z.string().describe("File path (relative to the session's cwd) to blame"),
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+      start_line: z.number().optional().describe("First line of the range (1-based, inclusive)"),
+      end_line: z.number().optional().describe("Last line of the range (1-based, inclusive)"),
+    },
+    async ({ file, session_id, start_line, end_line }) => {
+      try {
+        const blame = git.blame(resolveCwd(session_id), file, start_line, end_line)
+        return { content: [{ type: "text" as const, text: JSON.stringify(blame, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git blame failed: ${e.message}` }] }
+      }
+    },
+  )
+
+  server.tool(
+    "git_file_history",
+    "Commit history for a single file (follows renames). git_log covers the whole repo; this answers 'how did this one file evolve?' — returns commits (hash, author, date, subject) that touched it.",
+    {
+      file: z.string().describe("File path (relative to the session's cwd) to get history for"),
+      session_id: z.string().optional().describe("Session whose cwd to operate in"),
+      limit: z.number().optional().describe("Number of commits to return (default: 20)"),
+    },
+    async ({ file, session_id, limit }) => {
+      try {
+        const commits = git.fileHistory(resolveCwd(session_id), file, limit)
+        return { content: [{ type: "text" as const, text: JSON.stringify(commits, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `git file history failed: ${e.message}` }] }
       }
     },
   )
@@ -1010,6 +1047,29 @@ export function registerTools(
     async ({ id }) => {
       const ok = notes.delete(id)
       return { content: [{ type: "text" as const, text: ok ? "Note deleted" : "Note not found" }] }
+    },
+  )
+
+  server.tool(
+    "show_notes",
+    "Show the saved scratchpad notes in a UI panel so the USER can see the durable cross-session context Claude has accumulated (the notes are otherwise invisible to them). Loads notes via the same filters as list_notes (`scope` substring / `tag`) and renders each note's title, scope, tags, and markdown body. Returns how many notes were shown.",
+    {
+      scope: z.string().optional().describe("Filter to notes whose scope contains this substring"),
+      tag: z.string().optional().describe("Filter to notes carrying this tag"),
+      title: z.string().optional().describe("Optional heading for the panel (defaults to \"Notes\")"),
+      position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
+    },
+    async ({ scope, tag, title, position }) => {
+      const list = notes.list(scope, tag)
+      const panel = panels.show("notes", { title, notes: list }, position)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ panelId: panel.id, count: list.length }),
+          },
+        ],
+      }
     },
   )
 

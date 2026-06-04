@@ -37,6 +37,20 @@ export interface GitCommitDetail {
   diff: string
 }
 
+export interface GitBlameLine {
+  /** 1-based line number in the final file. */
+  line: number
+  /** Abbreviated commit hash that last touched this line. */
+  hash: string
+  author: string
+  /** Author date (YYYY-MM-DD). */
+  date: string
+  /** Subject of the commit that last touched this line. */
+  summary: string
+  /** The source line's content. */
+  content: string
+}
+
 /**
  * GitService — structured git queries and operations scoped to a working dir.
  *
@@ -221,5 +235,80 @@ export class GitService {
       stat,
       diff,
     }
+  }
+
+  /**
+   * Line-by-line authorship for a file via `git blame --line-porcelain`.
+   * Tells Claude *who* last changed each line and in *which* commit — the "why
+   * is this line here" question — without parsing raw blame output. Optionally
+   * scope to a 1-based inclusive `startLine`/`endLine` range (`-L`).
+   */
+  blame(cwd: string, file: string, startLine?: number, endLine?: number): GitBlameLine[] {
+    const args = ["blame", "--line-porcelain", "--date=short"]
+    if (startLine && endLine) args.push("-L", `${startLine},${endLine}`)
+    args.push("--", file)
+    const raw = this.run(cwd, args)
+    if (!raw) return []
+
+    const lines = raw.split("\n")
+    const out: GitBlameLine[] = []
+    // commit-hash metadata is repeated per line in --line-porcelain, but we
+    // still cache it so a line that reuses a prior commit resolves its fields.
+    const meta = new Map<string, { author: string; date: string; summary: string }>()
+    let i = 0
+    while (i < lines.length) {
+      const header = lines[i]
+      const m = header.match(/^([0-9a-f]{7,40})\s+\d+\s+(\d+)/)
+      if (!m) {
+        i++
+        continue
+      }
+      const hash = m[1]
+      const finalLine = parseInt(m[2], 10)
+      let author = meta.get(hash)?.author ?? ""
+      let date = meta.get(hash)?.date ?? ""
+      let summary = meta.get(hash)?.summary ?? ""
+      let content = ""
+      i++
+      while (i < lines.length && !lines[i].startsWith("\t")) {
+        const field = lines[i]
+        if (field.startsWith("author ")) author = field.slice(7)
+        else if (field.startsWith("author-time ")) {
+          date = new Date(parseInt(field.slice(12), 10) * 1000).toISOString().slice(0, 10)
+        } else if (field.startsWith("summary ")) summary = field.slice(8)
+        i++
+      }
+      if (i < lines.length && lines[i].startsWith("\t")) {
+        content = lines[i].slice(1)
+        i++
+      }
+      meta.set(hash, { author, date, summary })
+      out.push({ line: finalLine, hash: hash.slice(0, 8), author, date, summary, content })
+    }
+    return out
+  }
+
+  /**
+   * Commit history for a single file (`git log --follow -- <file>`), tracking
+   * the file across renames. `git_log` covers the whole repo; this answers "how
+   * did this one file evolve?".
+   */
+  fileHistory(cwd: string, file: string, limit = 20): GitCommit[] {
+    const sep = "\x1f"
+    const fmt = ["%h", "%an", "%ad", "%s"].join(sep)
+    const raw = this.run(cwd, [
+      "log",
+      `-n${limit}`,
+      "--follow",
+      "--date=short",
+      `--pretty=format:${fmt}`,
+      "--",
+      file,
+    ])
+    if (!raw) return []
+    return raw.split("\n").map((line) => {
+      const [hash, author, date, subject] = line.split(sep)
+      return { hash, author, date, subject }
+    })
   }
 }
