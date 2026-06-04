@@ -413,6 +413,105 @@ export function registerTools(
     return { content: [{ type: "text" as const, text: m ? "done" : "Mission not found" }] }
   })
 
+  // Work sessions — the durable *container* of many terminals that accumulates
+  // findings (the context engine). Distinct from create_session et al., which
+  // operate on individual terminals. A work session holds a summary, a corrected
+  // findings ledger, and the terminals registered into it.
+  server.tool(
+    "create_work_session",
+    "Create a new durable work-session container (a goal-scoped grouping of terminals that accumulates findings). Returns the WorkSession.",
+    {},
+    async () => {
+      const s = workSessions.create()
+      return { content: [{ type: "text" as const, text: JSON.stringify(s, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "list_work_sessions",
+    "List all work-session containers.",
+    {},
+    async () => {
+      return { content: [{ type: "text" as const, text: JSON.stringify(workSessions.list(), null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "work_session_status",
+    "Load a work-session container's full state — the resume entry point. Omit session_id for the most-recently-updated active session.",
+    { session_id: z.string().optional() },
+    async ({ session_id }) => {
+      const s = workSessions.status(session_id)
+      return { content: [{ type: "text" as const, text: s ? JSON.stringify(s, null, 2) : "No active work session" }] }
+    },
+  )
+
+  server.tool(
+    "register_terminal",
+    "Register a terminal into a work-session container (so its findings and activity roll up to the session). The first terminal's name seeds the session name while it's still 'Untitled session'.",
+    {
+      session_id: z.string(),
+      terminal_id: z.string().describe("The terminal/session id from create_session"),
+      name: z.string(),
+      cwd: z.string(),
+    },
+    async ({ session_id, terminal_id, name, cwd }) => {
+      workSessions.addTerminal(session_id, { id: terminal_id, name, cwd, lastState: "active" })
+      const s = workSessions.get(session_id)
+      return { content: [{ type: "text" as const, text: s ? JSON.stringify(s, null, 2) : "Work session not found" }] }
+    },
+  )
+
+  server.tool(
+    "set_terminal_activity",
+    "Report what a registered terminal is doing right now (rich-presence line shown under the session). Optionally update its state (active/idle/dead).",
+    {
+      session_id: z.string(),
+      terminal_id: z.string(),
+      activity: z.string().describe("Short present-tense line, e.g. 'running the test suite'"),
+      state: z.enum(["active", "idle", "dead"]).optional(),
+    },
+    async ({ session_id, terminal_id, activity, state }) => {
+      workSessions.setTerminalActivity(session_id, terminal_id, activity)
+      if (state) workSessions.setTerminalState(session_id, terminal_id, state)
+      return { content: [{ type: "text" as const, text: workSessions.deriveStatus(session_id) }] }
+    },
+  )
+
+  server.tool(
+    "session_note",
+    "Record an authoritative finding into the work session's ledger. If this corrects an earlier note, pass its id as 'corrects' — the old note is demoted to ruled-out (never deleted) and linked to this one.",
+    {
+      session_id: z.string(),
+      text: z.string().describe("The finding, in your own words"),
+      corrects: z.string().optional().describe("id of a prior note this supersedes"),
+    },
+    async ({ session_id, text, corrects }) => {
+      const n = workSessions.addNote(session_id, text, corrects ? { corrects } : {})
+      return { content: [{ type: "text" as const, text: n ? JSON.stringify(n) : "Work session not found" }] }
+    },
+  )
+
+  server.tool(
+    "set_session_summary",
+    "Set/replace the work session's running summary (the top-of-context goal + current-state blurb).",
+    { session_id: z.string(), summary: z.string() },
+    async ({ session_id, summary }) => {
+      workSessions.setSummary(session_id, summary)
+      return { content: [{ type: "text" as const, text: "ok" }] }
+    },
+  )
+
+  server.tool(
+    "get_session_context",
+    "Pull the work session's context primer: summary, then active findings, then a ruled-out/corrected section. This is what a terminal reads to inherit everything the session knows.",
+    { session_id: z.string() },
+    async ({ session_id }) => {
+      const ctx = workSessions.getContext(session_id)
+      return { content: [{ type: "text" as const, text: ctx ?? "Work session not found" }] }
+    },
+  )
+
   // Rich panel tools
 
   server.tool(
