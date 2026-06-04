@@ -36,6 +36,7 @@ export default function PanelDrawer({ panels, onClose }: Props) {
 
   // Resize handling
   const [size, setSize] = useState<number | null>(null)
+  const [maximized, setMaximized] = useState(false)
   const dragging = useRef(false)
 
   const panel = visiblePanels[Math.min(activeIdx, visiblePanels.length - 1)]
@@ -72,13 +73,20 @@ export default function PanelDrawer({ panels, onClose }: Props) {
   if (visiblePanels.length === 0 || !panel) return null
 
   const isRight = panel.position === "right"
-  const style: React.CSSProperties = isRight
-    ? { width: size ?? "40%" }
-    : { height: size ?? "40%" }
+  const style: React.CSSProperties = maximized
+    ? isRight
+      ? { width: "92%" }
+      : { height: "92%" }
+    : isRight
+      ? { width: size ?? "40%" }
+      : { height: size ?? "40%" }
 
   return (
-    <div className={`panel-drawer panel-drawer-${panel.position}`} style={style}>
-      <div className="panel-resize-handle" onMouseDown={onResizeStart} />
+    <div
+      className={`panel-drawer panel-drawer-${panel.position}${maximized ? " maximized" : ""}`}
+      style={style}
+    >
+      {!maximized && <div className="panel-resize-handle" onMouseDown={onResizeStart} />}
       <div className="panel-header">
         <div className="panel-tabs">
           {visiblePanels.map((p, i) => (
@@ -91,9 +99,18 @@ export default function PanelDrawer({ panels, onClose }: Props) {
             </button>
           ))}
         </div>
-        <button className="panel-close" onClick={() => onClose(panel.id)} title="Close panel">
-          ×
-        </button>
+        <div className="panel-header-actions">
+          <button
+            className="panel-action"
+            onClick={() => setMaximized((m) => !m)}
+            title={maximized ? "Restore panel" : "Maximize panel"}
+          >
+            {maximized ? "❐" : "⤢"}
+          </button>
+          <button className="panel-close" onClick={() => onClose(panel.id)} title="Close panel">
+            ×
+          </button>
+        </div>
       </div>
       <div className="panel-body">
         <PanelContent panel={panel} />
