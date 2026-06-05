@@ -4,8 +4,8 @@
   "description": "Cross-platform terminal multiplexer for Claude Code sessions",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite build && electron .",
-    "build": "electron-vite build",
+    "dev": "tsc -b && electron-vite build && electron .",
+    "build": "tsc -b && electron-vite build",
     "typecheck": "tsc -b",
     "start": "electron .",
     "test": "vitest run",
