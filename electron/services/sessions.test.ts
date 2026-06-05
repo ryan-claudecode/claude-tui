@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
@@ -502,5 +502,24 @@ describe("SessionService idle-flush", () => {
     term.emit({ type: "state", id: terminalId, state: "idle" })
     await tick()
     expect(term.writes.length).toBe(0)
+  })
+
+  it("does not idle-flush at the old 8s grace; waits the full window", () => {
+    vi.useFakeTimers()
+    try {
+      const term = new FakeTerminals()
+      // no idleFlushGraceMs override → uses the default grace
+      const svc = new SessionService({ dir, now: () => 1 })
+      svc.attachTerminals(term as any)
+      const { session, terminalId } = svc.openSession("/repo")
+      svc.addNote(session.id, "found root cause") // marks summaryDirty
+      term.emit({ type: "state", id: terminalId, state: "idle" }) // schedules the flush
+      vi.advanceTimersByTime(8000)
+      expect(term.writes.some((w) => w.data.includes("set_session_summary"))).toBe(false)
+      vi.advanceTimersByTime(12001) // total > 20s
+      expect(term.writes.some((w) => w.data.includes("set_session_summary"))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

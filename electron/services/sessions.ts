@@ -86,7 +86,7 @@ export class SessionService {
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
     this.now = opts.now ?? (() => Date.now())
-    this.idleFlushGraceMs = opts.idleFlushGraceMs ?? 8000
+    this.idleFlushGraceMs = opts.idleFlushGraceMs ?? 20000
   }
 
   attachTerminals(terminals: TerminalLike): void {
