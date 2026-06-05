@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import DiffPanel from "./panels/DiffPanel"
 import FormPanel from "./panels/FormPanel"
 import ImagePanel from "./panels/ImagePanel"
@@ -60,16 +60,41 @@ const PANEL_LABELS: Record<string, string> = {
   "session-overview": "Overview",
 }
 
+// Tab label. Overview tabs carry the session name so multiple open overviews are
+// distinguishable instead of all reading "Overview".
+function tabLabel(p: PanelState): string {
+  const base = PANEL_LABELS[p.type] ?? p.type
+  if (p.type === "session-overview" && typeof p.props?.name === "string" && p.props.name) {
+    return p.props.name
+  }
+  return base
+}
+
 export default function PanelDrawer({ panels, onClose, onSendToSession, onMissionStop, onMissionPause }: Props) {
   const visiblePanels = panels.filter((p) => p.visible)
-  const [activeIdx, setActiveIdx] = useState(0)
+  const [activeId, setActiveId] = useState<string | null>(null)
 
   // Resize handling
   const [size, setSize] = useState<number | null>(null)
   const [maximized, setMaximized] = useState(false)
   const dragging = useRef(false)
 
-  const panel = visiblePanels[Math.min(activeIdx, visiblePanels.length - 1)]
+  // Every show/re-show moves a panel to the end of the array (see the setPanels
+  // callers in App.tsx). Track that most-recent panel by id and focus it, so
+  // opening a new panel (e.g. another session's overview) actually brings it to
+  // front instead of leaving the drawer pinned to whatever was opened first.
+  // The M5 live-refresh maps over panels in place (order preserved), so it never
+  // changes the last id and therefore never steals focus.
+  const lastVisibleId = visiblePanels.length ? visiblePanels[visiblePanels.length - 1].id : null
+  const shownIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (lastVisibleId !== shownIdRef.current) {
+      shownIdRef.current = lastVisibleId
+      setActiveId(lastVisibleId)
+    }
+  }, [lastVisibleId])
+
+  const panel = visiblePanels.find((p) => p.id === activeId) ?? visiblePanels[visiblePanels.length - 1]
 
   const onResizeStart = useCallback(
     (e: React.MouseEvent) => {
@@ -119,13 +144,13 @@ export default function PanelDrawer({ panels, onClose, onSendToSession, onMissio
       {!maximized && <div className="panel-resize-handle" onMouseDown={onResizeStart} />}
       <div className="panel-header">
         <div className="panel-tabs">
-          {visiblePanels.map((p, i) => (
+          {visiblePanels.map((p) => (
             <button
               key={p.id}
               className={`panel-tab ${p === panel ? "active" : ""}`}
-              onClick={() => setActiveIdx(i)}
+              onClick={() => setActiveId(p.id)}
             >
-              {PANEL_LABELS[p.type] ?? p.type}
+              {tabLabel(p)}
             </button>
           ))}
         </div>
