@@ -26,6 +26,7 @@ Three layers — service layer is the core, everything else is a thin adapter on
 │  (one-line wrappers)       tools.ts            │
 ├────────────────────────────────────────────────┤
 │           Service Layer (source of truth)       │
+│  electron/services/terminals.ts                │
 │  electron/services/sessions.ts                 │
 │  electron/services/workspaces.ts               │
 ├────────────────────────────────────────────────┤
@@ -42,7 +43,8 @@ Three layers — service layer is the core, everything else is a thin adapter on
 | `electron/main.ts` | App entry — creates window, calls setupIpc |
 | `electron/ipc.ts` | IPC handlers — thin wrappers calling services |
 | `electron/preload.ts` | contextBridge — exposes API to renderer |
-| `electron/services/sessions.ts` | **SessionService** — all session ops (create, kill, rename, handoff, split, etc.) |
+| `electron/services/terminals.ts` | **TerminalService** — runtime PTYs (create/kill/write/resize/rename), output capture, idle/activity state, conversation-id capture |
+| `electron/services/sessions.ts` | **SessionService** — durable work-session *container*: terminal membership, notes/summary/context primer, resume/idle-flush/overview |
 | `electron/services/workspaces.ts` | **WorkspaceService** — workspace discovery + activation |
 | `electron/services/panels.ts` | **PanelService** — rich UI panel state + form callbacks |
 | `electron/services/app.ts` | **AppService** — app-level ops (screenshot, app state, build) |
@@ -72,14 +74,16 @@ Three layers — service layer is the core, everything else is a thin adapter on
 
 Every feature follows the same 4-step pattern. Example: adding a "pause session" feature.
 
+> Note: single-PTY operations (the `this.terminals` map) live in `electron/services/terminals.ts`; durable container ops live in `electron/services/sessions.ts`. The example below uses `terminals.ts`.
+
 ### Step 1: Add to service
 
-`electron/services/sessions.ts`:
+`electron/services/terminals.ts`:
 ```typescript
 pause(id: string): boolean {
-  const session = this.sessions.get(id)
-  if (!session) return false
-  session.state = "paused"
+  const terminal = this.terminals.get(id)
+  if (!terminal) return false
+  terminal.state = "paused"
   this.sendToRenderer("session:paused", id)
   return true
 }
