@@ -585,12 +585,10 @@ export default function App() {
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
-        activeTerminalId={activeTerminalId}
         workspaces={workspaces}
         onNewSession={handleNewSession}
         onKillSession={handleKillSession}
         onSelectSession={handleSelectSession}
-        onSelectTerminal={handleSelectTerminal}
         onSelectWorkspace={(index) => window.api.activateWorkspace(index)}
         onShowOverview={openOverview}
       />

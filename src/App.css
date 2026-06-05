@@ -236,23 +236,49 @@ body {
 /* Two-level session tree (sessions ⊃ terminals) */
 .session-group { display: flex; flex-direction: column; }
 .session-item {
-  margin: 1px var(--s-2);
-  padding: 6px 10px;
-  cursor: pointer;
   display: flex;
-  align-items: center;
-  gap: var(--s-2);
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 1px var(--s-2);
   font-size: 13px;
   color: var(--text-2);
-  border-radius: var(--r-sm);
   border: 1px solid transparent;
   position: relative;
   transition: background var(--fast) var(--ease), color var(--fast) var(--ease),
     border-color var(--fast) var(--ease);
 }
+.session-item-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-item-line1 .session-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-count {
+  font-size: 11px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+.session-item-line2 {
+  font-size: 11px;
+  opacity: 0.6;
+  height: 16px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 16px;
+}
 .session-item:hover { background: var(--bg-4); color: var(--text-1); }
 .session-item.active {
-  background: linear-gradient(90deg, var(--accent-soft), rgba(90, 166, 255, 0.03));
+  background: var(--bg-elevated, #1c2128);
   color: var(--text-0);
   border-color: rgba(90, 166, 255, 0.25);
 }
