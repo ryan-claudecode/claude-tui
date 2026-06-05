@@ -27,6 +27,7 @@ declare global {
       >
       onSessionData: (callback: (id: string, data: string) => void) => void
       onSessionFocus: (callback: (id: string) => void) => void
+      onSessionState: (callback: (id: string, state: string) => void) => void
       // Work-session (container) tier
       listWorkSessions: () => Promise<any[]>
       openWorkSession: (cwd?: string) => Promise<{ session: any; terminalId: string }>
@@ -134,6 +135,11 @@ export default function App() {
     })
   }, [])
 
+  // M5: ref holding the latest overview-refresh callback. Declared here so the
+  // mount-effect below can call it when worksession:updated fires, without adding
+  // a second ipcRenderer listener for that channel.
+  const refreshOverviewsRef = useRef<(() => void) | null>(null)
+
   // Listen for container + terminal events from the main process
   useEffect(() => {
     window.api.onWorkSessionUpdated((updated: WorkSession) => {
@@ -148,6 +154,8 @@ export default function App() {
       setActiveTerminalId(
         (cur) => cur ?? updated.terminals[updated.terminals.length - 1]?.id ?? null,
       )
+      // M5: also refresh any open overview panels when the container updates.
+      refreshOverviewsRef.current?.()
     })
 
     window.api.onWorkSessionRemoved((id: string) => {
@@ -370,6 +378,64 @@ export default function App() {
   useEffect(() => {
     exportLogRef.current = handleExportLog
   }, [handleExportLog])
+
+  // M5: keep any open Session Overview panel live. When a terminal's state or the
+  // container changes, re-fetch the overview for each open overview-* panel and
+  // replace its props. Debounced so a burst of events coalesces into one refresh.
+  //
+  // Implementation note on the footgun: the existing mount-time effect already
+  // owns onWorkSessionUpdated (registers + removeAllListeners on unmount). Adding a
+  // second onWorkSessionUpdated listener in a [panels]-dep effect would accumulate
+  // listeners on every panels change and fight with the mount-effect's cleanup.
+  // Instead, we store the refresh callback in a ref so the existing mount-effect
+  // can call it, and we register onSessionState (no existing subscriber) here.
+  // The existing mount-effect is updated above to also call refreshOverviewsRef.current().
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const refreshOpenOverviews = () => {
+      if (timer) return // coalesce: a refresh is already scheduled
+      timer = setTimeout(async () => {
+        timer = null
+        const openIds = panels
+          .filter((p) => p.visible && p.id.startsWith("overview-"))
+          .map((p) => p.id.slice("overview-".length))
+        for (const sessionId of openIds) {
+          const ov = await window.api.getSessionOverview(sessionId)
+          if (!ov) continue // session gone mid-refresh: leave last content
+          setPanels((prev) =>
+            prev.map((p) =>
+              p.id === `overview-${sessionId}`
+                ? {
+                    ...p,
+                    props: {
+                      ...ov,
+                      onReopenTerminal: (terminalId: string) =>
+                        window.api.reopenTerminal(sessionId, terminalId),
+                    },
+                  }
+                : p,
+            ),
+          )
+        }
+      }, 250)
+    }
+
+    // Expose to mount-effect so worksession:updated also triggers a refresh.
+    refreshOverviewsRef.current = refreshOpenOverviews
+
+    // session:state has no existing subscriber — safe to own here.
+    // NOTE: "session:state" is the pre-rename channel string. Task 7 will sweep
+    // this to "terminal:state" along with the rest of the wire rename.
+    window.api.onSessionState(refreshOpenOverviews)
+
+    return () => {
+      if (timer) clearTimeout(timer)
+      refreshOverviewsRef.current = null
+      // Only remove session:state — worksession:updated is owned by the mount-effect.
+      window.api.removeAllListeners("session:state")
+    }
+  }, [panels])
 
   // Open (or refresh) a mission's dashboard panel.
   const openMission = useCallback((m: { id: string }) => {
