@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "electron-vite build && electron .",
     "build": "electron-vite build",
+    "typecheck": "tsc -b",
     "start": "electron .",
     "test": "vitest run",
     "test:watch": "vitest"
