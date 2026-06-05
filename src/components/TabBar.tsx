@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react"
 
 interface Props {
-  terminals: Array<{ id: string; name: string; lastState: string }>
+  terminals: Array<{ id: string; name: string; lastState: string; activity?: string }>
   activeTerminalId: string | null
   splitId: string | null
   onSelectTerminal: (id: string) => void
@@ -36,7 +36,9 @@ export default function TabBar({
           key={t.id}
           className={`tab ${t.id === activeTerminalId ? "active" : ""} ${t.id === splitId ? "split" : ""}`}
           onClick={() => onSelectTerminal(t.id)}
+          title={t.activity ? `${t.name} — ${t.activity}` : t.name}
         >
+          <span className={`status-dot ${t.lastState}`} />
           {editingId === t.id ? (
             <input
               className="tab-rename-input"

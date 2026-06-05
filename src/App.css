@@ -417,6 +417,9 @@ body {
   min-height: 38px;
   align-items: stretch;
   box-shadow: var(--shadow-1);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 
 .tab {
@@ -430,8 +433,13 @@ body {
   align-items: center;
   white-space: nowrap;
   gap: 6px;
+  flex: 0 0 auto;
   position: relative;
   transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+
+.tab .status-dot {
+  flex: 0 0 auto;
 }
 
 .tab::after {
