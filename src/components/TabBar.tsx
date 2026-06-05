@@ -7,6 +7,7 @@ interface Props {
   onSelectTerminal: (id: string) => void
   onCloseTerminal: (id: string) => void
   onRenameTerminal: (id: string, newName: string) => void
+  onNewTerminal: () => void
 }
 
 export default function TabBar({
@@ -16,6 +17,7 @@ export default function TabBar({
   onSelectTerminal,
   onCloseTerminal,
   onRenameTerminal,
+  onNewTerminal,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState("")
@@ -26,8 +28,6 @@ export default function TabBar({
     }
     setEditingId(null)
   }, [editingId, editValue, onRenameTerminal])
-
-  if (terminals.length === 0) return <div className="tab-bar" />
 
   return (
     <div className="tab-bar">
@@ -77,6 +77,9 @@ export default function TabBar({
           </span>
         </div>
       ))}
+      <button className="tab-new" title="New terminal in this session" onClick={onNewTerminal}>
+        +
+      </button>
     </div>
   )
 }

@@ -600,6 +600,7 @@ export default function App() {
           onSelectTerminal={(id) => setActiveTerminalId(id)}
           onCloseTerminal={(id) => activeSessionId && window.api.closeTerminal(activeSessionId, id)}
           onRenameTerminal={handleRenameTerminal}
+          onNewTerminal={handleNewTerminal}
         />
         <div
           className={`workspace-body ${

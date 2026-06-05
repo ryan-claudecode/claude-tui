@@ -517,6 +517,20 @@ body {
   min-width: 40px;
 }
 
+.tab-new {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted, #8b949e);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 10px;
+  cursor: pointer;
+}
+.tab-new:hover {
+  color: var(--fg, #c9d1d9);
+}
+
 /* ============================================================
    Terminal
    ============================================================ */
