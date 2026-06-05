@@ -84,7 +84,7 @@ pause(id: string): boolean {
   const terminal = this.terminals.get(id)
   if (!terminal) return false
   terminal.state = "paused"
-  this.sendToRenderer("session:paused", id)
+  this.sendToRenderer("terminal:paused", id)
   return true
 }
 ```
@@ -93,7 +93,7 @@ pause(id: string): boolean {
 
 `electron/ipc.ts`:
 ```typescript
-ipcMain.handle("session:pause", (_e, id) => sessionService.pause(id))
+ipcMain.handle("terminal:pause", (_e, id) => sessionService.pause(id))
 ```
 
 ### Step 3: Add MCP tool
@@ -112,12 +112,14 @@ server.tool("pause_session", "Pause a session", {
 
 `electron/preload.ts`:
 ```typescript
-pauseSession: (id: string) => ipcRenderer.invoke("session:pause", id),
+pauseSession: (id: string) => ipcRenderer.invoke("terminal:pause", id),
 ```
 
 `src/App.tsx` — add to Window.api type, add handler, wire to UI.
 
 That's it. Service → IPC → MCP → Preload. Each is one function call or one object.
+
+> **IPC channel convention:** per-terminal (PTY) operations use the `terminal:*` channel namespace; durable work-session *container* operations use `worksession:*`. The renderer-facing JS accessor names (`createSession`, `onSessionData`, etc.) are kept stable for API continuity and deliberately do **not** track the channel namespace — only the wire strings follow the `terminal:*` / `worksession:*` split.
 
 ## Session Spawning
 
