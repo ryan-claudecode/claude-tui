@@ -102,7 +102,7 @@ export function resumeArgs(
 export function parseActivityLine(output: string): string | undefined {
   const lines = output.split("\n")
   for (let i = lines.length - 1; i >= 0; i--) {
-    const m = lines[i].match(/^\s*[●○*]\s+(.+\(.+\).*)$/)
+    const m = lines[i].match(/^\s*●\s+([A-Z][A-Za-z0-9]*\(.*\).*)$/)
     if (m) return m[1].trim()
   }
   return undefined

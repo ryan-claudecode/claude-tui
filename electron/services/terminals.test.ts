@@ -149,4 +149,12 @@ describe("parseActivityLine", () => {
   it("returns undefined when there is no tool-call line", () => {
     expect(parseActivityLine("just\nplain\ntext")).toBeUndefined()
   })
+
+  it("matches tool calls but not prose bullets", () => {
+    expect(parseActivityLine("● Edit(src/App.tsx)")).toBe("Edit(src/App.tsx)")
+    expect(parseActivityLine("● Bash(npm test)")).toBe("Bash(npm test)")
+    // prose bullets / markdown lists must NOT match
+    expect(parseActivityLine("* this is a note (with parens)")).toBeUndefined()
+    expect(parseActivityLine("● note about something (no tool)")).toBeUndefined()
+  })
 })
