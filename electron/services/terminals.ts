@@ -170,7 +170,7 @@ export interface OutputMatch {
 }
 
 export class TerminalService {
-  private sessions = new Map<string, Terminal>()
+  private terminals = new Map<string, Terminal>()
   /** Bounded plain-text scrollback per session, for history search/review. */
   private outputBuffers = new Map<string, string>()
   /** Max characters of scrollback retained per session. */
@@ -211,23 +211,23 @@ export class TerminalService {
     if (this.idleTimer) return
     this.idleTimer = setInterval(() => {
       const now = Date.now()
-      for (const session of this.sessions.values()) {
-        if (session.state === "active" && now - session.lastActivity > this.idleThresholdMs) {
-          session.state = "idle"
-          this.sendToRenderer("session:state", session.id, "idle")
-          this.emitEvent({ type: "state", id: session.id, state: "idle" })
+      for (const terminal of this.terminals.values()) {
+        if (terminal.state === "active" && now - terminal.lastActivity > this.idleThresholdMs) {
+          terminal.state = "idle"
+          this.sendToRenderer("session:state", terminal.id, "idle")
+          this.emitEvent({ type: "state", id: terminal.id, state: "idle" })
         }
       }
     }, 1000)
   }
 
   /** Record output activity and flip a session back to active if it was idle. */
-  private markActive(session: Terminal) {
-    session.lastActivity = Date.now()
-    if (session.state === "idle") {
-      session.state = "active"
-      this.sendToRenderer("session:state", session.id, "active")
-      this.emitEvent({ type: "state", id: session.id, state: "active" })
+  private markActive(terminal: Terminal) {
+    terminal.lastActivity = Date.now()
+    if (terminal.state === "idle") {
+      terminal.state = "active"
+      this.sendToRenderer("session:state", terminal.id, "active")
+      this.emitEvent({ type: "state", id: terminal.id, state: "active" })
     }
   }
 
@@ -270,20 +270,20 @@ export class TerminalService {
     }
   }
 
-  private attachPtyListeners(session: Session) {
-    session.pty.onData((data) => {
-      this.sendToRenderer("session:data", session.id, data)
-      this.captureOutput(session.id, data)
-      this.markActive(session)
+  private attachPtyListeners(terminal: Terminal) {
+    terminal.pty.onData((data) => {
+      this.sendToRenderer("session:data", terminal.id, data)
+      this.captureOutput(terminal.id, data)
+      this.markActive(terminal)
     })
 
-    session.pty.onExit(() => {
-      session.state = "dead"
-      this.sendToRenderer("session:exit", session.id)
-      this.emitEvent({ type: "exit", id: session.id })
+    terminal.pty.onExit(() => {
+      terminal.state = "dead"
+      this.sendToRenderer("session:exit", terminal.id)
+      this.emitEvent({ type: "exit", id: terminal.id })
 
       // Check for handoff file -- auto-respawn if present
-      const handoffPath = join(session.cwd, "ephemeral", "handoff.md")
+      const handoffPath = join(terminal.cwd, "ephemeral", "handoff.md")
       if (existsSync(handoffPath)) {
         setTimeout(() => {
           const args = [...this.defaultArgs]
@@ -297,21 +297,21 @@ export class TerminalService {
 
           const newProc = pty.spawn(hShell, hShellArgs, {
             name: "xterm-256color",
-            cols: session.pty.cols,
-            rows: session.pty.rows,
-            cwd: session.cwd,
+            cols: terminal.pty.cols,
+            rows: terminal.pty.rows,
+            cwd: terminal.cwd,
             env: { ...process.env, CLAUDE_TUI: "1" } as Record<string, string>,
           })
 
-          session.pty = newProc
-          session.state = "active"
-          session.lastActivity = Date.now()
-          this.attachPtyListeners(session)
+          terminal.pty = newProc
+          terminal.state = "active"
+          terminal.lastActivity = Date.now()
+          this.attachPtyListeners(terminal)
 
           this.sendToRenderer("session:created", {
-            id: session.id,
-            name: session.name,
-            cwd: session.cwd,
+            id: terminal.id,
+            name: terminal.name,
+            cwd: terminal.cwd,
             state: "active",
           })
         }, 500)
@@ -354,7 +354,7 @@ export class TerminalService {
       } as Record<string, string>,
     })
 
-    const session: Terminal = {
+    const terminal: Terminal = {
       id,
       name: sessionName,
       cwd: sessionCwd,
@@ -363,8 +363,8 @@ export class TerminalService {
       lastActivity: Date.now(),
     }
 
-    this.sessions.set(id, session)
-    this.attachPtyListeners(session)
+    this.terminals.set(id, terminal)
+    this.attachPtyListeners(terminal)
 
     const info: TerminalInfo = { id, name: sessionName, cwd: sessionCwd, state: "active" }
     this.sendToRenderer("session:created", info)
@@ -391,17 +391,17 @@ export class TerminalService {
       if (convoId) {
         this.emitEvent({ type: "convo", id, ccConversationId: convoId })
         clearInterval(timer)
-      } else if (attempts >= 10 || !this.sessions.has(id)) {
+      } else if (attempts >= 10 || !this.terminals.has(id)) {
         clearInterval(timer)
       }
     }, 1000)
   }
 
   kill(id: string): boolean {
-    const session = this.sessions.get(id)
-    if (!session) return false
-    session.pty.kill()
-    this.sessions.delete(id)
+    const terminal = this.terminals.get(id)
+    if (!terminal) return false
+    terminal.pty.kill()
+    this.terminals.delete(id)
     this.outputBuffers.delete(id)
     return true
   }
@@ -421,7 +421,7 @@ export class TerminalService {
   /** Return the tail of a session's captured output, or null if unknown. */
   getOutput(id: string, maxChars = 8000): string | null {
     const buf = this.outputBuffers.get(id)
-    if (buf == null) return this.sessions.has(id) ? "" : null
+    if (buf == null) return this.terminals.has(id) ? "" : null
     return buf.length > maxChars ? buf.slice(buf.length - maxChars) : buf
   }
 
@@ -437,7 +437,7 @@ export class TerminalService {
     for (const id of ids) {
       const buf = this.outputBuffers.get(id)
       if (!buf) continue
-      const name = this.sessions.get(id)?.name ?? id
+      const name = this.terminals.get(id)?.name ?? id
       const lines = buf.split("\n")
       for (let i = 0; i < lines.length; i++) {
         if (lines[i].toLowerCase().includes(needle)) {
@@ -450,7 +450,7 @@ export class TerminalService {
   }
 
   list(): TerminalInfo[] {
-    return Array.from(this.sessions.values()).map((s) => ({
+    return Array.from(this.terminals.values()).map((s) => ({
       id: s.id,
       name: s.name,
       cwd: s.cwd,
@@ -465,7 +465,7 @@ export class TerminalService {
    */
   getActivity(): TerminalActivity[] {
     const now = Date.now()
-    return Array.from(this.sessions.values()).map((s) => ({
+    return Array.from(this.terminals.values()).map((s) => ({
       id: s.id,
       name: s.name,
       state: s.state,
@@ -491,9 +491,9 @@ export class TerminalService {
     id: string,
     opts: { input?: string; submit?: boolean; quietMs?: number; timeoutMs?: number; notBefore?: number } = {},
   ): Promise<{ idle: boolean; timedOut: boolean; reason?: string }> {
-    const session = this.sessions.get(id)
-    if (!session) return Promise.resolve({ idle: false, timedOut: false, reason: "not found" })
-    if (session.state === "dead") {
+    const terminal = this.terminals.get(id)
+    if (!terminal) return Promise.resolve({ idle: false, timedOut: false, reason: "not found" })
+    if (terminal.state === "dead") {
       return Promise.resolve({ idle: false, timedOut: false, reason: "dead" })
     }
 
@@ -503,19 +503,19 @@ export class TerminalService {
 
     if (opts.input != null) {
       // Start the quiet clock now so we wait for output that follows our input.
-      session.lastActivity = Date.now()
-      if (session.state === "idle") {
-        session.state = "active"
+      terminal.lastActivity = Date.now()
+      if (terminal.state === "idle") {
+        terminal.state = "active"
         this.sendToRenderer("session:state", id, "active")
         this.emitEvent({ type: "state", id, state: "active" })
       }
-      session.pty.write(opts.submit ? opts.input + "\r" : opts.input)
+      terminal.pty.write(opts.submit ? opts.input + "\r" : opts.input)
     }
 
     const start = Date.now()
     return new Promise((resolve) => {
       const timer = setInterval(() => {
-        const s = this.sessions.get(id)
+        const s = this.terminals.get(id)
         if (!s || s.state === "dead") {
           clearInterval(timer)
           resolve({ idle: false, timedOut: false, reason: "ended" })
@@ -531,27 +531,27 @@ export class TerminalService {
   }
 
   rename(id: string, newName: string): boolean {
-    const session = this.sessions.get(id)
-    if (!session) return false
-    session.name = newName
+    const terminal = this.terminals.get(id)
+    if (!terminal) return false
+    terminal.name = newName
     this.sendToRenderer("session:renamed", id, newName)
     return true
   }
 
   write(id: string, data: string): void {
-    const session = this.sessions.get(id)
-    if (session) session.pty.write(data)
+    const terminal = this.terminals.get(id)
+    if (terminal) terminal.pty.write(data)
   }
 
   resize(id: string, cols: number, rows: number): void {
-    const session = this.sessions.get(id)
-    if (session) session.pty.resize(cols, rows)
+    const terminal = this.terminals.get(id)
+    if (terminal) terminal.pty.resize(cols, rows)
   }
 
   handoff(id: string): boolean {
-    const session = this.sessions.get(id)
-    if (session) {
-      session.pty.write("/handoff\r")
+    const terminal = this.terminals.get(id)
+    if (terminal) {
+      terminal.pty.write("/handoff\r")
     }
     return true
   }
@@ -559,13 +559,13 @@ export class TerminalService {
   focus(id: string): boolean {
     // Switching the visible tab is a renderer concern — tell it to activate this
     // session (so the MCP focus_session tool actually changes the active tab).
-    if (!this.sessions.has(id)) return false
+    if (!this.terminals.has(id)) return false
     this.sendToRenderer("session:focus", id)
     return true
   }
 
   splitPanes(leftId: string, rightId: string): boolean {
-    if (!this.sessions.has(leftId) || !this.sessions.has(rightId)) return false
+    if (!this.terminals.has(leftId) || !this.terminals.has(rightId)) return false
     this.sendToRenderer("split:set", leftId, rightId)
     return true
   }
@@ -576,14 +576,14 @@ export class TerminalService {
   }
 
   killAll(): void {
-    for (const session of this.sessions.values()) {
+    for (const terminal of this.terminals.values()) {
       try {
-        session.pty.kill()
+        terminal.pty.kill()
       } catch {
         // Ignore cleanup errors
       }
     }
-    this.sessions.clear()
+    this.terminals.clear()
     this.outputBuffers.clear()
     if (this.idleTimer) {
       clearInterval(this.idleTimer)
