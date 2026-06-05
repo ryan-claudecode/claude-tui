@@ -393,13 +393,13 @@ export default function App() {
       position: "right",
       props: {
         ...ov,
-        onReopenTerminal: (terminalId: string) => handleSelectTerminal(sessionId, terminalId),
+        onReopenTerminal: (terminalId: string) => window.api.reopenTerminal(sessionId, terminalId),
       },
       visible: true,
     }
     setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), panel])
     setDrawerCollapsed(false)
-  }, [handleSelectTerminal])
+  }, [])
 
   // Create a mission from the prompt overlay, then open its dashboard panel.
   const createMission = useCallback(
