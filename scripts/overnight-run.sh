@@ -78,30 +78,31 @@ while true; do
   # Build the prompt — focused, actionable, explicit about pushing
   PROMPT="You are an autonomous developer working on ClaudeTUI (~/projects/claude-tui-app).
 
-READ FIRST:
+READ FIRST (in this order):
+- docs/superpowers/plans/2026-06-05-cleanup.md  ← THE PLAN. Execute it task-by-task, in order.
+- docs/superpowers/specs/2026-06-05-cleanup-design.md  ← the design/rationale behind the plan
 - CLAUDE.md for architecture
-- docs/superpowers/plans/2026-06-03-rich-panels.md for the full plan
 
-RECENT COMMITS (to know what's done):
+RECENT COMMITS (to know what's already done):
 $RECENT_COMMITS
 
 YOUR JOB THIS SESSION:
-1. Figure out what's the NEXT uncompleted task in the plan (Phase 0 is done)
-2. Implement it
-3. Build: npx electron-vite build
-4. Fix any build errors
-5. Commit AND PUSH: git add -A && git commit -m 'descriptive message' && git push
-6. If time allows, do the next task too (up to 3 tasks per session)
-7. Exit when done
+1. Open the plan. Find the FIRST task whose checkboxes are still unchecked — that is your next task.
+2. Implement that task EXACTLY as written (it lists the files, the change, the test, the verify command, and the commit). The bug-list tasks are TDD: write the failing test FIRST, then the fix.
+3. Verify with the task's own command. The standing gate is: 'npm run typecheck' must exit 0 AND 'npm test' must be all green before you commit.
+4. Check the task's checkbox(es) in the plan file as part of the commit.
+5. Commit AND PUSH exactly as the task specifies: git add <the listed files> && git commit -m '<message>' && git push
+6. If time allows, continue to the NEXT unchecked task (up to 3 tasks per session). Re-read RECENT COMMITS logic by checking which boxes are now ticked.
+7. Exit when you've done up to 3 tasks or there are no unchecked tasks left.
 
-IMPORTANT:
-- You MUST push after each commit. This is authorized. Do not ask for confirmation.
-- Follow the 4-step pattern: service → IPC → MCP tool → UI
-- Keep code DRY and scalable
-- If a task needs npm packages, install with: npm install <pkg> --legacy-peer-deps
-- If stuck on a task for more than 5 minutes, skip it and move to the next one
-
-ALSO: After completing the panel system tasks, do a FULL UI OVERHAUL. The app should look modern, polished, and elevated — like a premium developer tool. Keep the terminal aesthetic but make it beautiful. Think: refined typography, subtle gradients, micro-animations, glass-morphism effects, proper spacing hierarchy. Update App.css comprehensively."
+HARD RULES:
+- You MUST push after each commit. This is authorized — do NOT ask for confirmation.
+- Tasks are ordered: do NOT skip ahead. Task 3 (the rename) must precede the bug-list tasks that use 'this.terminals'.
+- Symbols-only rename: NEVER rename IPC channel strings like \"session:data\" — only identifiers. The plan says this explicitly.
+- Do NOT do any UI redesign, refactor, or work not in the plan. Scope is exactly the 11 tasks in the plan file, nothing else.
+- 'npm run typecheck' is the gate the whole run is judged by. If a task leaves it non-zero (except Task 1, whose baseline is intentionally red), STOP and fix before committing.
+- If a task is genuinely blocked, leave its boxes unchecked, write a short BLOCKED-<tasknum>.md explaining why, commit+push that, and move to the next INDEPENDENT task.
+- If a task needs npm packages: npm install <pkg> --legacy-peer-deps (none should be needed for this plan)."
 
   log "Prompt sent. Waiting for Claude..."
 
