@@ -141,28 +141,28 @@ export async function setupIpc(win: BrowserWindow) {
   missionService.start()
 
   // Session IPC -- thin wrappers around service
-  ipcMain.handle("session:create", (_e, name: string, cwd: string) =>
+  ipcMain.handle("terminal:create", (_e, name: string, cwd: string) =>
     sessionService.create(name, cwd),
   )
-  ipcMain.handle("session:kill", (_e, id: string) => sessionService.kill(id))
-  ipcMain.handle("session:focus", (_e, id: string) => sessionService.focus(id))
-  ipcMain.handle("session:list", () => sessionService.list())
-  ipcMain.handle("session:activity", () => sessionService.getActivity())
-  ipcMain.handle("session:rename", (_e, id: string, newName: string) =>
+  ipcMain.handle("terminal:kill", (_e, id: string) => sessionService.kill(id))
+  ipcMain.handle("terminal:focus", (_e, id: string) => sessionService.focus(id))
+  ipcMain.handle("terminal:list", () => sessionService.list())
+  ipcMain.handle("terminal:activity", () => sessionService.getActivity())
+  ipcMain.handle("terminal:rename", (_e, id: string, newName: string) =>
     sessionService.rename(id, newName),
   )
-  ipcMain.handle("session:handoff", (_e, id: string) => sessionService.handoff(id))
-  ipcMain.on("session:write", (_e, id: string, data: string) =>
+  ipcMain.handle("terminal:handoff", (_e, id: string) => sessionService.handoff(id))
+  ipcMain.on("terminal:write", (_e, id: string, data: string) =>
     sessionService.write(id, data),
   )
-  ipcMain.on("session:resize", (_e, id: string, cols: number, rows: number) =>
+  ipcMain.on("terminal:resize", (_e, id: string, cols: number, rows: number) =>
     sessionService.resize(id, cols, rows),
   )
-  ipcMain.handle("session:get-output", (_e, id: string, maxChars?: number) =>
+  ipcMain.handle("terminal:get-output", (_e, id: string, maxChars?: number) =>
     sessionService.getOutput(id, maxChars),
   )
   ipcMain.handle(
-    "session:search-output",
+    "terminal:search-output",
     (_e, query: string, sessionId?: string, limit?: number) =>
       sessionService.searchOutput(query, sessionId, limit),
   )

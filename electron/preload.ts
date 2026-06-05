@@ -2,16 +2,16 @@ import { contextBridge, ipcRenderer } from "electron"
 
 contextBridge.exposeInMainWorld("api", {
   // Session management
-  createSession: (name: string, cwd: string) => ipcRenderer.invoke("session:create", name, cwd),
-  killSession: (id: string) => ipcRenderer.invoke("session:kill", id),
-  focusSession: (id: string) => ipcRenderer.invoke("session:focus", id),
-  getSessions: () => ipcRenderer.invoke("session:list"),
-  getSessionActivity: () => ipcRenderer.invoke("session:activity"),
-  writeToSession: (id: string, data: string) => ipcRenderer.send("session:write", id, data),
-  resizeSession: (id: string, cols: number, rows: number) => ipcRenderer.send("session:resize", id, cols, rows),
-  getSessionOutput: (id: string, maxChars?: number) => ipcRenderer.invoke("session:get-output", id, maxChars),
+  createSession: (name: string, cwd: string) => ipcRenderer.invoke("terminal:create", name, cwd),
+  killSession: (id: string) => ipcRenderer.invoke("terminal:kill", id),
+  focusSession: (id: string) => ipcRenderer.invoke("terminal:focus", id),
+  getSessions: () => ipcRenderer.invoke("terminal:list"),
+  getSessionActivity: () => ipcRenderer.invoke("terminal:activity"),
+  writeToSession: (id: string, data: string) => ipcRenderer.send("terminal:write", id, data),
+  resizeSession: (id: string, cols: number, rows: number) => ipcRenderer.send("terminal:resize", id, cols, rows),
+  getSessionOutput: (id: string, maxChars?: number) => ipcRenderer.invoke("terminal:get-output", id, maxChars),
   searchSessionOutput: (query: string, sessionId?: string, limit?: number) =>
-    ipcRenderer.invoke("session:search-output", query, sessionId, limit),
+    ipcRenderer.invoke("terminal:search-output", query, sessionId, limit),
 
   // Work-session (container) management -- the durable session tier above terminals
   listWorkSessions: () => ipcRenderer.invoke("worksession:list"),
@@ -35,13 +35,13 @@ contextBridge.exposeInMainWorld("api", {
   activateWorkspace: (index: number) => ipcRenderer.invoke("workspace:activate", index),
 
   // Session rename
-  renameSession: (id: string, newName: string) => ipcRenderer.invoke("session:rename", id, newName),
+  renameSession: (id: string, newName: string) => ipcRenderer.invoke("terminal:rename", id, newName),
 
   // Config
   getConfig: () => ipcRenderer.invoke("config:get"),
 
   // Handoff
-  triggerHandoff: (id: string) => ipcRenderer.invoke("session:handoff", id),
+  triggerHandoff: (id: string) => ipcRenderer.invoke("terminal:handoff", id),
 
   // App testing
   takeScreenshot: () => ipcRenderer.invoke("app:screenshot"),
@@ -85,15 +85,15 @@ contextBridge.exposeInMainWorld("api", {
 
   // Events from main -> renderer
   onSessionData: (callback: (id: string, data: string) => void) =>
-    ipcRenderer.on("session:data", (_e, id, data) => callback(id, data)),
+    ipcRenderer.on("terminal:data", (_e, id, data) => callback(id, data)),
   onSessionExit: (callback: (id: string) => void) =>
-    ipcRenderer.on("session:exit", (_e, id) => callback(id)),
+    ipcRenderer.on("terminal:exit", (_e, id) => callback(id)),
   onSessionCreated: (callback: (session: any) => void) =>
-    ipcRenderer.on("session:created", (_e, session) => callback(session)),
+    ipcRenderer.on("terminal:created", (_e, session) => callback(session)),
   onSessionState: (callback: (id: string, state: string) => void) =>
-    ipcRenderer.on("session:state", (_e, id, state) => callback(id, state)),
+    ipcRenderer.on("terminal:state", (_e, id, state) => callback(id, state)),
   onSessionRenamed: (callback: (id: string, newName: string) => void) =>
-    ipcRenderer.on("session:renamed", (_e, id, newName) => callback(id, newName)),
+    ipcRenderer.on("terminal:renamed", (_e, id, newName) => callback(id, newName)),
 
   // Work-session (container) update events from main
   onWorkSessionUpdated: (callback: (session: any) => void) =>
@@ -103,7 +103,7 @@ contextBridge.exposeInMainWorld("api", {
 
   // Session focus event from main (triggered by the focus_session MCP tool)
   onSessionFocus: (callback: (id: string) => void) =>
-    ipcRenderer.on("session:focus", (_e, id) => callback(id)),
+    ipcRenderer.on("terminal:focus", (_e, id) => callback(id)),
 
   // Split pane events from main (triggered by MCP tools)
   onSplitSet: (callback: (leftId: string, rightId: string) => void) =>

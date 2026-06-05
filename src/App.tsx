@@ -215,7 +215,7 @@ export default function App() {
       window.api.removeAllListeners("worksession:removed")
       window.api.removeAllListeners("split:set")
       window.api.removeAllListeners("split:close")
-      window.api.removeAllListeners("session:focus")
+      window.api.removeAllListeners("terminal:focus")
       window.api.removeAllListeners("ui:focus-mode")
       window.api.removeAllListeners("ui:drawer")
       window.api.removeAllListeners("ui:command-palette")
@@ -424,16 +424,14 @@ export default function App() {
     // Expose to mount-effect so worksession:updated also triggers a refresh.
     refreshOverviewsRef.current = refreshOpenOverviews
 
-    // session:state has no existing subscriber — safe to own here.
-    // NOTE: "session:state" is the pre-rename channel string. Task 7 will sweep
-    // this to "terminal:state" along with the rest of the wire rename.
+    // terminal:state has no existing subscriber — safe to own here.
     window.api.onSessionState(refreshOpenOverviews)
 
     return () => {
       if (timer) clearTimeout(timer)
       refreshOverviewsRef.current = null
-      // Only remove session:state — worksession:updated is owned by the mount-effect.
-      window.api.removeAllListeners("session:state")
+      // Only remove terminal:state — worksession:updated is owned by the mount-effect.
+      window.api.removeAllListeners("terminal:state")
     }
   }, [panels])
 
