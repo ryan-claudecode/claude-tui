@@ -332,6 +332,20 @@ describe("SessionService orchestration", () => {
     expect(existsSync(join(dir, `${session.id}.json`))).toBe(false)
   })
 
+  it("killSession clears summaryDirty and lastFlushAt entries", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session } = svc.openSession("/repo")
+    svc.addNote(session.id, "x") // sets summaryDirty
+    svc.__test_setLastFlushAt(session.id) // seed lastFlushAt as if a flush happened
+    expect(svc.__test_summaryDirtyHas(session.id)).toBe(true)
+    expect(svc.__test_lastFlushAtHas(session.id)).toBe(true)
+    svc.killSession(session.id)
+    expect(svc.__test_summaryDirtyHas(session.id)).toBe(false)
+    expect(svc.__test_lastFlushAtHas(session.id)).toBe(false)
+  })
+
   it("reopenTerminal spawns a fresh PTY and updates the ref id in place (3a fresh-reopen)", () => {
     const term = new FakeTerminals()
     const svc = new SessionService({ dir, now: () => 1000 })

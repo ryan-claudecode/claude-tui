@@ -207,9 +207,15 @@ export class SessionService {
     if (!s) return
     for (const t of s.terminals) this.terminals?.kill(t.id)
     this.sessions.delete(sessionId)
+    this.summaryDirty.delete(sessionId)
+    this.lastFlushAt.delete(sessionId)
     try { unlinkSync(join(this.dir, `${sessionId}.json`)) } catch { /* already gone */ }
     this.emit("worksession:removed", sessionId)
   }
+
+  /** @internal test accessor */ __test_summaryDirtyHas(id: string): boolean { return this.summaryDirty.has(id) }
+  /** @internal test accessor */ __test_lastFlushAtHas(id: string): boolean { return this.lastFlushAt.has(id) }
+  /** @internal test accessor */ __test_setLastFlushAt(id: string): void { this.lastFlushAt.set(id, this.now()) }
 
   /**
    * Retire & continue: force an immediate summary flush on the active terminal,
