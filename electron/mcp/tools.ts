@@ -544,7 +544,7 @@ export function registerTools(
     "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, heatmap, tree, timeline, git, kanban, notes, stat, log, progress, or code). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams. For notes: props = { title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] } — the cross-session scratchpad (prefer the show_notes tool, which loads saved notes for you). For stat: props = { title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] } — a dashboard of big-number KPI cards (test counts, coverage %, build time, bundle size); distinct from chart, which is for series viz. For log: props = { title?, lines: [string | { text, level?: 'info'|'warn'|'error'|'debug'|'success', time? }], showLevel? } — a scrollable monospace log viewer with per-line severity coloring (command output, test streams, server logs). For progress: props = { title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? } — a vertical stepper with a progress bar for sequential task pipelines (distinct from timeline, which is chronological events). For code: props = { code: string, language?, filename?, startLine?, highlightLines?: number[], wrap? } — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from diff, which compares two versions). For heatmap: props = { title?, rows: number[][], xLabels?: string[], yLabels?: string[], unit?, min?, max? } — a color-coded 2D numeric matrix on a blue→green→amber→red ramp (correlation matrices, coverage grids, latency-by-hour); distinct from chart (series viz) and table (text grid). For mission: props = a Mission object (goal, status, autonomy, tasks[], workers[], eventLog[]) — renders a live orchestration dashboard.",
     {
       type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban", "notes", "stat", "log", "progress", "code", "heatmap", "mission"]).describe("Panel type"),
-      props: z.record(z.any()).describe("Panel-specific data"),
+      props: z.record(z.string(), z.any()).describe("Panel-specific data"),
       position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
     },
     async ({ type, props, position }) => {
@@ -558,7 +558,7 @@ export function registerTools(
     "Show an interactive form panel and wait for the user to submit. Returns the submitted field values (or { cancelled: true } if closed). Fields support types: text, textarea, select, checklist, toggle, number.",
     {
       props: z
-        .record(z.any())
+        .record(z.string(), z.any())
         .describe(
           "Form definition: { title, fields: [{ name, type, label, options?, items? }], submitLabel? }",
         ),
@@ -575,7 +575,7 @@ export function registerTools(
     "Update an existing panel's content",
     {
       id: z.string().describe("Panel ID"),
-      props: z.record(z.any()).describe("Updated properties (merged into existing)"),
+      props: z.record(z.string(), z.any()).describe("Updated properties (merged into existing)"),
     },
     async ({ id, props }) => {
       const ok = panels.update(id, props)
@@ -1898,7 +1898,7 @@ export function registerTools(
     {
       url: z.string().describe("The full http:// or https:// URL to request"),
       method: z.string().optional().describe("HTTP method (default GET)"),
-      headers: z.record(z.string()).optional().describe("Request headers as a key/value map"),
+      headers: z.record(z.string(), z.string()).optional().describe("Request headers as a key/value map"),
       body: z.string().optional().describe("Request body (for POST/PUT/PATCH)"),
       timeout_ms: z.number().optional().describe("Abort the request after this many ms (default 15000)"),
     },
@@ -1924,7 +1924,7 @@ export function registerTools(
       session_id: z.string().optional().describe("Session whose working dir to resolve a relative path against (defaults to the first open session)"),
       url: z.string().describe("The full http:// or https:// URL to download"),
       path: z.string().describe("Destination file path, relative to the working dir or absolute"),
-      headers: z.record(z.string()).optional().describe("Request headers as a key/value map"),
+      headers: z.record(z.string(), z.string()).optional().describe("Request headers as a key/value map"),
       timeout_ms: z.number().optional().describe("Abort the download after this many ms (default 15000)"),
       max_bytes: z.number().optional().describe("Refuse (write nothing) if the body exceeds this many bytes (default 100MB)"),
     },
@@ -2381,7 +2381,7 @@ export function registerTools(
       hostname: z.string().describe("Host, e.g. 'example.com'"),
       port: z.union([z.string(), z.number()]).optional().describe("Port number"),
       pathname: z.string().optional().describe("Path, e.g. '/api/v1/users'"),
-      query: z.record(z.any()).optional().describe("Query params as an object"),
+      query: z.record(z.string(), z.any()).optional().describe("Query params as an object"),
       hash: z.string().optional().describe("Fragment, e.g. '#section'"),
       username: z.string().optional().describe("Basic-auth username"),
       password: z.string().optional().describe("Basic-auth password"),
@@ -2408,7 +2408,7 @@ export function registerTools(
     "url_query_build",
     "Serialize an object into a query string (no leading '?') — array values repeat the key. The inverse of url_query_parse. Returns { query }.",
     {
-      params: z.record(z.any()).describe("The params object to serialize"),
+      params: z.record(z.string(), z.any()).describe("The params object to serialize"),
     },
     async ({ params }) => {
       const result = url.buildQuery(params)
