@@ -14,10 +14,36 @@ export function encodeProjectDir(cwd: string): string {
 }
 
 /**
+ * Snapshot the transcript ids (`.jsonl` basenames) already present in
+ * ~/.claude/projects/<encoded-cwd>/ right now. Captured at spawn time so we can
+ * later tell which transcript THIS terminal created versus ones a sibling
+ * terminal in the same cwd had already written. Returns an empty set if the
+ * directory doesn't exist yet.
+ */
+export function listTranscriptIds(projectsRoot: string, cwd: string): Set<string> {
+  const dir = join(projectsRoot, encodeProjectDir(cwd))
+  try {
+    return new Set(
+      readdirSync(dir)
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => f.slice(0, -".jsonl".length)),
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+/**
  * Resolve the Claude Code conversation id for a terminal by finding the newest
  * transcript .jsonl in ~/.claude/projects/<encoded-cwd>/ whose mtime is at or
  * after the terminal's spawn time (minus a small skew). Returns the uuid (file
  * basename) or undefined if CC hasn't written one yet.
+ *
+ * `excludeIds` lists transcripts that already existed when this terminal
+ * spawned — a sibling terminal in the same cwd writes into the SAME project
+ * dir, so without this exclusion we could pick up its (more recently written)
+ * transcript and resume the wrong conversation. Pass the snapshot from
+ * listTranscriptIds() taken at spawn time so only a NEW transcript qualifies.
  *
  * `projectsRoot` is injectable for tests; production passes
  * join(homedir(), ".claude", "projects").
@@ -26,6 +52,7 @@ export function resolveTranscriptId(
   projectsRoot: string,
   cwd: string,
   spawnedAt: number,
+  excludeIds?: ReadonlySet<string>,
 ): string | undefined {
   const dir = join(projectsRoot, encodeProjectDir(cwd))
   let entries: string[]
@@ -38,6 +65,8 @@ export function resolveTranscriptId(
   let best: { id: string; mtime: number } | undefined
   for (const f of entries) {
     if (!f.endsWith(".jsonl")) continue
+    const tid = f.slice(0, -".jsonl".length)
+    if (excludeIds?.has(tid)) continue
     let mtime: number
     try {
       mtime = statSync(join(dir, f)).mtimeMs
@@ -45,7 +74,7 @@ export function resolveTranscriptId(
       continue
     }
     if (mtime < spawnedAt - skewMs) continue
-    if (!best || mtime > best.mtime) best = { id: f.slice(0, -".jsonl".length), mtime }
+    if (!best || mtime > best.mtime) best = { id: tid, mtime }
   }
   return best?.id
 }
@@ -351,10 +380,14 @@ export class TerminalService {
    * (the durable session record, not CC internals, is the source of truth).
    */
   private captureConversationId(id: string, cwd: string, spawnedAt: number): void {
+    // Snapshot the transcripts that already exist NOW (before CC has booted and
+    // written ours). Any transcript a sibling terminal in this same cwd already
+    // produced is excluded, so we only ever bind to the one THIS terminal creates.
+    const preexisting = listTranscriptIds(this.ccProjectsRoot, cwd)
     let attempts = 0
     const timer = setInterval(() => {
       attempts++
-      const convoId = resolveTranscriptId(this.ccProjectsRoot, cwd, spawnedAt)
+      const convoId = resolveTranscriptId(this.ccProjectsRoot, cwd, spawnedAt, preexisting)
       if (convoId) {
         this.emitEvent({ type: "convo", id, ccConversationId: convoId })
         clearInterval(timer)

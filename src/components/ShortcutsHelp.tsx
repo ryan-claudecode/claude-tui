@@ -16,7 +16,7 @@ const GROUPS: Group[] = [
     items: [
       { keys: ["Ctrl", "N"], desc: "New session" },
       { keys: ["Ctrl", "K"], desc: "Kill active session" },
-      { keys: ["Ctrl", "H"], desc: "Trigger handoff" },
+      { keys: ["Ctrl", "Shift", "H"], desc: "Retire & continue (handoff)" },
       { keys: ["Ctrl", "1–9"], desc: "Switch to session by index" },
     ],
   },

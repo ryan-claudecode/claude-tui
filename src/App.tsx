@@ -457,6 +457,7 @@ export default function App() {
       { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: () => setMissionPromptOpen(true) },
       { id: "missions", label: "View Missions", keywords: "orchestrate conductor list dashboard status", run: () => setMissionsListOpen(true) },
       { id: "session-overview", label: "Show Session Overview", keywords: "context summary findings notes birdseye", run: () => activeSessionId && openOverview(activeSessionId) },
+      { id: "handoff", label: "Retire & Continue Terminal", hint: "Ctrl+Shift+H", keywords: "handoff flush summary fresh terminal retire context", run: () => handleHandoff() },
     ]
     const sessionCmds: Command[] = sessions.map((s, i) => ({
       id: `switch-${s.id}`,
@@ -466,7 +467,7 @@ export default function App() {
       run: () => handleSelectSession(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, toggleSplit, toggleDrawer, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, activeSessionId])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, activeSessionId])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
@@ -499,8 +500,10 @@ export default function App() {
         // Ctrl+K — kill the active session (confirm)
         e.preventDefault(); e.stopPropagation()
         handleKillSession()
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "h") {
-        // Ctrl+H — retire & continue (handoff): flush summary, fresh terminal, retire old
+      } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === "h") {
+        // Ctrl+Shift+H — retire & continue (handoff): flush summary, fresh terminal,
+        // retire old. NOT plain Ctrl+H: that's ASCII Backspace (^H), so swallowing
+        // it here would eat the user's backspace inside the terminal prompt.
         e.preventDefault(); e.stopPropagation()
         handleHandoff()
       } else if (e.ctrlKey && e.key === "\\") {

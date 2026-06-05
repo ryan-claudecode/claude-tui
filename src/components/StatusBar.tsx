@@ -29,7 +29,7 @@ export default function StatusBar({ session, sessionCount }: Props) {
         {" | "}{sessionCount} session{sessionCount !== 1 ? "s" : ""}
       </span>
       <span className="status-right">
-        Ctrl+N new | Ctrl+K kill | Ctrl+H handoff
+        Ctrl+N new | Ctrl+K kill | Ctrl+Shift+H handoff
         {" | "}<span className="status-clock">{time}</span>
       </span>
     </div>

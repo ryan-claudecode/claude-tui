@@ -29,7 +29,7 @@ describe("encodeProjectDir", () => {
   })
 })
 
-import { resolveTranscriptId } from "./terminals"
+import { resolveTranscriptId, listTranscriptIds } from "./terminals"
 import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
@@ -65,6 +65,36 @@ describe("resolveTranscriptId", () => {
     const past = (Date.now() - 60_000) / 1000
     utimesSync(join(dir, `${id}.jsonl`), past, past)
     expect(resolveTranscriptId(root, cwd, Date.now())).toBeUndefined()
+  })
+
+  it("excludes transcripts that already existed at spawn (sibling in same cwd)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-projects-"))
+    const cwd = "C:\\fake\\shared"
+    const dir = join(root, encodeProjectDir(cwd))
+    mkdirSync(dir, { recursive: true })
+
+    // A sibling terminal's transcript, already on disk and freshly written.
+    const siblingId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    writeFileSync(join(dir, `${siblingId}.jsonl`), "{}")
+
+    const spawnedAt = Date.now()
+    // Snapshot taken at our spawn — sibling is present.
+    const preexisting = listTranscriptIds(root, cwd)
+    expect(preexisting.has(siblingId)).toBe(true)
+
+    // Sibling keeps streaming AFTER we spawned (newest mtime), but it's excluded.
+    const future = (spawnedAt + 2_000) / 1000
+    utimesSync(join(dir, `${siblingId}.jsonl`), future, future)
+
+    // Without exclusion the sibling would win; with it, nothing new yet.
+    expect(resolveTranscriptId(root, cwd, spawnedAt, preexisting)).toBeUndefined()
+
+    // Now OUR transcript appears — it's not in the snapshot, so we bind to it.
+    const ourId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    writeFileSync(join(dir, `${ourId}.jsonl`), "{}")
+    const ourTime = (spawnedAt + 3_000) / 1000
+    utimesSync(join(dir, `${ourId}.jsonl`), ourTime, ourTime)
+    expect(resolveTranscriptId(root, cwd, spawnedAt, preexisting)).toBe(ourId)
   })
 })
 
