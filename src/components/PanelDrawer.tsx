@@ -194,7 +194,7 @@ function PanelContent({
     case "code":
       return <CodePanel {...panel.props} />
     case "heatmap":
-      return <HeatmapPanel {...panel.props} />
+      return <HeatmapPanel {...(panel.props as any)} />
     case "mission":
       return <MissionPanel {...panel.props} onStop={onMissionStop} onPause={onMissionPause} />
     case "session-overview":
