@@ -322,21 +322,6 @@ export default function App() {
     [sessions],
   )
 
-  const handleSelectTerminal = useCallback(
-    async (sessionId: string, terminalId: string) => {
-      setActiveSessionId(sessionId)
-      const s = sessions.find((x) => x.id === sessionId)
-      const ref = s?.terminals.find((t) => t.id === terminalId)
-      if (ref && ref.lastState === "dead") {
-        const r = await window.api.reopenTerminal(sessionId, terminalId) // 3a: fresh primed reopen
-        if (r?.terminalId) setActiveTerminalId(r.terminalId)
-      } else {
-        setActiveTerminalId(terminalId)
-      }
-    },
-    [sessions],
-  )
-
   const toggleSplit = useCallback(() => {
     if (splitLeft) {
       setSplitLeft(null)
