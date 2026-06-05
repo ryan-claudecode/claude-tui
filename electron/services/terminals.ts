@@ -216,7 +216,7 @@ export class TerminalService {
       for (const terminal of this.terminals.values()) {
         if (terminal.state === "active" && now - terminal.lastActivity > this.idleThresholdMs) {
           terminal.state = "idle"
-          this.sendToRenderer("session:state", terminal.id, "idle")
+          this.sendToRenderer("terminal:state", terminal.id, "idle")
           this.emitEvent({ type: "state", id: terminal.id, state: "idle" })
         }
       }
@@ -228,7 +228,7 @@ export class TerminalService {
     terminal.lastActivity = Date.now()
     if (terminal.state === "idle") {
       terminal.state = "active"
-      this.sendToRenderer("session:state", terminal.id, "active")
+      this.sendToRenderer("terminal:state", terminal.id, "active")
       this.emitEvent({ type: "state", id: terminal.id, state: "active" })
     }
   }
@@ -274,14 +274,14 @@ export class TerminalService {
 
   private attachPtyListeners(terminal: Terminal) {
     terminal.pty.onData((data) => {
-      this.sendToRenderer("session:data", terminal.id, data)
+      this.sendToRenderer("terminal:data", terminal.id, data)
       this.captureOutput(terminal.id, data)
       this.markActive(terminal)
     })
 
     terminal.pty.onExit(() => {
       terminal.state = "dead"
-      this.sendToRenderer("session:exit", terminal.id)
+      this.sendToRenderer("terminal:exit", terminal.id)
       this.emitEvent({ type: "exit", id: terminal.id })
 
       // Check for handoff file -- auto-respawn if present
@@ -310,7 +310,7 @@ export class TerminalService {
           terminal.lastActivity = Date.now()
           this.attachPtyListeners(terminal)
 
-          this.sendToRenderer("session:created", {
+          this.sendToRenderer("terminal:created", {
             id: terminal.id,
             name: terminal.name,
             cwd: terminal.cwd,
@@ -369,7 +369,7 @@ export class TerminalService {
     this.attachPtyListeners(terminal)
 
     const info: TerminalInfo = { id, name: sessionName, cwd: sessionCwd, state: "active" }
-    this.sendToRenderer("session:created", info)
+    this.sendToRenderer("terminal:created", info)
     this.emitEvent({ type: "created", info })
     this.captureConversationId(id, sessionCwd, Date.now())
     return info
@@ -516,7 +516,7 @@ export class TerminalService {
       terminal.lastActivity = Date.now()
       if (terminal.state === "idle") {
         terminal.state = "active"
-        this.sendToRenderer("session:state", id, "active")
+        this.sendToRenderer("terminal:state", id, "active")
         this.emitEvent({ type: "state", id, state: "active" })
       }
       terminal.pty.write(opts.submit ? opts.input + "\r" : opts.input)
@@ -544,7 +544,7 @@ export class TerminalService {
     const terminal = this.terminals.get(id)
     if (!terminal) return false
     terminal.name = newName
-    this.sendToRenderer("session:renamed", id, newName)
+    this.sendToRenderer("terminal:renamed", id, newName)
     return true
   }
 
@@ -570,7 +570,7 @@ export class TerminalService {
     // Switching the visible tab is a renderer concern — tell it to activate this
     // session (so the MCP focus_session tool actually changes the active tab).
     if (!this.terminals.has(id)) return false
-    this.sendToRenderer("session:focus", id)
+    this.sendToRenderer("terminal:focus", id)
     return true
   }
 

@@ -1,6 +1,54 @@
 import { describe, it, expect, vi } from "vitest"
 import { TerminalService, encodeProjectDir, resumeArgs } from "./terminals"
 
+describe("TerminalService emit channels (terminal:* not session:*)", () => {
+  it("emits terminal:created on create()", () => {
+    const svc = new TerminalService()
+    const sent: string[] = []
+    // Override sendToRenderer before any operation so all emits are captured
+    ;(svc as unknown as { sendToRenderer: (c: string, ...a: unknown[]) => void }).sendToRenderer =
+      (channel) => { sent.push(channel) }
+
+    svc.create("t", process.cwd())
+
+    expect(sent).toContain("terminal:created")
+    expect(sent.some((c) => c.startsWith("session:"))).toBe(false)
+  })
+
+  it("emits terminal:state (idle) via the idle monitor when mainWindow is set", () => {
+    vi.useFakeTimers()
+    const svc = new TerminalService()
+    const sent: string[] = []
+    ;(svc as unknown as { sendToRenderer: (c: string, ...a: unknown[]) => void }).sendToRenderer =
+      (channel) => { sent.push(channel) }
+
+    svc.create("t", process.cwd())
+    // Start the idle monitor directly (normally started by setMainWindow)
+    ;(svc as unknown as { startIdleMonitor: () => void }).startIdleMonitor()
+    // Advance past idle threshold (1500ms) + one timer tick (1000ms)
+    vi.advanceTimersByTime(3000)
+
+    expect(sent).toContain("terminal:state")
+    expect(sent.some((c) => c.startsWith("session:"))).toBe(false)
+
+    vi.useRealTimers()
+  })
+
+  it("emits terminal:renamed when rename() is called", () => {
+    const svc = new TerminalService()
+    const sent: string[] = []
+    ;(svc as unknown as { sendToRenderer: (c: string, ...a: unknown[]) => void }).sendToRenderer =
+      (channel) => { sent.push(channel) }
+
+    const info = svc.create("t", process.cwd())
+    // clear earlier channels; we only care about rename here
+    sent.length = 0
+    svc.rename(info.id, "new-name")
+    expect(sent).toContain("terminal:renamed")
+    expect(sent.some((c) => c.startsWith("session:"))).toBe(false)
+  })
+})
+
 describe("TerminalService.onEvent", () => {
   it("notifies listeners on created and exit, and unsubscribes cleanly", () => {
     const svc = new TerminalService()
