@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import { TerminalService, encodeProjectDir, resumeArgs } from "./terminals"
 
 describe("TerminalService.onEvent", () => {
@@ -14,6 +14,19 @@ describe("TerminalService.onEvent", () => {
     const before = events.length
     svc.kill(info.id)
     expect(events.length).toBe(before)
+  })
+
+  it("clears the convo poller immediately on kill (no convo event after kill)", () => {
+    vi.useFakeTimers()
+    const svc = new TerminalService()
+    const info = svc.create("t", process.cwd())
+    const events: string[] = []
+    svc.onEvent((e) => events.push(e.type))
+    svc.kill(info.id)
+    // advance well past the 1s poll interval; a leaked timer would fire here
+    vi.advanceTimersByTime(5000)
+    expect(events).not.toContain("convo")
+    vi.useRealTimers()
   })
 })
 

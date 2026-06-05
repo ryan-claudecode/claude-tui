@@ -185,6 +185,8 @@ export class TerminalService {
   /** Quiet period after which a live session is considered idle (waiting). */
   private readonly idleThresholdMs = 1500
   private idleTimer: ReturnType<typeof setInterval> | null = null
+  /** Per-terminal convo-id poll handles, cleared synchronously on kill. */
+  private convoTimers = new Map<string, ReturnType<typeof setInterval>>()
 
   private eventListeners = new Set<(e: TerminalEvent) => void>()
 
@@ -391,10 +393,13 @@ export class TerminalService {
       if (convoId) {
         this.emitEvent({ type: "convo", id, ccConversationId: convoId })
         clearInterval(timer)
+        this.convoTimers.delete(id)
       } else if (attempts >= 10 || !this.terminals.has(id)) {
         clearInterval(timer)
+        this.convoTimers.delete(id)
       }
     }, 1000)
+    this.convoTimers.set(id, timer)
   }
 
   kill(id: string): boolean {
@@ -403,6 +408,11 @@ export class TerminalService {
     terminal.pty.kill()
     this.terminals.delete(id)
     this.outputBuffers.delete(id)
+    const t = this.convoTimers.get(id)
+    if (t) {
+      clearInterval(t)
+      this.convoTimers.delete(id)
+    }
     return true
   }
 
@@ -585,6 +595,8 @@ export class TerminalService {
     }
     this.terminals.clear()
     this.outputBuffers.clear()
+    for (const t of this.convoTimers.values()) clearInterval(t)
+    this.convoTimers.clear()
     if (this.idleTimer) {
       clearInterval(this.idleTimer)
       this.idleTimer = null
