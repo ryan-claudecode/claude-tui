@@ -53,6 +53,9 @@ export class CompanionService {
       minHeight: 320,
       x,
       y,
+      // Born hidden under automated e2e (CI=1) so a panel-driven test never
+      // flashes a window onto the dev's monitor; normal launches show as usual.
+      show: process.env.CI !== "1",
       title: "ClaudeTUI — Panels",
       backgroundColor: bg,
       frame: false,
@@ -77,7 +80,7 @@ export class CompanionService {
 
   private getOrCreate(): { win: CompanionWindowLike; ready: Promise<void> } {
     if (this.win && !this.win.isDestroyed()) {
-      this.win.show()
+      if (process.env.CI !== "1") this.win.show()
       return { win: this.win, ready: this.readyPromise ?? Promise.resolve() }
     }
 
@@ -127,8 +130,10 @@ export class CompanionService {
    */
   focusIfOpen(): void {
     if (this.win && !this.win.isDestroyed()) {
-      this.win.show()
-      this.win.moveTop()
+      if (process.env.CI !== "1") {
+        this.win.show()
+        this.win.moveTop()
+      }
     }
   }
 }

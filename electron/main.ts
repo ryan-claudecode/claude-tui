@@ -23,6 +23,11 @@ async function createWindow() {
     height: 980,
     minWidth: 900,
     minHeight: 600,
+    // Under automated e2e (Playwright sets CI=1 on every _electron.launch) create
+    // the window HIDDEN: the renderer still loads so Playwright can drive + assert
+    // the DOM, but no window flashes onto the developer's monitor or steals focus.
+    // Normal `npm run dev` / packaged launches (no CI) are unaffected.
+    show: process.env.CI !== "1",
     title: "ClaudeTUI",
     backgroundColor: mode === "dark" ? "#1c1814" : mode === "cold-dark" ? "#0b0e14" : "#f8f4ed",
     autoHideMenuBar: true,
