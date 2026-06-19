@@ -25,12 +25,18 @@ function errMsg(err: unknown): string {
 /**
  * The renderer half of the missions surface (P1-4 hook pattern). Seeds with one
  * `listMissions()` call on mount, then maintains state from `mission:updated`
- * (full snapshot per mutation) and `mission:removed` (if the main process ever
- * emits one). Renderer-side dismissed-ids track terminal-state rows dismissed by
- * the user; they are lost on reload — acceptable per spec.
+ * (full snapshot per mutation) and `mission:removed` (the durable-delete event,
+ * emitted by MissionService.deleteMission).
+ *
+ * `dismiss` is now DURABLE: it calls `deleteMission`, which unlinks the mission's
+ * persisted JSON and drops it from the main-process map, so the row CANNOT
+ * reappear on relaunch (and the Supervisor can't resurrect it). The local
+ * `dismissed` Set is kept only as an OPTIMISTIC hide so the row vanishes the
+ * instant the user clicks ✕, before the `mission:removed` event round-trips —
+ * `onMissionRemoved` then removes it from `missions` for good.
  *
  * `visible` is the filtered list the sidebar section renders: active missions
- * always show; terminal-state missions show until dismissed.
+ * always show; terminal-state missions show until deleted.
  */
 export function useMissions() {
   const [missions, setMissions] = useState<MissionSummary[]>([])
@@ -44,8 +50,33 @@ export function useMissions() {
     return false
   })
 
+  // Durably delete the mission (the sidebar ✕). Optimistically hide the row
+  // immediately, then fire the IPC; the main process emits `mission:removed`
+  // which `onMissionRemoved` (below) uses to drop it from `missions` for good.
+  // deleteMission returns Promise<boolean>: it RESOLVES `false` on a service
+  // refusal (mission already gone, or no longer in a deletable terminal state) and
+  // REJECTS on an IPC/transport error. Both cases must roll back the optimistic
+  // hide + toast, otherwise the row stays hidden with nothing persisted.
   const dismiss = useCallback((id: string) => {
     setDismissed((prev) => new Set([...prev, id]))
+    const rollback = () =>
+      setDismissed((prev) => {
+        if (!prev.has(id)) return prev
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    Promise.resolve(window.api.deleteMission(id))
+      .then((ok) => {
+        if (!ok) {
+          toast("error", "Couldn't delete the mission: it may already be gone or still running.")
+          rollback()
+        }
+      })
+      .catch((err) => {
+        toast("error", `Couldn't delete the mission: ${errMsg(err)}`)
+        rollback()
+      })
   }, [])
 
   useEffect(() => {
@@ -75,8 +106,9 @@ export function useMissions() {
       }
     })
 
-    // mission:removed is emitted defensively (missions are not currently deleted,
-    // but the seam reserves it). Handle gracefully.
+    // mission:removed is the durable-delete event (MissionService.deleteMission,
+    // fired by the sidebar ✕). Drop the mission from state and clear any
+    // optimistic dismissed-id for it.
     window.api.onMissionRemoved?.((id: string) => {
       setMissions((prev) => prev.filter((m) => m.id !== id))
       setDismissed((prev) => {

@@ -130,6 +130,7 @@ declare global {
       stopMission: (id: string) => Promise<any>
       pauseMission: (id: string) => Promise<any>
       resumeMission: (id: string) => Promise<any>
+      deleteMission: (id: string) => Promise<boolean>
       // WW-2b — worktree review
       approveWorktreeTask: (missionId: string, taskId: string) => Promise<{ status?: string; reviewReason?: string } | null>
       rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) => Promise<{ status?: string; reviewReason?: string } | null>

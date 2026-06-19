@@ -15,6 +15,10 @@ export function registerMissionHandlers(deps: { missionService: MissionService }
     missionService.pause(id, resumeAt),
   )
   ipcMain.handle("mission:resume", (_e, id: string) => missionService.resume(id))
+  // Durable delete (the sidebar ✕). Removes the persisted <id>.json + drops it
+  // from the in-memory map, gated to terminal-state missions. Emits a `removed`
+  // event (routed to the renderer as `mission:removed` in ipc.ts).
+  ipcMain.handle("mission:delete", (_e, id: string) => missionService.deleteMission(id))
 
   // WW-2b — worktree review UX. Approve/reject drive the frozen WW-2a backend
   // (MissionService.approveTask/rejectTask); the panel reflects the result, so

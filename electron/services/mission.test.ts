@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs"
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { MissionService, detectUsageLimit, type SessionDriver, type WorktreeLike } from "./mission"
@@ -301,6 +301,234 @@ describe("MissionService resolve/stop", () => {
     const out = svc.stop(m.id)!
     expect(out.status).toBe("stopped")
     expect(killed.sort()).toEqual(["c1", "w1"])
+  })
+})
+
+describe("MissionService deleteMission (durable dismiss)", () => {
+  it("removes a stopped mission's JSON + drops it from list; it does NOT come back on a fresh load", () => {
+    const svc = new MissionService(fakeDriver(), { dir })
+    const m = svc.create("g", "/r")
+    svc.stop(m.id) // terminal state → deletable
+    const file = join(dir, `${m.id}.json`)
+    expect(existsSync(file)).toBe(true)
+
+    expect(svc.deleteMission(m.id)).toBe(true)
+    // Gone from the in-memory map + the durable file.
+    expect(svc.get(m.id)).toBeUndefined()
+    expect(svc.list().some((x) => x.id === m.id)).toBe(false)
+    expect(existsSync(file)).toBe(false)
+
+    // The core regression: a fresh service (the boot seed) must not re-add it.
+    const reloaded = new MissionService(fakeDriver(), { dir })
+    expect(reloaded.get(m.id)).toBeUndefined()
+    expect(reloaded.list().some((x) => x.id === m.id)).toBe(false)
+  })
+
+  it("deletes done and blocked missions too (the full terminal set)", () => {
+    const svc = new MissionService(fakeDriver(), { dir })
+    const done = svc.create("a", "/r")
+    svc.finish(done.id) // → done
+    const blocked = svc.create("b", "/r")
+    svc.plan(blocked.id, [{ title: "t" }])
+    const tId = svc.get(blocked.id)!.tasks[0].id
+    svc.resolve(blocked.id, tId, "failed") // sole task failed → blocked
+    expect(svc.get(blocked.id)!.status).toBe("blocked")
+
+    expect(svc.deleteMission(done.id)).toBe(true)
+    expect(svc.deleteMission(blocked.id)).toBe(true)
+    expect(svc.list()).toHaveLength(0)
+  })
+
+  it("REFUSES to delete a live mission (running/planning/paused) — only terminal rows are deletable", () => {
+    const svc = new MissionService(fakeDriver(), { dir })
+    const planning = svc.create("p", "/r") // status "planning"
+    expect(svc.deleteMission(planning.id)).toBe(false)
+    expect(svc.get(planning.id)).toBeDefined()
+
+    svc.plan(planning.id, [{ title: "t" }]) // → running
+    expect(svc.get(planning.id)!.status).toBe("running")
+    expect(svc.deleteMission(planning.id)).toBe(false)
+    expect(existsSync(join(dir, `${planning.id}.json`))).toBe(true)
+
+    svc.pause(planning.id) // → paused
+    expect(svc.deleteMission(planning.id)).toBe(false)
+    expect(svc.get(planning.id)).toBeDefined()
+  })
+
+  it("returns false for an unknown mission id", () => {
+    const svc = new MissionService(fakeDriver(), { dir })
+    expect(svc.deleteMission("nope")).toBe(false)
+  })
+
+  it("emits a single 'removed' event carrying the id", () => {
+    const svc = new MissionService(fakeDriver(), { dir })
+    const m = svc.create("g", "/r")
+    svc.stop(m.id)
+    const events: Array<{ type: string; id: string }> = []
+    svc.onEvent((e) => events.push(e.type === "updated" ? { type: "updated", id: e.mission.id } : { type: "removed", id: e.id }))
+    svc.deleteMission(m.id)
+    expect(events).toEqual([{ type: "removed", id: m.id }])
+  })
+
+  it("the Supervisor tick() does NOT resurrect a deleted mission (no respawn, no re-persist)", () => {
+    let creates = 0
+    const svc = new MissionService(
+      fakeDriver({ create: () => { creates++; return { id: `c${creates}`, name: "c", cwd: "/r", state: "active" } } }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }]) // running
+    svc.stop(m.id) // terminal → deletable
+    creates = 0
+    expect(svc.deleteMission(m.id)).toBe(true)
+
+    svc.tick() // iterates the in-memory map; the mission is gone
+    expect(creates).toBe(0) // no conductor (re)spawned for the deleted mission
+    expect(svc.get(m.id)).toBeUndefined()
+    // And it's still absent after a reload (tick didn't re-write the file).
+    const reloaded = new MissionService(fakeDriver(), { dir })
+    expect(reloaded.get(m.id)).toBeUndefined()
+    expect(existsSync(join(dir, `${m.id}.json`))).toBe(false)
+  })
+
+  it("removes an isolated mission's worktrees on delete (no orphan trees)", () => {
+    const wt = makeFakeWorktree()
+    const svc = new MissionService(
+      fakeDriver({ create: () => ({ id: `w${Math.random()}`, name: "w", cwd: "/r", state: "active" }) }),
+      { dir, worktree: wt, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/repo", "hands-off", true)
+    svc.plan(m.id, [{ title: "a" }])
+    const tId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, tId, "go")
+    const branch = svc.get(m.id)!.tasks[0].branch
+    svc.stop(m.id) // stop already cleans up; reset call log to isolate delete
+    wt.calls.length = 0
+    // After stop the worktree is already removed, so delete is a clean no-op on
+    // git — but it must still succeed and remove the mission.
+    expect(svc.deleteMission(m.id)).toBe(true)
+    expect(svc.get(m.id)).toBeUndefined()
+    void branch
+  })
+
+  it("kills a live conductor + workers when deleting a done/blocked mission (no orphan PTYs)", () => {
+    const killed: string[] = []
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: `w${Math.random().toString(36).slice(2, 6)}`, name: "w", cwd: "/r", state: "active" }),
+        kill: (id) => { killed.push(id); return true },
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+
+    // A DONE mission that still has a live conductor + worker (finish() doesn't
+    // kill processes). Build a worker via dispatch, then a live conductor + status
+    // directly (the established test pattern — see the supervisor tests).
+    const done = svc.create("a", "/repo")
+    svc.plan(done.id, [{ title: "t" }])
+    const doneTaskId = svc.get(done.id)!.tasks[0].id
+    svc.dispatch(done.id, doneTaskId, "go")
+    const doneWorkerId = svc.get(done.id)!.workers[0].sessionId
+    svc.get(done.id)!.conductorSessionId = "cond-done"
+    svc.get(done.id)!.status = "done"
+
+    // A BLOCKED mission, same shape.
+    const blocked = svc.create("b", "/repo")
+    svc.plan(blocked.id, [{ title: "t" }])
+    const blockedTaskId = svc.get(blocked.id)!.tasks[0].id
+    svc.dispatch(blocked.id, blockedTaskId, "go")
+    const blockedWorkerId = svc.get(blocked.id)!.workers[0].sessionId
+    svc.get(blocked.id)!.conductorSessionId = "cond-blocked"
+    svc.get(blocked.id)!.status = "blocked"
+
+    killed.length = 0
+    expect(svc.deleteMission(done.id)).toBe(true)
+    expect(svc.deleteMission(blocked.id)).toBe(true)
+
+    // Both conductors + both workers were torn down — no orphan PTYs.
+    expect(killed).toContain("cond-done")
+    expect(killed).toContain(doneWorkerId)
+    expect(killed).toContain("cond-blocked")
+    expect(killed).toContain(blockedWorkerId)
+    // And the missions are gone.
+    expect(svc.get(done.id)).toBeUndefined()
+    expect(svc.get(blocked.id)).toBeUndefined()
+    expect(svc.list()).toHaveLength(0)
+  })
+
+  it("a suspended await() that resolves AFTER delete does NOT resurrect the mission", async () => {
+    // Gate waitForIdle so we can suspend an in-flight await() across deleteMission.
+    let release!: (r: { idle: boolean; timedOut: boolean }) => void
+    const gate = new Promise<{ idle: boolean; timedOut: boolean }>((res) => { release = res })
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        waitForIdle: () => gate,
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+    const removed: string[] = []
+    const updatedAfterRemoved: string[] = []
+    let sawRemoved = false
+    svc.onEvent((e) => {
+      if (e.type === "removed") { removed.push(e.id); sawRemoved = true }
+      else if (sawRemoved) updatedAfterRemoved.push(e.mission.id)
+    })
+
+    const m = svc.create("g", "/repo")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    svc.get(m.id)!.status = "done" // terminal → deletable; await() still suspended
+
+    // Start the await — it suspends on the gated waitForIdle.
+    const awaiting = svc.await(m.id, taskId)
+
+    const file = join(dir, `${m.id}.json`)
+    expect(existsSync(file)).toBe(true)
+    expect(svc.deleteMission(m.id)).toBe(true)
+    expect(existsSync(file)).toBe(false) // unlinked by delete
+
+    // Now release waitForIdle as idle:true — await()'s `if (r.idle)` path tries to
+    // persist the captured `m`. The persist guard must drop it.
+    release({ idle: true, timedOut: false })
+    await awaiting
+
+    // The JSON was NOT recreated by the late persist.
+    expect(existsSync(file)).toBe(false)
+    // A fresh service load (boot seed) does NOT contain the mission.
+    const reloaded = new MissionService(fakeDriver(), { dir })
+    expect(reloaded.get(m.id)).toBeUndefined()
+    // And NO `updated` event was emitted for it after `removed`.
+    expect(removed).toEqual([m.id])
+    expect(updatedAfterRemoved).not.toContain(m.id)
+  })
+
+  it("fires worktree remove() with the managed path when deleting an isolated mission with LIVE worktrees", () => {
+    const wt = makeFakeWorktree()
+    const svc = new MissionService(
+      fakeDriver({ create: () => ({ id: `w${Math.random().toString(36).slice(2, 6)}`, name: "w", cwd: "/r", state: "active" }) }),
+      { dir, worktree: wt, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/repo", "hands-off", true)
+    svc.plan(m.id, [{ title: "a" }])
+    const tId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, tId, "go") // carves a worktree; task keeps a live worktreePath
+    const wtPath = svc.get(m.id)!.tasks[0].worktreePath
+    const branch = svc.get(m.id)!.tasks[0].branch
+    expect(wtPath).toBeTruthy()
+    // Reach a terminal state WITHOUT stop()/finish()/resolve (all of which clear
+    // worktrees) so the task still carries its live worktreePath at delete time.
+    svc.get(m.id)!.status = "blocked"
+    wt.calls.length = 0 // isolate the delete-path git ops
+
+    expect(svc.deleteMission(m.id)).toBe(true)
+    // deleteMission's cleanupAllWorktrees must actually fire remove() with the
+    // managed path (the gap: the prior test stops first, making this a no-op).
+    const removeCall = wt.calls.find((c) => c.op === "remove")
+    expect(removeCall).toBeDefined()
+    expect(removeCall!.args).toMatchObject({ repoCwd: "/repo", path: wtPath, deleteBranch: branch })
+    expect(svc.get(m.id)).toBeUndefined()
   })
 })
 

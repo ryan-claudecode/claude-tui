@@ -1,4 +1,4 @@
-import { readdirSync } from "fs"
+import { readdirSync, rmSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 import type { TerminalInfo, TerminalActivity } from "./terminals"
@@ -85,10 +85,12 @@ export interface MissionEvent { time: number; kind: EventKind; text: string }
  * with the full Mission snapshot (it already serializes to JSON for disk, so
  * tasks/workers/eventLog ride along — the dashboard panel needs them anyway).
  *
- * No `removed` variant: missions are never deleted from the in-memory map or
- * disk — `stop`/`finish` only flip `status` (a terminal-state mission lingers
- * until the renderer dismisses it client-side). The variant is reserved here so
- * a future delete path can add it without churning subscribers.
+ * `removed` fires when `deleteMission` durably removes a terminal-state mission:
+ * its `<id>.json` is unlinked and it's dropped from the in-memory map, so it
+ * cannot reappear on reload (nor be resurrected by `tick()`, which only iterates
+ * live in-memory missions). The renderer drops the row on this event. `stop` /
+ * `finish` still only flip `status` (a terminal-state mission lingers until the
+ * user deletes it).
  */
 export type MissionServiceEvent =
   | { type: "updated"; mission: Mission }
@@ -114,6 +116,13 @@ export interface Mission {
 }
 
 const TERMINAL: MissionStatus[] = ["done", "stopped"]
+
+// The statuses a mission may be DELETED from (the sidebar ✕). Mirrors the
+// renderer's `isMissionDismissable` set (missionRow.ts TERMINAL_STATUSES) —
+// `blocked` is dismissable/deletable there too, even though it's not in the
+// `status()`-fallback TERMINAL set above. A live mission (running/planning/
+// paused) is never deletable from a row; stopping it is the separate `stop` path.
+const TERMINAL_DELETABLE: MissionStatus[] = ["done", "blocked", "stopped"]
 
 /** Persistence schema version. v1 = today's Mission shape verbatim. */
 const SCHEMA_VERSION = 1
@@ -217,6 +226,14 @@ export class MissionService {
   }
 
   private persist(m: Mission): void {
+    // Chokepoint guard against resurrection: an in-flight async op (e.g. await()'s
+    // suspended waitForIdle) can capture a live `m`, then try to persist it AFTER
+    // deleteMission() dropped it from the map + unlinked its file. Re-writing the
+    // JSON here would resurrect the mission on the next boot (loadAll seed) and
+    // re-surface the deleted row live via the `updated` event. If the mission is no
+    // longer tracked, never re-write and never re-emit. (create() adds to
+    // this.missions BEFORE its first persist(), so this can't break creation.)
+    if (!this.missions.has(m.id)) return
     m.updatedAt = this.now()
     // Write-then-rename (in saveVersioned): a crash mid-write leaves the
     // stale-but-valid file intact rather than a truncated one. The mission JSON
@@ -572,6 +589,55 @@ export class MissionService {
     this.log(m, "info", "Mission finished")
     this.persist(m)
     return m
+  }
+
+  /**
+   * Durably delete a mission: unlink its `<id>.json` and drop it from the
+   * in-memory map, then emit a `removed` event so the renderer drops the row and
+   * the dashboard panel STOPS REFRESHING. (It does NOT auto-close: the companion
+   * dashboard panel keeps showing its last snapshot until the user closes its tab
+   * — auto-close is intentionally out of scope here.) This is what the sidebar ✕
+   * now does instead of the old renderer-only dismissed-ids Set — after deletion
+   * `list()` / `loadAll()` no longer return it, so it CANNOT reappear on relaunch,
+   * and the Supervisor `tick()` (which iterates this map) can't resurrect it.
+   *
+   * Gated to TERMINAL-state missions (done/blocked/stopped): a running/planning/
+   * paused mission is never deletable from a row (matches the renderer gating;
+   * stopping it is the separate `stop` path). Returns true iff a mission was
+   * removed.
+   *
+   * Teardown order, mirroring `stop()`: a `done`/`blocked` mission was reached via
+   * `finish()`/`recomputeCompletion()`, which do NOT kill processes, so its
+   * Conductor + workers may still be LIVE PTYs. Kill them first — otherwise
+   * dropping the record orphans those `claude.exe` processes (unreachable by
+   * `stop()`/`tick()` once the row is gone). `sessions.kill` is a safe no-op on an
+   * already-dead/unknown id (returns false), so this never double-kills the
+   * already-cleared sessions of a `stopped` mission. Then best-effort worktree
+   * cleanup so an isolated mission leaves no orphan trees (a no-op for
+   * non-isolated missions).
+   */
+  deleteMission(id: string): boolean {
+    const m = this.missions.get(id)
+    if (!m) return false
+    if (!TERMINAL_DELETABLE.includes(m.status)) return false
+    // Tear down any still-live PTYs (no-op for an already-stopped mission).
+    for (const w of m.workers) this.sessions.kill(w.sessionId)
+    if (m.conductorSessionId) this.sessions.kill(m.conductorSessionId)
+    // Best-effort: any per-task failure is logged inside cleanupAllWorktrees, so a
+    // (best-effort) orphaned worktree leaves a trace. DEFERRED FOLLOW-UP: a
+    // boot-time orphan-worktree prune-sweep (reapOrphans over the repo, keeping
+    // live missions' branches) would reclaim trees stranded by a failed cleanup.
+    this.cleanupAllWorktrees(m)
+    this.missions.delete(id)
+    // Remove the durable file so a fresh service load (boot seed) can't re-add it.
+    // force:true → no throw if it's already gone (e.g. a manual delete).
+    try {
+      rmSync(join(this.dir, `${id}.json`), { force: true })
+    } catch (err) {
+      logWarn("missions", `could not delete mission file ${id}.json: ${err}`)
+    }
+    this.emitEvent({ type: "removed", id })
+    return true
   }
 
   start(): void { if (!this.timer) this.timer = setInterval(() => this.tick(), 5000) }

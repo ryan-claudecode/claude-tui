@@ -113,6 +113,9 @@ contextBridge.exposeInMainWorld("api", {
   stopMission: (id: string) => ipcRenderer.invoke("mission:stop", id),
   pauseMission: (id: string) => ipcRenderer.invoke("mission:pause", id),
   resumeMission: (id: string) => ipcRenderer.invoke("mission:resume", id),
+  // Durable delete (sidebar ✕) — terminal-state only; main process emits
+  // mission:removed so useMissions drops the row (no renderer-only Set).
+  deleteMission: (id: string) => ipcRenderer.invoke("mission:delete", id),
 
   // WW-2b — worktree review: approve merges the worker's branch, reject discards
   // it (back to pending). Both return the resulting task state ({ status,

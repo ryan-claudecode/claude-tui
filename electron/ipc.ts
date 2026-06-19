@@ -102,8 +102,8 @@ export async function setupIpc(win: BrowserWindow) {
 
   // Push mission mutations to the main renderer (MS-2's useMissions consumes
   // these instead of polling). The full Mission rides along — the sidebar +
-  // dashboard panel need tasks/workers/eventLog. No `removed` event: missions
-  // are never deleted (see MissionServiceEvent docs).
+  // dashboard panel need tasks/workers/eventLog. A `removed` event (from
+  // deleteMission, the durable sidebar ✕) is forwarded as `mission:removed`.
   missionService.onEvent((e) => {
     if (win.isDestroyed()) return
     if (e.type === "updated") win.webContents.send("mission:updated", e.mission)

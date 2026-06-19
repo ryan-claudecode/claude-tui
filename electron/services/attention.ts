@@ -307,8 +307,10 @@ export class AttentionService {
    */
   private onMissionEvent(e: MissionServiceEvent): void {
     if (e.type === "removed") {
-      // No delete path exists today (see MissionServiceEvent docs); handle it
-      // defensively so a future one clears the entry + tracker cleanly.
+      // The durable delete path now EXISTS (MissionService.deleteMission, fired by
+      // the sidebar ✕). This is the live, correct handler for it: clear the
+      // mission's status entry, drop any review entries for its tasks, and forget
+      // its status tracker so the queue holds nothing for a deleted mission.
       let changed = this.entries.delete(`mission:${e.id}`)
       // Also drop any review entries for that mission's tasks.
       for (const [id, entry] of this.entries) {
