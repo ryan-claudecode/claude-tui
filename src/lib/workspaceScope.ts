@@ -16,8 +16,6 @@
  * legacy untagged session/mission.
  */
 
-import { filterByWorkspace } from "./workspaceFilter"
-
 /** The minimal session shape this module needs (the renderer's WorkSession is a
  *  superset). */
 export interface ScopedSession {
