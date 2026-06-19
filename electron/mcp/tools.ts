@@ -24,6 +24,7 @@ import { registerPanelTools } from "./tools/panels"
 import { registerPermissionTools } from "./tools/permissions"
 import { registerGitTools } from "./tools/git"
 import { registerAppTools } from "./tools/app"
+import { registerWorkspaceTools } from "./tools/workspaces"
 import { registerUiTools } from "./tools/ui"
 
 export type { TerminalIdentity } from "./tools/shared"
@@ -63,6 +64,7 @@ export function registerTools(
   registerPanelTools(server, panels, notes, files, sessions, identity)
   registerPermissionTools(server, sessions, identity, (m, l, t) => notifications.notify(m, l, t))
   registerGitTools(server, git, sessions)
+  registerWorkspaceTools(server, workspaces, workSessions, identity)
   registerAppTools(
     server,
     sessions,

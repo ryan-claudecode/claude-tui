@@ -27,35 +27,10 @@ export function registerAppTools(
   shellService: ShellService,
   identity: TerminalIdentity = {},
 ) {
-  server.tool(
-    "list_workspaces",
-    "List ClaudeTUI workspaces from the durable registry. A workspace is a user-named grouping of one-or-more directories (registry-owned, not just whatever was discovered on disk) — entries created by the user or seeded once from a workspace.json manifest.",
-    {},
-    async () => {
-      // Public projection only — never leak the internal seed* boot fields.
-      const list = workspaces.listPublic()
-      return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
-    },
-  )
-
-  server.tool(
-    "activate_workspace",
-    "Boot a workspace (open editors + create sessions)",
-    {
-      index: z.number().describe("Workspace index from list_workspaces"),
-    },
-    async ({ index }) => {
-      const result = workspaces.activate(index)
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: result ? JSON.stringify(result) : "Workspace not found",
-          },
-        ],
-      }
-    },
-  )
+  // NOTE: the workspace tool group (list_workspaces, get_active_workspace,
+  // create/rename/add-dir/remove-dir/delete/set-active/launch) lives in its own
+  // module — see ./workspaces.ts (registered from tools.ts). `workspaces` is still
+  // injected here only for `get_app_state`'s workspace snapshot below.
 
   // Testing infrastructure tools
 
