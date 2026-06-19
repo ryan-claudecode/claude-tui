@@ -230,8 +230,8 @@ export default function WorkspaceSwitcher({
             <button
               type="button"
               className={`workspace-rescan-btn${scanning ? " scanning" : ""}`}
-              title="Re-scan for workspaces"
-              aria-label="Re-scan for workspaces"
+              title={scanning ? "Scanning…" : "Re-scan for workspaces"}
+              aria-label={scanning ? "Scanning for workspaces" : "Re-scan for workspaces"}
               aria-busy={scanning}
               disabled={scanning}
               onClick={(e) => {
