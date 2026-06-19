@@ -9,19 +9,24 @@
  *
  * PALETTE NOTE: these are the ONLY hardcoded colors WS-D introduces (the prompt
  * sanctions a small auto-assign palette). They are a warm Sand & Stone family —
- * the amber `--accent`, plus terracotta/clay/sage/gold/rust neighbors — chosen to
+ * amber, terracotta, sage, gold, plum, teal-stone, rust, dusty blue — chosen to
  * read on ALL three theme backgrounds (light cream, warm charcoal, cold navy).
- * They are deliberately mid-saturation so a small 8px dot stays legible without
- * shouting. A persisted workspace may already carry a `color` (e.g. a future
- * recolor or a manifest import); `colorFor` prefers that and only auto-assigns a
- * fallback. The dot is a solid swatch — no token dependency — so it renders
- * identically in the main + companion windows and survives a theme switch.
+ * They are intentionally THEME-INDEPENDENT category colors: a dot identifies a
+ * workspace consistently no matter which theme is active, so they deliberately do
+ * NOT track the theme `--accent` (which is amber in light/dark but BLUE in
+ * cold-dark). Deliberately mid-saturation so a small 8px dot stays legible
+ * without shouting. A persisted workspace may already carry a `color` (e.g. a
+ * future recolor or a manifest import); `colorFor` prefers that and only
+ * auto-assigns a fallback. The dot is a solid swatch — no token dependency — so it
+ * renders identically in the main + companion windows and survives a theme switch.
  */
 
-/** The warm auto-assign palette, in cycle order. Index 0 is the amber accent
- *  family so a lone first workspace reads as the app's primary hue. */
+/** The warm auto-assign palette, in cycle order. Index 0 is amber — the app's
+ *  primary hue in the light/dark themes (NOT in cold-dark, whose accent is blue);
+ *  the dots are intentionally theme-independent category colors, so amber here is
+ *  just the first warm swatch, not a live mirror of `--accent`. */
 export const WORKSPACE_COLORS: readonly string[] = [
-  "#c47a28", // amber (accent family)
+  "#c47a28", // amber (warm family — matches the light/dark accent, not cold-dark)
   "#b5532e", // terracotta
   "#7a8a5a", // sage
   "#b8902e", // gold

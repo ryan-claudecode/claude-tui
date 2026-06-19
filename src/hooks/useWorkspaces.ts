@@ -118,9 +118,19 @@ export function useWorkspaces() {
   // DELETE — from the dropdown's hover ✕. If it was active, the service emits
   // active-changed(null) so the active id resets to "All" via the push. Re-reads
   // the list so the row vanishes.
+  //
+  // OPTIMISTIC CLEAR (MINOR 4): when deleting the CURRENTLY-ACTIVE workspace, drop
+  // activeId to null IMMEDIATELY (mirroring setActive's optimism) instead of
+  // waiting for the active-changed(null) push. Otherwise there's a transient
+  // window where the pill already reads "All" but the three sections still scope
+  // to the now-dead id (→ flash of empty sections). The push still arrives and is
+  // idempotent (null → null).
   const remove = useCallback(
     async (id: string): Promise<boolean> => {
       try {
+        // Use the functional setter so we read the freshest active id without
+        // needing it in the dep array (keeps `remove` stable).
+        setActiveId((cur) => (cur === id ? null : cur))
         const ok = await window.api.deleteWorkspace(id)
         await refresh()
         return ok

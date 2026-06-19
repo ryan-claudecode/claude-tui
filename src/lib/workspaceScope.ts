@@ -33,10 +33,12 @@ export interface ScopedMission {
 }
 
 /** The minimal attention-entry shape this module needs (the renderer's
- *  AttentionEntry is a superset). */
+ *  AttentionEntry is a superset). `tier` is read so tier-1 (blocking) entries
+ *  can be EXEMPTED from the workspace hide — see {@link filterAttentionByWorkspace}. */
 export interface ScopedAttention {
   sessionId: string
   missionId?: string
+  tier: 1 | 2 | 3
 }
 
 /**
@@ -61,10 +63,19 @@ export function attentionWorkspaceId(
 /**
  * Filter the attention queue to the active workspace. In "All" mode (activeId
  * null/undefined) every entry passes through (union, order preserved). Under a
- * specific workspace, an entry survives only when its RESOLVED owner workspaceId
- * equals the active id (untagged/unresolvable → hidden). Reuses
- * {@link filterByWorkspace} by projecting each entry to its resolved id, so the
- * "All"/specific bucket policy stays in exactly one place.
+ * specific workspace, a tier-2/3 entry survives only when its RESOLVED owner
+ * workspaceId equals the active id (untagged/unresolvable → hidden) — the same
+ * "All"/specific bucket policy as {@link filterByWorkspace} applies to tagged
+ * items.
+ *
+ * TIER-1 EXEMPTION (the review's MAJOR 2 fix): a tier-1 entry is a HARD BLOCKER
+ * the user must act on — a `show_form` checkpoint or a worktree-review gate. A
+ * cross-workspace worktree-review entry has NO toast/notif AND its owning mission
+ * row is also hidden by the workspace filter, so hiding the attention entry too
+ * would strand the user on something they MUST approve/reject with no way to
+ * reach it. So tier-1 entries are ALWAYS included regardless of the active
+ * workspace; only tier-2 / tier-3 entries filter by workspace. Input order is
+ * preserved (the exempted tier-1 entries keep their original positions).
  */
 export function filterAttentionByWorkspace<
   T extends ScopedAttention,
@@ -76,11 +87,11 @@ export function filterAttentionByWorkspace<
 ): T[] {
   // "All" mode short-circuits to the union — no per-entry resolution needed.
   if (activeWorkspaceId == null) return entries.slice()
-  return filterByWorkspace(
-    entries.map((e) => ({
-      entry: e,
-      workspaceId: attentionWorkspaceId(e, sessions, missions),
-    })),
-    activeWorkspaceId,
-  ).map((x) => x.entry)
+  // Filter only tier-2/3 by workspace; tier-1 blockers are never hidden. We
+  // partition-preserving-order: walk the original list, keep every tier-1, and
+  // keep a tier-2/3 only when its resolved owner matches the active workspace.
+  return entries.filter((e) => {
+    if (e.tier === 1) return true
+    return attentionWorkspaceId(e, sessions, missions) === activeWorkspaceId
+  })
 }

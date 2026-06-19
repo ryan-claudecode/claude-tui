@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import type { WorkspaceSummary } from "../hooks/useWorkspaces"
 import { colorFor } from "../lib/workspaceColors"
+import { menuNav } from "../lib/menuNav"
 
 interface Props {
   workspaces: WorkspaceSummary[]
@@ -51,6 +52,7 @@ export default function WorkspaceSwitcher({
   const [editValue, setEditValue] = useState("")
   const rootRef = useRef<HTMLDivElement>(null)
   const pillRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
 
   const options = useMemo<Option[]>(
@@ -86,6 +88,16 @@ export default function WorkspaceSwitcher({
     return () => document.removeEventListener("mousedown", onDocMouseDown, true)
   }, [open, close])
 
+  // MAJOR 3 fix — move focus INTO the menu when it opens. The key handler lives
+  // on the menu div, which is a SIBLING of the pill; without this, focus stays on
+  // the pill and onMenuKeyDown never fires (↑/↓/Enter/Esc were all dead from the
+  // keyboard). It backs off while inline-editing so it never steals focus from
+  // the rename input — and re-takes menu focus once editing ENDS (editingId →
+  // null) while still open, so keyboard nav stays live after a rename.
+  useEffect(() => {
+    if (open && !editingId) requestAnimationFrame(() => menuRef.current?.focus())
+  }, [open, editingId])
+
   // Focus the inline rename input when editing begins.
   useEffect(() => {
     if (editingId) requestAnimationFrame(() => editInputRef.current?.select())
@@ -115,17 +127,14 @@ export default function WorkspaceSwitcher({
     (e: React.KeyboardEvent) => {
       // While inline-editing, let the input own its keys (handled there).
       if (editingId) return
-      if (e.key === "Escape") {
-        e.preventDefault()
+      const result = menuNav(e.key, highlight, options.length)
+      if (result.type === "none") return
+      e.preventDefault()
+      if (result.type === "move") {
+        setHighlight(result.highlight)
+      } else if (result.type === "close") {
         close()
-      } else if (e.key === "ArrowDown") {
-        e.preventDefault()
-        setHighlight((h) => (h + 1) % options.length)
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault()
-        setHighlight((h) => (h - 1 + options.length) % options.length)
-      } else if (e.key === "Enter") {
-        e.preventDefault()
+      } else if (result.type === "activate") {
         const opt = options[highlight]
         if (opt) activateOption(opt)
       }
@@ -168,7 +177,14 @@ export default function WorkspaceSwitcher({
       </button>
 
       {open && (
-        <div className="workspace-menu" role="menu" aria-label="Switch workspace" onKeyDown={onMenuKeyDown}>
+        <div
+          ref={menuRef}
+          className="workspace-menu"
+          role="menu"
+          aria-label="Switch workspace"
+          tabIndex={-1}
+          onKeyDown={onMenuKeyDown}
+        >
           {options.map((opt, i) => {
             const highlighted = i === highlight
             if (opt.kind === "all") {

@@ -426,8 +426,7 @@ body {
   /* M1 — sidebar row entrance stagger: no rise, no per-row delay. */
   .attention-item,
   .mission-item,
-  .sessions-section .session-item,
-  .sidebar-section .sidebar-item {
+  .sessions-section .session-item {
     animation: none;
     animation-delay: 0ms;
   }
@@ -441,7 +440,6 @@ body {
    ============================================================ */
 
 /* Sidebar interactive rows and action links */
-.sidebar-item:focus-visible,
 .sidebar-action:focus-visible,
 .attention-item:focus-visible,
 .mission-item:focus-visible,
@@ -736,6 +734,14 @@ body {
   overflow-y: auto;
 }
 
+/* The menu container takes programmatic focus on open (so its key handler fires —
+   MAJOR 3 fix); the .highlight row is the visual cursor, so suppress an outline
+   box around the whole dropdown. */
+.workspace-menu:focus,
+.workspace-menu:focus-visible {
+  outline: none;
+}
+
 @keyframes workspace-menu-in {
   from {
     opacity: 0;
@@ -872,14 +878,14 @@ body {
    flash. Suppressed under reduced-motion (below). */
 .attention-item,
 .mission-item,
-.sessions-section .session-item,
-.sidebar-section .sidebar-item {
+.sessions-section .session-item {
   animation: block-rise 0.2s var(--ease-out) both;
   animation-delay: calc(min(var(--i, 0), 7) * 30ms);
 }
 
-/* "NEEDS YOU" attention queue — pinned above WORKSPACES, absent when empty.
-   Quiet by design: tier-tinted rows, a left accent edge, hover reveals dismiss. */
+/* "NEEDS YOU" attention queue — pinned at the top of the sidebar (below the
+   workspace switcher pill, above MISSIONS), absent when empty. Quiet by design:
+   tier-tinted rows, a left accent edge, hover reveals dismiss. */
 .attention-section {
   flex-shrink: 0;
 }
@@ -944,7 +950,7 @@ body {
   white-space: nowrap;
 }
 
-/* "MISSIONS (n)" section — between NEEDS YOU and WORKSPACES.
+/* "MISSIONS (n)" section — between NEEDS YOU and SESSIONS.
    Status chip colors reuse --attn-* tokens (no new palette entries):
      running → accent, paused/blocked → attn-2 gold, done → attn-3 sage,
      planning/stopped → text-3 muted. Hover reveals secondary icons. */
@@ -1121,33 +1127,6 @@ body {
   color: var(--text-4);
   font-size: 12px;
   font-style: italic;
-}
-
-.sidebar-item {
-  margin: 1px var(--s-2);
-  padding: 8px 12px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  font-size: 13px;
-  color: var(--text-2);
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  position: relative;
-  transition: background var(--fast) var(--ease), color var(--fast) var(--ease),
-    border-color var(--fast) var(--ease), transform var(--fast) var(--ease);
-}
-
-.sidebar-item:hover {
-  background: var(--bg-4);
-  color: var(--text-1);
-}
-
-.sidebar-item.active {
-  background: var(--accent-soft);
-  color: var(--text-0);
-  border-color: var(--accent-glow);
 }
 
 /* Two-level session tree (sessions ⊃ terminals) */
@@ -5099,6 +5078,15 @@ body {
   transition: border-color var(--fast) var(--ease);
 }
 .workspace-create-input:focus { border-color: var(--accent); }
+
+/* Soft, non-blocking duplicate-name hint (quiet muted text, no error styling —
+   dups are allowed). */
+.workspace-create-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-4);
+}
 
 .workspace-create-dirs {
   display: flex;

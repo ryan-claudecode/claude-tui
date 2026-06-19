@@ -93,7 +93,11 @@ declare global {
       activateWorkspace: (index: number) => Promise<any>
       // WS-B — id-based workspace registry ops (PUBLIC projection only). Selection
       // (setActiveWorkspace) is split from launch (launchWorkspace): set-active
-      // only marks/persists/emits; launch spawns. WS-D wires these into the UI.
+      // only marks/persists/emits; launch spawns. WS-D wires SELECTION into the UI
+      // (the switcher filters by active workspace); LAUNCH is intentionally NOT
+      // wired — a workspace is "not a launcher" per the ratified design, so the UI
+      // is selection-only. launchWorkspace is kept on the API for backward-compat +
+      // a future WS-E (MCP) surface.
       getWorkspace: (id: string) => Promise<any | null>
       getActiveWorkspace: () => Promise<any | null>
       createWorkspace: (name: string, dirs?: string[]) => Promise<any | null>
@@ -697,11 +701,15 @@ export default function App() {
         e.preventDefault(); e.stopPropagation()
         handleHandoff()
       } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "j") {
-        // Ctrl+J / Cmd+J — jump to the top attention-queue entry ("who needs me?"). The
-        // queue is pre-sorted (tier then oldest-first) by the service, so the
-        // first entry is the most urgent.
+        // Ctrl+J / Cmd+J — jump to the top VISIBLE "NEEDS YOU" entry ("who needs
+        // me?"). Use scopedAttention (the workspace-filtered list the sidebar
+        // actually renders), NOT the unfiltered attentionEntries — otherwise Ctrl+J
+        // could yank the user to an off-scope session/mission, or fire when no rows
+        // are even visible. The queue is pre-sorted (tier then oldest-first) by the
+        // service and the filter preserves order, so [0] is the most urgent visible
+        // entry. No-op when nothing is visible.
         e.preventDefault(); e.stopPropagation()
-        if (attentionEntries.length) jumpToAttention(attentionEntries[0])
+        if (scopedAttention.length) jumpToAttention(scopedAttention[0])
       } else if (mod && e.key === "\\") {
         e.preventDefault(); e.stopPropagation()
         toggleSplit()
@@ -748,7 +756,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, helpOpen, paletteOpen, historyOpen, missionPromptOpen, missionsListOpen, setActiveTerminalId, setPaletteOpen, setHistoryOpen, setZenMode, setHelpOpen, attentionEntries, jumpToAttention])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, helpOpen, paletteOpen, historyOpen, missionPromptOpen, missionsListOpen, setActiveTerminalId, setPaletteOpen, setHistoryOpen, setZenMode, setHelpOpen, scopedAttention, jumpToAttention])
 
   return (
     <div
@@ -785,6 +793,7 @@ export default function App() {
       <WorkspaceCreateModal
         open={createWorkspaceOpen}
         onClose={() => setCreateWorkspaceOpen(false)}
+        existingNames={workspaces.map((w) => w.name)}
         onCreate={async (name, dirs) => {
           // Create, then make the new workspace active (routes through the
           // active-changed push so the filter + pill flip to it).

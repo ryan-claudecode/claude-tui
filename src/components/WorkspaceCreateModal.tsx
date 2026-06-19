@@ -9,6 +9,9 @@ interface Props {
   /** Create the workspace; resolves to the new workspace id (or null on failure)
    *  so the caller can set it active. */
   onCreate: (name: string, dirs: string[]) => Promise<{ id: string } | null>
+  /** Existing workspace names — used ONLY for a soft, non-blocking duplicate-name
+   *  hint. Workspaces are id-addressed, so dups are allowed; we just warn. */
+  existingNames?: string[]
 }
 
 // Show just the last path segment as the chip label (the full path is the
@@ -26,7 +29,7 @@ function dirLabel(dir: string): string {
  * Create is disabled until the name is non-empty. Dirs are optional — a
  * workspace can start empty and gain dirs later.
  */
-export default function WorkspaceCreateModal({ open, onClose, onCreate }: Props) {
+export default function WorkspaceCreateModal({ open, onClose, onCreate, existingNames = [] }: Props) {
   const [name, setName] = useState("")
   const [dirs, setDirs] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
@@ -78,6 +81,12 @@ export default function WorkspaceCreateModal({ open, onClose, onCreate }: Props)
   }
 
   const nameValid = validateWorkspaceName(name).ok
+  // Soft, NON-blocking duplicate-name hint: workspaces are id-addressed so dups
+  // are allowed — we just warn (case-insensitive, trimmed) so the user isn't
+  // surprised by two identically-named rows. Create stays enabled.
+  const trimmedName = name.trim().toLowerCase()
+  const isDuplicateName =
+    trimmedName.length > 0 && existingNames.some((n) => n.trim().toLowerCase() === trimmedName)
 
   return (
     <div className="workspace-create-overlay" onMouseDown={onClose}>
@@ -108,6 +117,11 @@ export default function WorkspaceCreateModal({ open, onClose, onCreate }: Props)
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        {isDuplicateName && (
+          <span className="workspace-create-hint" role="note">
+            A workspace named “{name.trim()}” already exists — that's fine, names don't have to be unique.
+          </span>
+        )}
 
         <label className="workspace-create-label">Folders</label>
         <div className="workspace-create-dirs">

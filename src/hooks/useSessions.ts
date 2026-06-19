@@ -68,17 +68,16 @@ export function useSessions(
   const [sessions, setSessions] = useState<WorkSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
-  const [workspaces, setWorkspaces] = useState<any[]>([])
   const [config, setConfig] = useState<any>(null)
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
   const activeTerminals = activeSession?.terminals ?? []
   const activeTerminal = activeTerminals.find((t) => t.id === activeTerminalId) ?? null
 
-  // Load workspaces, config, and existing session records on mount,
-  // then auto-restore all terminals in parallel.
+  // Load config and existing session records on mount, then auto-restore all
+  // terminals in parallel. (Workspaces are owned by useWorkspaces — WS-D — so
+  // this hook no longer fetches them.)
   useEffect(() => {
-    window.api.getWorkspaces().then(setWorkspaces)
     window.api.getConfig().then(setConfig)
     window.api.listWorkSessions().then(async (list: WorkSession[]) => {
       setSessions(list)
@@ -235,7 +234,6 @@ export function useSessions(
     activeSessionId,
     activeTerminalId,
     setActiveTerminalId,
-    workspaces,
     config,
     activeSession,
     activeTerminals,
