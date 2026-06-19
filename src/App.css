@@ -376,6 +376,13 @@ body {
     border-top-color: var(--accent);
   }
 
+  /* WS-F — workspace re-scan ⟳: no infinite spin. Keep a still, accent-tinted
+     busy cue (the button already turns accent + is disabled while scanning) so
+     the in-flight state stays visible without motion. */
+  .workspace-rescan-btn.scanning .workspace-rescan-icon {
+    animation: none;
+  }
+
   /* Panel slide-in / slide-up (PanelDrawer) */
   .panel-drawer,
   .panel-drawer-bottom {
@@ -853,6 +860,62 @@ body {
   border: 1px solid var(--accent);
   border-radius: var(--r-sm);
   outline: none;
+}
+
+/* WS-F — dropdown header: a quiet "Workspaces" label + the ⟳ re-scan control.
+   Warm, low-contrast, non-blocky — it reads as a section caption, not a button bar. */
+.workspace-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: 4px 9px 5px;
+  margin-bottom: 2px;
+}
+.workspace-menu-head-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  user-select: none;
+}
+.workspace-rescan-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.workspace-rescan-btn:hover {
+  color: var(--accent);
+  background: var(--bg-4);
+}
+.workspace-rescan-btn:disabled {
+  cursor: default;
+  color: var(--accent);
+}
+.workspace-rescan-icon {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+}
+/* Spin only while a scan is in flight. Single named animation so the
+   prefers-reduced-motion block (below) can neutralize it to a non-spinning glyph. */
+.workspace-rescan-btn.scanning .workspace-rescan-icon {
+  animation: workspace-rescan-spin 0.7s linear infinite;
+}
+@keyframes workspace-rescan-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Quiet hint shown when a scoped (specific-workspace) section is empty. */

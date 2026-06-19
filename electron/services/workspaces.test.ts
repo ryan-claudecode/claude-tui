@@ -404,6 +404,66 @@ describe("WorkspaceService discovery seeding", () => {
   })
 })
 
+// ── WS-F — user-triggerable re-scan ────────────────────────────────────────────
+describe("WorkspaceService WS-F rescan", () => {
+  function seedManifest(dir: string, body: object): string {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "workspace.json"), JSON.stringify(body))
+    return dir
+  }
+
+  it("rescan picks up a NEWLY-added manifest (seeds it) and returns the public list", () => {
+    const pattern = join(root, "ws-*")
+    const s = svc()
+    // First scan: one manifest on disk.
+    seedManifest(join(root, "ws-one"), { name: "One", repos: [] })
+    expect(s.rescan([pattern])).toHaveLength(1)
+
+    // A NEW manifest appears on disk after boot — a re-scan seeds it live.
+    seedManifest(join(root, "ws-two"), { name: "Two", repos: [] })
+    const after = s.rescan([pattern])
+    expect(after).toHaveLength(2)
+    expect(after.map((w) => w.name).sort()).toEqual(["One", "Two"])
+  })
+
+  it("rescan does NOT duplicate an already-seeded workspace and preserves user edits", () => {
+    const dir = join(root, "ws-edit")
+    seedManifest(dir, { name: "Imported", repos: [{ name: "api", path: "/repo/api", open_on_boot: false }] })
+    const pattern = join(root, "ws-*")
+    const s = svc()
+    s.rescan([pattern])
+    const id = s.list()[0].id
+
+    // User renames + adds a dir via the registry API.
+    s.rename(id, "UserName")
+    s.addDir(id, "/extra")
+
+    // Re-scan the SAME (unchanged) manifest — no duplicate, edits preserved.
+    const after = s.rescan([pattern])
+    expect(after).toHaveLength(1)
+    expect(after[0].id).toBe(id)
+    expect(after[0].name).toBe("UserName")
+    expect(after[0].dirs).toEqual(["/repo/api", "/extra"])
+  })
+
+  it("rescan returns the PUBLIC projection (no seed* leak)", () => {
+    seedManifest(join(root, "ws-pub"), {
+      name: "Imported",
+      editor: "code",
+      repos: [{ name: "api", path: "/repo/api", open_on_boot: true }],
+    })
+    const s = svc()
+    const list = s.rescan([join(root, "ws-*")])
+    const pub = list[0] as unknown as Record<string, unknown>
+    expect(Object.keys(pub).sort()).toEqual(
+      ["color", "createdAt", "dirs", "id", "name", "updatedAt"].sort(),
+    )
+    expect("seedDir" in pub).toBe(false)
+    expect("seedRepos" in pub).toBe(false)
+    expect("seedEditor" in pub).toBe(false)
+  })
+})
+
 describe("WorkspaceService load resilience", () => {
   it("an empty/missing registry loads cleanly (empty list, no active)", () => {
     expect(existsSync(file)).toBe(false)

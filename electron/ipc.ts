@@ -238,7 +238,13 @@ export async function setupIpc(win: BrowserWindow) {
   // WS-B — id-based workspace ops (get/create/rename/add-dir/remove-dir/delete/
   // set-active/get-active/launch). Legacy index-based workspace:list/activate
   // stay in registerAppHandlers below for the current renderer wiring.
-  registerWorkspaceHandlers({ workspaceService })
+  // WS-F — `getScanPaths` resolves the SAME scan paths the boot discover() above
+  // uses, but re-read FRESH from disk each call (mirroring osNotificationsEnabled's
+  // loadConfig() re-read) so a config edit since launch is honored on a re-scan.
+  registerWorkspaceHandlers({
+    workspaceService,
+    getScanPaths: () => loadConfig().workspaceScanPaths,
+  })
   registerAppHandlers({
     config,
     sessionService,

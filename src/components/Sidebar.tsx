@@ -39,6 +39,9 @@ interface Props {
   onNewWorkspace: () => void
   onRenameWorkspace: (id: string, name: string) => void
   onDeleteWorkspace: (id: string) => void
+  /** WS-F — re-run on-disk discovery (the switcher's ⟳ refresh). May be async so
+   *  the switcher can show a spin until it settles. */
+  onRescanWorkspaces: () => void | Promise<void>
 }
 
 // Resolve a friendly label for an attention entry: the terminal's name when we
@@ -61,6 +64,7 @@ export default function Sidebar({
   onNewSession, onKillSession, onKillSessionById, onSelectSession,
   workspaces, activeWorkspace, workspaceScoped,
   onSelectAllWorkspaces, onSelectWorkspace, onNewWorkspace, onRenameWorkspace, onDeleteWorkspace,
+  onRescanWorkspaces,
 }: Props) {
   return (
     <div className="sidebar">
@@ -79,6 +83,7 @@ export default function Sidebar({
         onNewWorkspace={onNewWorkspace}
         onRenameWorkspace={onRenameWorkspace}
         onDeleteWorkspace={onDeleteWorkspace}
+        onRescanWorkspaces={onRescanWorkspaces}
       />
 
       {attentionEntries.length > 0 && (

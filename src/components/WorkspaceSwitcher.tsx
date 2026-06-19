@@ -12,20 +12,30 @@ interface Props {
   onNewWorkspace: () => void
   onRenameWorkspace: (id: string, name: string) => void
   onDeleteWorkspace: (id: string) => void
+  /** WS-F — re-run on-disk discovery (the ⟳ refresh in the dropdown header). May
+   *  be async so the control can spin until it settles. */
+  onRescanWorkspaces: () => void | Promise<void>
 }
 
 /**
  * WS-D — the workspace switcher: a compact PILL at the top of the sidebar (below
  * the brand, above NEEDS YOU) that shows the active workspace (colored dot + name
- * + ▾), and a warm, rounded, soft-shadowed DROPDOWN: an "All" row, each
- * workspace (✓ when active, hover-revealed rename + delete), a divider, and
- * "+ New workspace".
+ * + ▾), and a warm, rounded, soft-shadowed DROPDOWN: a header row (a "Workspaces"
+ * label + the WS-F ⟳ refresh), an "All" row, each workspace (✓ when active,
+ * hover-revealed rename + delete), a divider, and "+ New workspace".
  *
  * Keyboard accessible: the pill is a button (Enter/Space opens). In the open
  * menu, ↑/↓ move the highlight, Enter activates, Esc closes (and returns focus to
  * the pill). Click-outside dismisses. The dropdown is `role=menu`; rows are
  * `role=menuitem`. Reduced-motion is honored via the CSS (.workspace-menu
  * animation is suppressed in the prefers-reduced-motion block).
+ *
+ * WS-F — the dropdown header carries a ⟳ refresh that re-runs on-disk discovery
+ * on demand (discovery is no longer boot-only). It spins (CSS, reduced-motion
+ * safe) while the rescan is in flight; it is NOT part of the ↑/↓ nav order (a
+ * standalone control, like the per-row rename/delete) so the keyboard path stays
+ * simple. It deliberately does NOT close the menu, so the user sees the list
+ * update in place.
  */
 
 // The flat, navigable option list: "All" (index 0), then one per workspace,
@@ -44,16 +54,29 @@ export default function WorkspaceSwitcher({
   onNewWorkspace,
   onRenameWorkspace,
   onDeleteWorkspace,
+  onRescanWorkspaces,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [highlight, setHighlight] = useState(0)
   // The id of the workspace whose name is being edited inline (or null).
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState("")
+  // WS-F — true while a re-scan is in flight (drives the ⟳ spin + disables it so a
+  // double-click can't fire two overlapping scans).
+  const [scanning, setScanning] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const pillRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
+  // WS-F — guard the post-await setScanning(false) against a same-frame unmount
+  // (e.g. the menu closes / the component unmounts while the scan is in flight).
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const options = useMemo<Option[]>(
     () => [
@@ -112,6 +135,20 @@ export default function WorkspaceSwitcher({
     },
     [onSelectAll, onSelectWorkspace, onNewWorkspace, close],
   )
+
+  // WS-F — fire an on-demand re-scan. Spins the ⟳ while in flight (and disables it
+  // so an overlapping scan can't start). Does NOT close the menu — the list
+  // updates in place so the user sees newly-discovered workspaces appear. Errors
+  // are owned by the parent (the hook toasts on failure); we only manage the spin.
+  const handleRescan = useCallback(async () => {
+    if (scanning) return
+    setScanning(true)
+    try {
+      await onRescanWorkspaces()
+    } finally {
+      if (mountedRef.current) setScanning(false)
+    }
+  }, [scanning, onRescanWorkspaces])
 
   const commitRename = useCallback(() => {
     const id = editingId
@@ -185,6 +222,28 @@ export default function WorkspaceSwitcher({
           tabIndex={-1}
           onKeyDown={onMenuKeyDown}
         >
+          {/* WS-F — dropdown header: a quiet label + the ⟳ refresh that re-runs
+              on-disk discovery on demand. Not in the ↑/↓ nav order (standalone
+              control). The spin is reduced-motion safe (CSS). */}
+          <div className="workspace-menu-head">
+            <span className="workspace-menu-head-label">Workspaces</span>
+            <button
+              type="button"
+              className={`workspace-rescan-btn${scanning ? " scanning" : ""}`}
+              title="Re-scan for workspaces"
+              aria-label="Re-scan for workspaces"
+              aria-busy={scanning}
+              disabled={scanning}
+              onClick={(e) => {
+                e.stopPropagation()
+                void handleRescan()
+              }}
+            >
+              <span className="workspace-rescan-icon" aria-hidden="true">
+                ⟳
+              </span>
+            </button>
+          </div>
           {options.map((opt, i) => {
             const highlighted = i === highlight
             if (opt.kind === "all") {

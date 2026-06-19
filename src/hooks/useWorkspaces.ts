@@ -142,7 +142,24 @@ export function useWorkspaces() {
     [refresh],
   )
 
+  // RESCAN — WS-F. Re-run on-disk discovery against the configured scan paths and
+  // refresh the list from the RETURNED public list (no second read). Idempotent
+  // server-side (seeds new manifests, never duplicates a seeded workspace, never
+  // reverts user edits), so a redundant click is harmless. Returns the count
+  // delta so the caller can give the user feedback ("Found N new workspaces").
+  const rescan = useCallback(async (): Promise<{ added: number } | null> => {
+    try {
+      const before = workspaces.length
+      const list = (await window.api.rescanWorkspaces()) as WorkspaceSummary[]
+      setWorkspaces(list)
+      return { added: Math.max(0, list.length - before) }
+    } catch (err) {
+      toast("error", `Couldn't rescan workspaces: ${errMsg(err)}`)
+      return null
+    }
+  }, [workspaces.length])
+
   const active = activeWorkspace(workspaces, activeId)
 
-  return { workspaces, activeId, active, setActive, create, rename, remove, refresh }
+  return { workspaces, activeId, active, setActive, create, rename, remove, refresh, rescan }
 }

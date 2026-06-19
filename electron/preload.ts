@@ -86,6 +86,10 @@ contextBridge.exposeInMainWorld("api", {
   deleteWorkspace: (id: string) => ipcRenderer.invoke("workspace:delete", id),
   setActiveWorkspace: (id: string | null) => ipcRenderer.invoke("workspace:set-active", id),
   launchWorkspace: (id: string) => ipcRenderer.invoke("workspace:launch", id),
+  // WS-F — re-run discovery against the configured scan paths ON DEMAND (the
+  // switcher's ⟳ refresh). Returns the updated PUBLIC list (seeds new manifests,
+  // never duplicates, never reverts user edits).
+  rescanWorkspaces: () => ipcRenderer.invoke("workspace:rescan"),
   // WS-D — native folder picker for the create-workspace modal's "+ Add folder".
   // Resolves to the chosen absolute dir paths (multi-select), or [] on cancel.
   openDirectoryDialog: (): Promise<string[]> => ipcRenderer.invoke("dialog:open-directory"),

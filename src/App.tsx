@@ -107,6 +107,9 @@ declare global {
       deleteWorkspace: (id: string) => Promise<boolean>
       setActiveWorkspace: (id: string | null) => Promise<boolean>
       launchWorkspace: (id: string) => Promise<any | null>
+      // WS-F — on-demand discovery refresh (switcher ⟳). Returns the updated
+      // PUBLIC list (seeds new manifests; never duplicates / reverts user edits).
+      rescanWorkspaces: () => Promise<any[]>
       // WS-D — native folder picker (create-workspace modal). [] on cancel.
       openDirectoryDialog: () => Promise<string[]>
       onWorkspaceActiveChanged: (callback: (workspace: any | null) => void) => void
@@ -419,6 +422,7 @@ export default function App() {
     create: createWorkspace_,
     rename: renameWorkspace_,
     remove: deleteWorkspace_,
+    rescan: rescanWorkspaces_,
   } = useWorkspaces()
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false)
 
@@ -841,6 +845,19 @@ export default function App() {
         onNewWorkspace={() => setCreateWorkspaceOpen(true)}
         onRenameWorkspace={(id, name) => renameWorkspace_(id, name)}
         onDeleteWorkspace={(id) => deleteWorkspace_(id)}
+        onRescanWorkspaces={async () => {
+          // WS-F — on-demand discovery refresh. Surface a quiet result toast so
+          // the action feels acknowledged even when nothing new turned up. The
+          // hook owns the failure toast; null means it already reported.
+          const res = await rescanWorkspaces_()
+          if (res)
+            toast(
+              "success",
+              res.added > 0
+                ? `Found ${res.added} new workspace${res.added === 1 ? "" : "s"}`
+                : "Workspaces up to date",
+            )
+        }}
       />
       <div className="main-area">
         <TabBar

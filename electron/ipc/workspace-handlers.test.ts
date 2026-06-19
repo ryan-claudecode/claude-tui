@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { mkdtempSync, rmSync } from "fs"
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 
@@ -65,7 +65,7 @@ afterEach(() => {
 describe("WS-B workspace-handlers", () => {
   it("create/get/rename/add-dir/remove-dir round-trip and return the PUBLIC projection", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService })
+    registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
 
     const created = call<Record<string, unknown>>("workspace:create", "Frontend", ["/a"])
     expect(created.name).toBe("Frontend")
@@ -86,7 +86,7 @@ describe("WS-B workspace-handlers", () => {
 
   it("set-active is SELECTION-ONLY (persists + no spawn); get-active reflects it", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService })
+    registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
     const id = call<Record<string, unknown>>("workspace:create", "WS", ["/d1", "/d2"]).id as string
 
     expect(createCalls).toBe(0)
@@ -100,7 +100,7 @@ describe("WS-B workspace-handlers", () => {
 
   it("launch (the boot verb) STILL spawns one session per dir", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService })
+    registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
     const id = call<Record<string, unknown>>("workspace:create", "WS", ["/d1", "/d2"]).id as string
 
     const result = call<{ workspace: string; sessions: unknown[] }>("workspace:launch", id)
@@ -111,7 +111,7 @@ describe("WS-B workspace-handlers", () => {
 
   it("delete returns a boolean and clears get-active when the active workspace is removed", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService })
+    registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
     const id = call<Record<string, unknown>>("workspace:create", "Doomed").id as string
     call("workspace:set-active", id)
     expect(call<boolean>("workspace:delete", id)).toBe(true)
@@ -121,18 +121,42 @@ describe("WS-B workspace-handlers", () => {
 
   it("set-active(null) clears the selection", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService })
+    registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
     const id = call<Record<string, unknown>>("workspace:create", "A").id as string
     call("workspace:set-active", id)
     expect(call<boolean>("workspace:set-active", null)).toBe(true)
     expect(call("workspace:get-active")).toBeNull()
   })
 
+  // WS-F — the on-demand re-scan IPC. Drives a real service over a temp scan dir
+  // via an injected getScanPaths, so the handler resolves the configured paths
+  // without touching the user's real config.
+  describe("workspace:rescan (WS-F)", () => {
+    it("seeds a NEWLY-added manifest and returns the PUBLIC list (no seed* leak)", () => {
+      const scanDir = join(root, "ws-new")
+      mkdirSync(scanDir, { recursive: true })
+      writeFileSync(join(scanDir, "workspace.json"), JSON.stringify({ name: "Imported", repos: [] }))
+
+      const workspaceService = svc()
+      registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [join(root, "ws-*")] })
+
+      const list = call<Array<Record<string, unknown>>>("workspace:rescan")
+      expect(list).toHaveLength(1)
+      expect(list[0].name).toBe("Imported")
+      // Public projection only — no internal seed* fields cross the IPC boundary.
+      expect("seedDir" in list[0]).toBe(false)
+      expect("seedRepos" in list[0]).toBe(false)
+
+      // Idempotent: re-scanning the same dir does NOT duplicate the entry.
+      expect(call<unknown[]>("workspace:rescan")).toHaveLength(1)
+    })
+  })
+
   // WS-D — the native folder picker IPC (the only new main-process surface).
   describe("dialog:open-directory (WS-D folder picker)", () => {
     beforeEach(() => {
       const workspaceService = svc()
-      registerWorkspaceHandlers({ workspaceService })
+      registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
       showOpenDialog.mockClear()
     })
 

@@ -22,9 +22,20 @@ import type { WorkspaceService } from "../services/workspaces"
  *     spawn editors/sessions.
  *   • `workspace:launch` — the explicit BOOT verb (spawns editors + sessions).
  *   The old `workspace:activate(index)` remains the legacy index-based launch.
+ *
+ * WS-F — `workspace:rescan` re-runs discovery against the configured scan paths on
+ * demand (the switcher's ⟳ refresh + the `rescan_workspaces` MCP tool), returning
+ * the updated PUBLIC list. `getScanPaths` is INJECTED (callback-set, like the
+ * `getActiveWorkspaceId` getters in ipc.ts) so the handler resolves the SAME scan
+ * paths the boot call uses (`config.workspaceScanPaths`) without this module
+ * hard-depending on `loadConfig` — which keeps the handler test hermetic (the test
+ * passes its own resolver instead of touching the user's real config).
  */
-export function registerWorkspaceHandlers(deps: { workspaceService: WorkspaceService }) {
-  const { workspaceService } = deps
+export function registerWorkspaceHandlers(deps: {
+  workspaceService: WorkspaceService
+  getScanPaths: () => string[]
+}) {
+  const { workspaceService, getScanPaths } = deps
 
   // Re-project a single id through the public projection so a handler never has
   // to hand-build (and risk drifting from) the no-leak shape.
@@ -58,6 +69,12 @@ export function registerWorkspaceHandlers(deps: { workspaceService: WorkspaceSer
 
   // ── Launch (the explicit BOOT verb — spawns editors + sessions, id-addressed) ─
   ipcMain.handle("workspace:launch", (_e, id: string) => workspaceService.launch(id))
+
+  // ── Re-scan (WS-F — user-triggerable discovery refresh) ──────────────────────
+  // Resolve the scan paths from config (mirrors the boot call in ipc.ts) → re-run
+  // the seed-once discovery → return the updated PUBLIC list. Idempotent: seeds new
+  // manifests, never duplicates a seeded workspace, never reverts user edits.
+  ipcMain.handle("workspace:rescan", () => workspaceService.rescan(getScanPaths()))
 
   // ── Native folder picker (WS-D) ──────────────────────────────────────────────
   // The ONE new main-process surface WS-D adds: the create-workspace modal's

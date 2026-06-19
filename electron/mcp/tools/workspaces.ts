@@ -3,6 +3,7 @@ import { z } from "zod"
 import type { WorkspaceService, PublicWorkspace } from "../../services/workspaces"
 import type { TerminalIdentity } from "./shared"
 import type { SessionService } from "../../services/sessions"
+import { loadConfig } from "../../config"
 
 /**
  * WS-E — the MCP surface for the durable workspace registry (WS-A/B).
@@ -24,6 +25,12 @@ import type { SessionService } from "../../services/sessions"
  *     NOT spawn editors or sessions.
  *   • `launch_workspace` — the explicit BOOT verb (spawns editors + sessions).
  *
+ * WS-F — `rescan_workspaces` re-runs on-disk discovery against the configured scan
+ * paths (discovery is no longer boot-only) and returns the updated PUBLIC list.
+ * `getScanPaths` is injected (defaulting to `loadConfig().workspaceScanPaths`,
+ * read FRESH so a config edit is honored) so a test can drive it against a temp
+ * scan dir without touching the user's real config.
+ *
  * CALLER IDENTITY: the explicit CRUD tools take an explicit `id` arg (the
  * registry is uuid-addressed). `get_active_workspace` reads the single global
  * active selection (one per app, not per-terminal), so it needs no caller id.
@@ -41,6 +48,10 @@ export function registerWorkspaceTools(
   // without another wiring change. Prefixed `_` to mark intentionally-unused.
   _workSessions: SessionService,
   _identity: TerminalIdentity = {},
+  // WS-F — resolve the scan paths for `rescan_workspaces`. Defaults to the same
+  // config field the boot discover() uses, re-read fresh each call. Injectable so
+  // the tool test stays hermetic (it points discovery at a temp dir).
+  getScanPaths: () => string[] = () => loadConfig().workspaceScanPaths,
 ) {
   // Re-project a single id through the public projection so a handler never has
   // to hand-build (and risk drifting from) the no-leak shape. Mirrors the same
@@ -71,6 +82,15 @@ export function registerWorkspaceTools(
     {},
     async () => {
       return json(workspaces.getActivePublic())
+    },
+  )
+
+  server.tool(
+    "rescan_workspaces",
+    "Re-scan the configured scan paths for workspace.json manifests and seed any newly-added ones into the durable registry, then return the updated list (public projection). Idempotent and non-destructive: it SEEDS new manifests, never duplicates an already-seeded workspace, and never reverts the user's renames/dir edits (the registry is the source of truth). Use this after creating a new workspace.json on disk so it shows up without restarting the app.",
+    {},
+    async () => {
+      return json(workspaces.rescan(getScanPaths()))
     },
   )
 

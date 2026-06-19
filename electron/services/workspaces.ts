@@ -391,6 +391,25 @@ export class WorkspaceService {
     if (changed) this.persist()
   }
 
+  /**
+   * WS-F — the user-triggerable RE-SCAN. Re-runs the boot-time {@link discover}
+   * against `scanPaths` (the live action behind the switcher's ⟳ refresh control +
+   * the `rescan_workspaces` MCP tool), then returns the updated PUBLIC list so the
+   * caller can re-render without a second read.
+   *
+   * It deliberately REUSES `discover` verbatim — same seed-once policy: a re-scan
+   * SEEDS newly-added manifests, NEVER duplicates a previously-seeded workspace
+   * (canonicalized seedDir de-dup key), and NEVER clobbers user edits
+   * (name/dirs are user-owned). A vanished manifest is ignored (the registry is the
+   * source of truth — discovery only adds/refreshes). So calling it boot-only vs.
+   * on demand differs only in WHEN it runs, not WHAT it does. Returns `listPublic()`
+   * (never the internal `seed*` fields).
+   */
+  rescan(scanPaths: string[]): PublicWorkspace[] {
+    this.discover(scanPaths)
+    return this.listPublic()
+  }
+
   /** The directories a manifest contributes to a workspace: its repo paths if it
    *  declares any, otherwise the manifest dir itself. */
   private manifestDirs(m: DiscoveredManifest): string[] {

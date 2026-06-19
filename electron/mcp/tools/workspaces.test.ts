@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync } from "fs"
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { registerWorkspaceTools } from "./workspaces"
@@ -46,10 +46,12 @@ function svc(): WorkspaceService {
 }
 
 /** Register the workspace tools against a fresh service; return the handler map.
- *  workSessions/identity are unused by the CRUD tools, so a bare cast suffices. */
-function register(workspaceService: WorkspaceService) {
+ *  workSessions/identity are unused by the CRUD tools, so a bare cast suffices.
+ *  WS-F — `getScanPaths` is injected so the rescan tool can be driven against a
+ *  temp scan dir (defaults to none, which keeps the CRUD tests off the real config). */
+function register(workspaceService: WorkspaceService, getScanPaths: () => string[] = () => []) {
   const { server, handlers } = fakeServer()
-  registerWorkspaceTools(server as any, workspaceService, {} as unknown as SessionService, {})
+  registerWorkspaceTools(server as any, workspaceService, {} as unknown as SessionService, {}, getScanPaths)
   return handlers
 }
 
@@ -171,5 +173,27 @@ describe("WS-E workspace MCP tools", () => {
     const h = register(workspaceService)
     const created = parse(await h.create_workspace({ name: "Empty" }))
     expect(created.dirs).toEqual([])
+  })
+
+  // WS-F — the on-demand re-scan tool, driven against a temp scan dir.
+  it("rescan_workspaces seeds a new manifest and returns the PUBLIC list (no seed* leak, idempotent)", async () => {
+    const scanDir = join(root, "ws-seed")
+    mkdirSync(scanDir, { recursive: true })
+    writeFileSync(join(scanDir, "workspace.json"), JSON.stringify({ name: "Imported", repos: [] }))
+
+    const workspaceService = svc()
+    const h = register(workspaceService, () => [join(root, "ws-*")])
+
+    const list = parse<Array<Record<string, unknown>>>(await h.rescan_workspaces({}))
+    expect(list).toHaveLength(1)
+    expect(list[0].name).toBe("Imported")
+    // No internal seed* fields cross the MCP boundary.
+    expect("seedDir" in list[0]).toBe(false)
+    expect("seedRepos" in list[0]).toBe(false)
+    expect("seedEditor" in list[0]).toBe(false)
+
+    // Idempotent: a second rescan of the same dir does NOT duplicate the entry.
+    const again = parse<unknown[]>(await h.rescan_workspaces({}))
+    expect(again).toHaveLength(1)
   })
 })
