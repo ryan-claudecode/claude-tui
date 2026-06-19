@@ -29,13 +29,17 @@ export function registerAppHandlers(deps: {
     notesService,
   } = deps
 
-  // Workspace IPC
+  // Workspace IPC. Now backed by the durable registry (WS-A): the renderer
+  // reads `id` + `name` (it only renders the name today); `dirs`/`color` ride
+  // along for WS-D's switcher UX. The index-based `activate` is retained for the
+  // current `onSelectWorkspace(index)` wiring — WS-B replaces it with id-based
+  // make-active-vs-launch.
   ipcMain.handle("workspace:list", () =>
     workspaceService.list().map((ws) => ({
+      id: ws.id,
       name: ws.name,
-      alias: ws.alias,
-      editor: ws.editor,
-      repos: ws.repos,
+      dirs: ws.dirs,
+      color: ws.color,
     })),
   )
   ipcMain.handle("workspace:activate", (_e, index: number) =>
