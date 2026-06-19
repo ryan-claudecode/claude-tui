@@ -12,14 +12,13 @@ npm start      # launch (requires prior build)
 
 ## Architecture
 
-Three layers — service layer is the core, everything else is a thin adapter on top.
+Three layers — service layer is the core, everything else is a thin adapter on top. Panels render in a separate companion window, not the main window.
 
 ```
 ┌────────────────────────────────────────────────┐
-│  Renderer (React)          MCP Server (HTTP)   │
-│  src/App.tsx               electron/mcp/       │
-│  src/components/           (Claude connects     │
-│                             via --mcp-config)   │
+│  Main Renderer (React)     Companion Renderer  │
+│  src/App.tsx               src/companion/      │
+│  src/components/           (panels window)     │
 ├────────────────────────────────────────────────┤
 │  IPC Handlers              MCP Tool Handlers   │
 │  electron/ipc.ts           electron/mcp/       │
@@ -28,6 +27,7 @@ Three layers — service layer is the core, everything else is a thin adapter on
 │           Service Layer (source of truth)       │
 │  electron/services/terminals.ts                │
 │  electron/services/sessions.ts                 │
+│  electron/services/companion.ts                │
 │  electron/services/workspaces.ts               │
 ├────────────────────────────────────────────────┤
 │  node-pty    config.ts    workspace/discovery   │
@@ -40,35 +40,47 @@ Three layers — service layer is the core, everything else is a thin adapter on
 
 | File | Purpose |
 |------|---------|
-| `electron/main.ts` | App entry — creates window, calls setupIpc |
+| `electron/main.ts` | App entry — creates frameless window, calls setupIpc |
 | `electron/ipc.ts` | IPC handlers — thin wrappers calling services |
-| `electron/preload.ts` | contextBridge — exposes API to renderer |
+| `electron/preload.ts` | contextBridge — exposes API to main renderer |
+| `electron/companion-preload.ts` | contextBridge — exposes API to companion window |
 | `electron/services/terminals.ts` | **TerminalService** — runtime PTYs (create/kill/write/resize/rename), output capture, idle/activity state, conversation-id capture |
 | `electron/services/sessions.ts` | **SessionService** — durable work-session *container*: terminal membership, notes/summary/context primer, resume/idle-flush/overview |
+| `electron/services/companion.ts` | **CompanionService** — manages the companion BrowserWindow lifecycle, routes panel events |
 | `electron/services/workspaces.ts` | **WorkspaceService** — workspace discovery + activation |
-| `electron/services/panels.ts` | **PanelService** — rich UI panel state + form callbacks |
+| `electron/services/panels.ts` | **PanelService** — panel state + form callbacks, routes to companion window |
 | `electron/services/app.ts` | **AppService** — app-level ops (screenshot, app state, build) |
-| `electron/services/ui.ts` | **UiService** — bridges renderer-only view actions (focus mode, drawer, palette, etc.) to MCP by emitting `ui:*` events |
+| `electron/services/ui.ts` | **UiService** — bridges renderer-only view actions (focus mode, palette, etc.) to MCP by emitting `ui:*` events |
 | `electron/services/mission.ts` | **MissionService** — durable, on-disk orchestration missions + Supervisor loop (Conductor respawn, stalled-worker reaping, usage-limit pause/resume) |
+| `electron/services/attention.ts` | **AttentionService** — the "who needs me?" queue: subscribes to panel/terminal/notification seams, applies the tiered one-entry-per-terminal policy, emits `attention:updated` snapshots, fires tier-1 toast + OS notification |
 | `electron/mcp/server.ts` | MCP HTTP/SSE server lifecycle |
 | `electron/mcp/tools.ts` | MCP tool definitions — calls services |
-| `electron/config.ts` | Loads ~/.claude-tui/config.json |
+| `electron/config.ts` | Loads ~/.claude-tui/config.json, theme mode read/write |
 | `electron/workspace/discovery.ts` | Scans for workspace.json files |
 
-### Renderer (React)
+### Renderer (React) — Main Window
 
 | File | Purpose |
 |------|---------|
 | `src/App.tsx` | Root layout, state management, keyboard shortcuts |
+| `src/App.css` | All styles — theme system (light/dark/cold-dark) at the top |
 | `src/components/Sidebar.tsx` | Workspace + session lists, action buttons |
-| `src/components/TabBar.tsx` | Session tabs, rename, close |
-| `src/components/TerminalPane.tsx` | xterm.js terminal wrapper |
+| `src/components/TabBar.tsx` | Pill tabs for terminals, window controls |
+| `src/components/WindowControls.tsx` | Custom minimize/maximize/close buttons (frameless window) |
+| `src/components/TerminalPane.tsx` | xterm.js terminal wrapper with restoring overlay |
 | `src/components/SplitView.tsx` | Side-by-side terminal panes |
-| `src/components/StatusBar.tsx` | Bottom info bar |
-| `src/components/PanelDrawer.tsx` | Sliding drawer — routes panel `type` to a component |
-| `src/components/panels/*.tsx` | Panel components — Diff, Form, Image, Markdown, Table |
+| `src/components/panels/*.tsx` | Panel components — Diff, Form, Image, Markdown, Table, etc. |
 | `src/components/DropZone.tsx` | Drag-and-drop image overlay |
-| `src/App.css` | All styles (design-token system at the top) |
+| `src/lib/xtermThemes.ts` | xterm.js ITheme definitions for each theme mode |
+| `src/lib/sessionRow.ts` | Pure view-model derivation for sidebar session rows |
+
+### Renderer (React) — Companion Window
+
+| File | Purpose |
+|------|---------|
+| `src/companion/index.html` | Companion window HTML entry |
+| `src/companion/main.tsx` | Companion React bootstrap |
+| `src/companion/CompanionApp.tsx` | Companion root — panel tabs + routing, window controls |
 
 ## How to Add a New Feature
 
@@ -121,6 +133,21 @@ That's it. Service → IPC → MCP → Preload. Each is one function call or one
 
 > **IPC channel convention:** per-terminal (PTY) operations use the `terminal:*` channel namespace; durable work-session *container* operations use `worksession:*`. The renderer-facing JS accessor names (`createSession`, `onSessionData`, etc.) are kept stable for API continuity and deliberately do **not** track the channel namespace — only the wire strings follow the `terminal:*` / `worksession:*` split.
 
+## Theme System
+
+Three themes switched via `data-theme` attribute on `<html>`:
+- `light` (default) — Sand & Stone warm cream/amber
+- `dark` — Sand & Stone warm charcoal/amber
+- `cold-dark` — legacy cold-navy/blue
+
+CSS custom properties in `src/App.css` define each palette. Theme mode is persisted in `~/.claude-tui/config.json` under `theme.mode`. Switch via command palette (`Ctrl+Shift+P` → "Switch theme") or `window.api.setTheme(mode)`.
+
+xterm.js terminal colors are defined in `src/lib/xtermThemes.ts` and applied reactively when the theme changes.
+
+## Window
+
+Frameless window (`frame: false`). Custom window controls (minimize/maximize/close) are inline in the TabBar component. The sidebar brand and tab bar empty space serve as drag regions (`-webkit-app-region: drag`). Interactive elements use `-webkit-app-region: no-drag`.
+
 ## Session Spawning
 
 Sessions spawn Claude via shell wrapper for PATH resolution:
@@ -128,6 +155,17 @@ Sessions spawn Claude via shell wrapper for PATH resolution:
 - macOS/Linux: `bash -l -c "claude --dangerously-skip-permissions --mcp-config {path}"`
 
 The `--mcp-config` flag auto-connects Claude to the ClaudeTUI MCP server so Claude can control the app.
+
+**Auto-restore on startup:** All persisted sessions and terminals are automatically restored in parallel on app launch. Each terminal gets a fresh PTY with `--resume <conversationId>` so Claude picks up the same conversation. A "Restoring session..." overlay shows on each terminal until its PTY connects.
+
+**Headless engine (BO-1..BO-5) + input/permissions (BO-3) + the live engine switch (BO-4a):** `TerminalService.createHeadless` spawns `claude -p` with the stream-json transport (`HEADLESS_FLAGS` in `electron/services/streamProtocol.ts`) instead of an interactive PTY. **BO-4a wired the switch:** `create()` routes to `createHeadless` when the resolved engine is `structured` (config `rendering.engine`, set via `TerminalService.setEngine` from `ipc.ts` using `resolveRenderingEngine`); the default stays `xterm` (byte-unchanged legacy PTY path). The renderer fork is config-driven too — `src/lib/renderingEngine.ts` (`resolveEngine`) picks `AgentView`+`AgentComposer`+`PermissionPrompt` vs `TerminalPane` (the BO-2 `agentViewFlag` dev gate is retired). `list()`/`getActivity()` include headless terminals so broadcast/activity/mission-reaper see them. End-to-end live-verified against real `claude -p` — see `docs/spikes/bo4a-engine-switch.md`. Two halves of human↔agent I/O on the headless path:
+- **Input** — `src/components/AgentComposer.tsx` (a multiline composer, Enter=send / Shift+Enter=newline, drop-to-attach images via `saveDroppedImage`) sends one structured `AgentUserMessage` via `window.api.sendAgentInput` → `agent:send-input` IPC → `TerminalService.sendAgentMessage` (the stdin sink). It never touches `writeToSession`/pty.write.
+- **Permissions** — headless spawn adds `--permission-prompt-tool mcp__claudetui__approve_tool` (NOT `--dangerously-skip-permissions`). When a tool isn't pre-approved, Claude Code synchronously calls our `approve_tool` MCP tool (`electron/mcp/tools/permissions.ts`) and blocks. It attributes to the caller's terminal (identity token), `TerminalService.requestPermission` raises a tier-2 `asked` (via `markAwaitingPermission`) + pushes a `PermissionRequest` to the renderer's `PermissionPrompt` (`src/hooks/usePermissions.ts`), and blocks until the user Allow/Denies (`resolvePermission`). **Wire shapes are live-captured** in `docs/spikes/bo3-permission-prompt.md` + `permissionWire.fixtures.ts`: the tool receives `{ tool_name, input, tool_use_id }`; ALLOW MUST return `{"behavior":"allow","updatedInput":{…}}` (a bare allow is rejected and the tool is blocked); DENY is `{"behavior":"deny","message":"…"}`. "Always allow `<tool>`" persists to `<cwd>/.claude/settings.local.json` `permissions.allow` (honored by Claude Code's default setting sources next spawn); `--allowedTools` pre-approval skips the gate. If a terminal exits while a permission is pending, it's resolved as `deny("agent-exited")` so the MCP call never hangs.
+
+**Slash commands + skills in the structured composer (BO-7 / CAPP-41):** going headless does NOT lose skills/commands — plain `claude -p` loads user + plugin skills, custom commands, subagents, MCP, and SessionStart hooks by default, and typed `/skill`/`/command` ALREADY expand end-to-end over the stdin sink (the BO-3 input path is exactly the shape Claude expects). BO-7 adds the picker UX + native routing on top:
+  - **Init catalog** — the parser (`streamEvents.ts`) now retains the `init` event's `slash_commands` + `skills` arrays (added to the `init` `StreamEvent` + the `AgentCatalog` type in `streamProtocol.ts`). `TerminalService` stores them per headless terminal and exposes `getCatalog(id)` → `agent:catalog` IPC → `window.api.getAgentCatalog`. (Init arrives AFTER the first user message on the stream-json path, so the catalog is empty until the first turn.)
+  - **`/`-autocomplete picker** — `src/components/AgentComposer.tsx` mounts `useSlashPicker` (`src/hooks/useSlashPicker.ts`) + `SlashCommandPicker.tsx`; pure model in `src/lib/slashCatalog.ts`. It sources the filterable list from the LIVE init catalog (pulled on mount + tracked off live `init` stream events), NOT a hardcoded set. Up/Down/Enter/Tab select, Esc dismisses; selecting inserts `/name ` (structured-only, since the composer only mounts for structured terminals).
+  - **Built-in routing** — the `agent:send-input` intercept (`terminal-handlers.ts`) classifies input via the pure routing table in `electron/services/slashCommands.ts` BEFORE folding for stdin: native-mapped built-ins (`/config` → theme/config cycle, `/resume` → the Ctrl+Shift+H handoff) fire an existing app affordance via the `ui:slash-command` renderer event (`App.tsx` handler reuses `cycleTheme`/`handleHandoff`) instead of being sent to Claude; everything else (`/clear`, `/compact`, `/context`, skills, plugin skills, custom commands, prose) forwards UNCHANGED — the slash is preserved — so Claude expands it. `/model` is intentionally NOT routed here (owned by BO-6 / CAPP-40 — see the `BO-6 HOOK` comments in `slashCommands.ts` + `terminal-handlers.ts` + `App.tsx`). Hermetic e2e: `fakeStream.ts`'s canned init carries a sample catalog; `e2e/structured.spec.ts` covers the picker render + the `/config` native map.
 
 ## MCP Server
 
@@ -142,9 +180,10 @@ The `--mcp-config` flag auto-connects Claude to the ClaudeTUI MCP server so Clau
 Session/workspace tools map 1:1 to `SessionService` / `WorkspaceService` methods.
 Additional tool groups:
 
-**Panels** (`PanelService`):
-- `show_panel` — show a `diff`, `image`, `markdown`, `table`, `test`, `chart`, `heatmap`, `tree`, `timeline`, `git`, `kanban`, `notes`, `stat`, `log`, `progress`, or `code` panel. `git` renders a `git_status` result (branch, ahead/behind, staged/unstaged files) plus optional `git_log` commits; `kanban` renders `{ columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] }` — grouped cards for status buckets / parallel workstreams; `notes` renders `{ title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] }` (markdown bodies) — but prefer the `show_notes` tool, which loads saved notes for you; `stat` renders `{ title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] }` — a dashboard of big-number KPI cards (distinct from `chart`, which is for series viz); `log` renders `{ title?, lines: [string | { text, level?, time? }], showLevel? }` — a scrollable monospace log viewer with per-line severity coloring; `progress` renders `{ title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? }` — a vertical stepper with a progress bar for sequential task pipelines (distinct from `timeline`, which is chronological events); `code` renders `{ code, language?, filename?, startLine?, highlightLines?: number[], wrap? }` — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from `diff`, which compares two versions); `heatmap` renders `{ rows: number[][], xLabels?: string[], yLabels?: string[], title?, unit?, min?, max? }` — a color-coded 2D numeric matrix on a blue→green→amber→red ramp (correlation matrices, coverage grids, latency-by-hour). Note: the grid is `rows` (a 2D array), with `xLabels`/`yLabels` for the column/row headers — not `matrix`/`colLabels`/`rowLabels`.
-- `show_form` — show an interactive form and **wait** for the user to submit; returns the field values (or `{ cancelled: true }`)
+**Panels** (`PanelService` → `CompanionService`):
+Panels render in a separate **companion window**, not the main window. `PanelService` routes events through `CompanionService`, which manages the companion `BrowserWindow` lifecycle.
+- `show_panel` — show a `diff`, `image`, `markdown`, `table`, `test`, `chart`, `heatmap`, `tree`, `timeline`, `git`, `kanban`, `notes`, `stat`, `log`, `progress`, or `code` panel in the companion window. `git` renders a `git_status` result (branch, ahead/behind, staged/unstaged files) plus optional `git_log` commits; `kanban` renders `{ columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] }` — grouped cards for status buckets / parallel workstreams; `notes` renders `{ title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] }` (markdown bodies) — but prefer the `show_notes` tool, which loads saved notes for you; `stat` renders `{ title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] }` — a dashboard of big-number KPI cards (distinct from `chart`, which is for series viz); `log` renders `{ title?, lines: [string | { text, level?, time? }], showLevel? }` — a scrollable monospace log viewer with per-line severity coloring; `progress` renders `{ title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? }` — a vertical stepper with a progress bar for sequential task pipelines (distinct from `timeline`, which is chronological events); `code` renders `{ code, language?, filename?, startLine?, highlightLines?: number[], wrap? }` — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from `diff`, which compares two versions); `heatmap` renders `{ rows: number[][], xLabels?: string[], yLabels?: string[], title?, unit?, min?, max? }` — a color-coded 2D numeric matrix on a blue→green→amber→red ramp (correlation matrices, coverage grids, latency-by-hour). Note: the grid is `rows` (a 2D array), with `xLabels`/`yLabels` for the column/row headers — not `matrix`/`colLabels`/`rowLabels`. The `worktree-review` type (WW-2b) renders an isolated mission worker's captured diff with Approve/Reject buttons — it's normally opened by the renderer from the attention queue (not driven directly by Claude); see the Worktree review note under Mission orchestration.
+- `show_form` — show an interactive form in the companion window and **wait** for the user to submit; returns the field values (or `{ cancelled: true }`)
 - `update_panel` / `hide_panel` / `hide_all_panels` / `list_panels`
 
 **Testing/self-verification** (`AppService`):
@@ -162,19 +201,19 @@ Additional tool groups:
 **Saved layouts** (`LayoutService`):
 - `save_layout` / `list_layouts` / `restore_layout` / `delete_layout` — snapshot the open sessions (names + working dirs) to `~/.claude-tui/layouts.json` and recreate them on demand (e.g. to restore a working setup after an app restart). Only uses `SessionService.list()`/`create()` — no session-layer changes.
 
-**Snippets** (`SnippetService`):
-- `save_snippet` / `list_snippets` / `send_snippet` / `delete_snippet` — a library of reusable prompt snippets persisted to `~/.claude-tui/snippets.json`. Unlike templates (which spawn a new session), `send_snippet` injects text into an **existing** session's input via `SessionService.write()`.
-
 **Broadcast** (`BroadcastService`):
 - `broadcast_input` — the "synchronize panes" move: send the same text to every open session at once (or a subset via `session_ids`). `submit=true` appends Enter to actually run it; otherwise it just stages the text in each prompt. Fans out via `SessionService.write()` — no session-layer changes.
 
-**Command runner** (`CommandService`):
-- `run_command` — run a one-off shell command in a session's working directory and get structured output back (exit code, stdout, stderr, duration, `timedOut`). The general-purpose sibling of `run_build`/`run_tests`; output is captured (via `spawnSync`), not streamed — use a real session for long-running/interactive processes.
-
 **Session activity / orchestration** (`SessionService`):
-- A session is marked **active** while it produces terminal output and flips to **idle** after `idleThresholdMs` (1.5s) of quiet — i.e. Claude finished or is waiting for input. A shared 1s timer drives this and emits `session:state` events, which the renderer uses to animate the status dot (active = pulsing green, idle = steady yellow).
+- A session is marked **active** while it produces terminal output and flips to **idle** after `idleThresholdMs` (1.5s) of quiet — i.e. Claude finished or is waiting for input. A shared 1s timer drives this and emits `terminal:state` events, which the renderer uses to animate the status dot (active = pulsing green, idle = steady yellow).
 - `get_session_activity` — snapshot of every session's `state` and `idleMs` (ms since last output). Tells you at a glance which background session needs attention.
 - `wait_for_session_idle` — block until a session's output goes quiet (it finished working) or `timeout_ms` elapses, then return its recent output. Optionally inject `input` first (with `submit` to press Enter) to delegate a task and wait for completion instead of polling. Injecting input resets the quiet clock, sidestepping the startup race before the session's first output.
+
+**Attention queue** (`AttentionService` in `electron/services/attention.ts`):
+The "who needs me?" surface — a single, ordered, priority-tiered list of everything waiting on the user, distinct from raw per-session idle/active. The service is the source of truth; it subscribes to existing seams (a pending `show_form` → tier-1 `blocked`; a terminal going idle with a detected input-prompt → tier-2 `asked`, or after a sustained burst → tier-3 `finished`; an attributed error/warning toast → tier-2 `error`), applies a one-entry-per-terminal tier policy (higher tier replaces, `since` preserved so the wait clock stays honest), and emits `attention:updated` snapshots to the renderer. Tier-1 enqueues also raise an in-app toast and — when the main window is unfocused and `attention.osNotifications` (config, default `true`) allows — a Windows native notification whose click focuses the app and fires `attention:jump` to that entry.
+- The renderer (`src/hooks/useAttention.ts` + the "NEEDS YOU (n)" Sidebar section) is a thin view: it renders the snapshot as tier-tinted two-line rows (name / `reason · wait`), pinned above WORKSPACES and absent when the queue is empty. Clicking a row (or `Ctrl+J` for the top entry) focuses that session+terminal and sends `attention:seen` (clears its tier-2/3 entries; tier-1 clears only when the form resolves). Hover reveals a dismiss ×.
+- `get_attention_queue` — read-only ordered snapshot (lets a Conductor see if the human is already backed up before raising another checkpoint).
+- `request_attention` — put yourself on the queue as a tier-2 `asked` entry (`reason`, plus `session_id`/`terminal_id` defaulting to the caller's identity) when you're blocked on the user but didn't raise a form.
 
 **Clipboard** (`ClipboardService`):
 - `write_clipboard` / `read_clipboard` — put text on the user's system clipboard (hand them a finished command, regex, or snippet to paste elsewhere) or read back what they just copied. Thin wrapper over Electron's `clipboard`.
@@ -183,46 +222,16 @@ Additional tool groups:
 - `open_external` — open a URL in the user's default browser (e.g. pop open a localhost dev server you just started) or other default app for the scheme.
 - `reveal_path` — reveal a file/folder in the OS file manager (Explorer/Finder), selecting it. Thin wrapper over Electron's `shell`.
 
-**Git** (`GitService`):
-All tools resolve a working dir from `session_id` (falls back to the first open session, then the app cwd) and return structured JSON — no parsing raw terminal output.
-- *Read:* `git_status` (branch, ahead/behind, staged vs. unstaged changes), `git_log` (recent commits), `git_diff` (optionally scoped to one file and/or `--staged`), `git_show` (drill into a single commit/`ref` — full metadata, the `--stat` summary, and the patch; defaults to HEAD), `git_blame` (line-by-line authorship of a file — commit/author/date/summary per line, optional `start_line`/`end_line` range), `git_file_history` (commit history for a single file, following renames — the per-file counterpart of `git_log`), `git_branches` (list local + remote-tracking branches: name, current, remote), `git_tags` (list tags newest-first, each resolved to its target commit — the release-marker counterpart of `git_branches`), `git_remotes` (configured remotes + their fetch/push URLs), `git_file_at_ref` (a file's content as it existed at any commit/`ref` — recover a prior version; defaults to HEAD), `git_search_log` (search commit messages repo-wide, `git log --grep`, case-insensitive by default).
-- *Write:* `git_stage` / `git_unstage` (specific files or all), `git_commit` (`all` flag = `commit -a`; returns the new commit), `git_branch` (create + checkout), `git_checkout` (switch ref). Each returns the refreshed status so Claude sees the result immediately.
-- *Remote/stash:* `git_push` (`--porcelain`), `git_pull` (`--ff-only`), `git_stash` / `git_stash_pop` / `git_stash_list`.
+**Git — read-only** (`GitService`):
+All tools resolve a working dir from `session_id` (falls back to the first open session, then the app cwd) and return structured JSON — no parsing raw terminal output. Read-only by design: write-side git (stage/commit/push/branch/stash) is deliberately **not** exposed — that plumbing belongs to the agent's own shell (see `docs/roadmap/00-identity.md`).
+- `git_status` (branch, ahead/behind, staged vs. unstaged changes), `git_log` (recent commits), `git_diff` (optionally scoped to one file and/or `--staged`), `git_show` (drill into a single commit/`ref` — full metadata, the `--stat` summary, and the patch; defaults to HEAD), `git_blame` (line-by-line authorship of a file — commit/author/date/summary per line, optional `start_line`/`end_line` range), `git_branches` (list local + remote-tracking branches: name, current, remote).
 
-**File search** (`FileSearchService`):
-All tools resolve a working dir from `session_id` (same fallback as Git) and return structured JSON. Pure-Node (no shell, cross-platform), skip `node_modules`/`.git`/build output, and are bounded so a search in a large repo never floods the response.
-- `find_files` — find files by glob (`*`, `**`, `?`) matched against relative paths; returns paths + sizes (default cap 200).
-- `grep_code` — search file contents by regex (falls back to literal match), optionally scoped to a `glob`, with `case_insensitive`; returns matching lines with file + line number, plus `filesScanned`/`truncated` (default cap 200 matches, skips files > 1MB and binaries).
-
-**File I/O** (`FileService`):
-Structured read/write scoped to a session's working dir (relative paths resolve against it; absolute paths allowed). The no-shell counterpart to `run_command` for file access; pairs with the file-search tools.
-- `read_file` — read a file (optionally a 1-based inclusive `start_line`/`end_line` slice); returns the slice plus `totalLines` for paging. Refuses files > 2MB.
-- `write_file` — write content to a file, creating parent dirs; overwrites if present. Returns resolved path, bytes written, and whether it was newly `created`.
-- `diff_files` — open the interactive (review-enabled) diff panel comparing two files: `old_path` + `new_path` (two files on disk), `old_path` + `new_content` (preview a proposed rewrite), or just `new_path`/`new_content` (show as all additions). Unlike `git_diff` (tracked working-tree changes only) this compares any files. Reads via `FileService`, renders via the shared `DiffPanel` (so users can select hunks and send a review request).
-
-**File editing** (`EditService`):
-Surgical, in-place edits scoped to a session's working dir — the middle ground between `read_file` (whole-file read) and `write_file` (whole-file overwrite), so a small change doesn't risk clobbering the rest of the file. Same path resolution as the file-search/IO tools; no shell, no persistence; refuses files > 2MB.
-- `replace_in_file` — exact-string replacement. By default `old_string` must occur exactly once (unambiguous); set `replace_all` to change every occurrence. Fails if `old_string` is missing, not unique (without `replace_all`), or equal to `new_string`. Returns resolved path, `replacements` count, and bytes written.
-- `insert_in_file` — insert `content` before a 1-based `line` (a `line` <= 0 or past EOF appends at the end). Returns resolved path, the `line` inserted at, and bytes written.
-
-**Network** (`HttpService` + `PortService`):
-Probe the network without spawning `curl`/`netstat` and scraping output — structured JSON results. The dev-server workflow trio with `run_command`/`open_external`: launch a server, wait for its port, then hit it.
-- `http_request` — make an HTTP(S) request (`method`/`headers`/`body`/`timeout_ms`) and get back `status`, `statusText`, `headers`, `contentType`, `body` (UTF-8, capped at 1MB), `bodyBytes`, `truncated`, and `durationMs`. Only http/https URLs; follows redirects.
-- `download_file` — download a URL straight to disk (`path` resolves against the session's working dir or absolute, parent dirs created). The fetch-to-disk counterpart of `http_request` (inline body, 1MB cap): only writes on a 2xx response, follows redirects, enforces a 100MB cap (`max_bytes`). Returns resolved `path`, `bytesWritten`, `contentType`, `finalUrl`, and `durationMs`. Use for binary assets/release artifacts.
-- `check_port` — single TCP connect to see if something is listening on `host:port` (default host `127.0.0.1`); returns `{ open, durationMs }`.
-- `wait_for_port` — poll a port until it opens or `timeout_ms` elapses (`interval_ms` between attempts); returns `{ open, waitedMs, attempts }`. Use after launching a dev server to block until it's ready before `http_request`.
-
-**Process** (`ProcessService`):
-Find and kill OS processes without parsing `netstat`/`lsof`/`tasklist`/`ps` — structured JSON, cross-platform (Windows uses netstat/tasklist/taskkill, Unix uses lsof/ps/kill). The follow-up to the Network port checks: when `check_port` says a port is taken, reclaim it (the classic "EADDRINUSE on 3000, kill the zombie dev server" loop).
-- `find_process_on_port` — resolve the process(es) listening on a TCP port; returns `{ port, platform, processes: [{ pid, name }] }`.
-- `kill_process_on_port` — force-kill whatever is listening on a port; returns `{ port, platform, found, killed: [{ pid, name }], failed: [{ pid, name, error }] }`.
-- `list_processes` — list running processes, optionally filtered by case-insensitive name substring; returns `{ platform, filter, processes: [{ pid, name }], truncated }` (capped at 200).
-- `kill_process` — force-kill a process by PID; returns `{ pid, killed, error? }`.
+**Diff panel** (`FileService` → `PanelService`):
+- `diff_files` — open the interactive (review-enabled) diff panel comparing two files: `old_path` + `new_path` (two files on disk), `old_path` + `new_content` (preview a proposed rewrite), or just `new_path`/`new_content` (show as all additions). Unlike `git_diff` (tracked working-tree changes only) this compares any files. Reads via `FileService` (the only surviving `FileService` method), renders via the shared `DiffPanel` (so users can select hunks and send a review request). Paths resolve against a session's working dir (or absolute).
 
 **App UI control** (`UiService`):
 Drive the same view actions a user triggers by keyboard/menu — so Claude can ask the app to, e.g., "enter focus mode". These are **renderer-only** view states (no service owned the data), so `UiService` bridges them: each tool calls a `UiService` method that emits a `ui:*` event the renderer listens for (mount-time listeners in `App.tsx`, registered via `preload.ts`). The boolean-toggle tools take an optional desired state; omit it to flip the current value.
 - `set_focus_mode` — distraction-free mode (hides sidebar + tab bar). `enabled?`
-- `toggle_panel_drawer` — collapse/expand the panel drawer. `collapsed?`
 - `open_command_palette` — the Ctrl+Shift+P fuzzy action menu. `open?`
 - `show_keyboard_shortcuts` — the Ctrl+/ shortcuts overlay. `open?`
 - `open_history_search` — the Ctrl+Shift+F session-output search overlay. `open?`
@@ -244,37 +253,43 @@ The self-orchestration layer — a long-running goal driven by Claude but kept a
 - **Supervisor** — a code loop (`tick()` every 5s, started in `ipc.ts`) that guarantees a live Conductor: (re)spawns it for any `running` mission, reaps workers idle past `workerStallMs` (10 min) and requeues their tasks, and detects usage-limit output to `mission_pause` with a `resumeAt` backoff, then auto-resumes once it passes. **Code guarantees continuity; Claude provides intelligence.**
 - **Workers** — Claude sessions spawned per task via `mission_dispatch`, awaited via `mission_await`.
 
-Tools: `mission_create` (status `planning`), `mission_plan` (set tasks → `running`), `mission_dispatch`/`mission_await`/`mission_resolve` (drive one task), `mission_status` (the resume entry point — omit `mission_id` for the most-recently-updated active mission), `mission_list`, `mission_log`, `mission_pause`/`mission_resume`, `mission_stop` (kills workers + conductor), `mission_finish`. The `show_panel` `mission` type renders a live dashboard. Autonomy (`hands-off`/`checkpoints`/`supervised`) is surfaced to the Conductor via its seed prompt; the Conductor enforces checkpoints with `show_form`. Replaces the old `scripts/overnight-run.sh`.
+Tools: `mission_create` (status `planning`), `mission_plan` (set tasks → `running`), `mission_dispatch`/`mission_await`/`mission_resolve` (drive one task), `mission_status` (the resume entry point — omit `mission_id` for the most-recently-updated active mission), `mission_list`, `mission_log`, `mission_pause`/`mission_resume`, `mission_stop` (kills workers + conductor), `mission_finish`. The `show_panel` `mission` type renders a live dashboard in the companion window. Autonomy (`hands-off`/`checkpoints`/`supervised`) is surfaced to the Conductor via its seed prompt; the Conductor enforces checkpoints with `show_form`. Replaces the old `scripts/overnight-run.sh`.
+
+**Missions sidebar surface (MS-2):**
+Active missions appear in a `MISSIONS (n)` sidebar section between NEEDS YOU and WORKSPACES, absent when empty. Rows are two-line: goal excerpt + status chip (line 1), `done/total tasks` + thin progress bar + worker count (line 2). Primary click opens the mission dashboard panel and clears the mission's attention entry. On hover: a conductor icon (→ focuses the Conductor session) and — for terminal-state rows (done/blocked/stopped) — a × to dismiss the row renderer-side. The section header `+` opens the MissionPrompt overlay. State flows from `MissionService.onEvent` → `ipc.ts` push → `mission:updated` IPC channel → `src/hooks/useMissions.ts` (seeds via `listMissions()` on mount, upserts on push, renderer-side dismissed-ids Set for terminal-state rows). `MissionsList` and the open mission dashboard panel both refresh from the same push data — no polling intervals. Attention entries with `missionId` route their `jumpTo` to the dashboard panel (not a terminal). Pure row helpers live in `src/lib/missionRow.ts`.
+
+**Worktree-isolated workers + review (WW-2):**
+Opt-in per mission (`isolateWorkers`, default off): each worker spawns into a private git worktree/branch (WW-1 `WorktreeService` + WW-2a `MissionService`), and a resolved-done task enters `awaiting-review` instead of finishing — its captured diff is gated until the user approves (merge `--no-ff`; clean → `done`, conflict → `merge-conflict` with the branch preserved, **never auto-resolved**) or rejects (discard worktree+branch, task back to `pending`). The backend (frozen) lives in `MissionService.approveTask`/`rejectTask`/`reviewQueue` and the `mission_approve_task`/`mission_reject_task`/`mission_review_queue` MCP tools; `AttentionService` raises a tier-1 `review:<missionId>:<taskId>` entry (carrying `missionId` + `taskId`) for each awaiting-review task, reconciled purely from mission snapshots.
+- **Review UX (WW-2b):** clicking a review attention entry opens the `worktree-review` companion panel (`src/components/panels/WorktreeReviewPanel.tsx`) for that mission+task. App.tsx's `jumpToReviewRef` (mirrors `jumpToMissionRef`) fetches the latest captured diff via the `worktree:get-review-task` IPC, then `show_panel`s it. The panel reuses `DiffPanel` by parsing the captured unified-diff string into `{ path, oldContent, newContent }[]` (`src/lib/unifiedDiff.ts`, with a small test), so the diff stays hunk-selectable. **Approve & merge** / **Reject** (inline reason) call the `worktree:approve` / `worktree:reject` IPC (invoke, returning the resulting `{ status, reviewReason }` so the panel reflects merged/conflict/rejected inline). A merge conflict displays the preserved-branch conflict summary with a Discard (reject) option — no resolution UI. The mission dashboard panel shows `awaiting-review` (amber) and `merge-conflict` (red) task chips distinctly. Companion approve/reject accessors live on `companionApi`; the main-window `getReviewTask`/`approveWorktreeTask`/`rejectWorktreeTask` live on `window.api`.
 
 **Work sessions / context engine** (`SessionService` in `electron/services/sessions.ts` — the durable *container*):
 A two-tier model sits beneath the terminals: a **work session** is a durable container (persisted to `~/.claude-tui/sessions/<id>.json`) that groups many **terminals** (runtime PTYs owned by `TerminalService` in `terminals.ts`) and accumulates knowledge that outlives any single terminal. Tools: `create_work_session` / `list_work_sessions` / `work_session_status`, `register_terminal`, `set_terminal_activity`, `session_note` (pass `corrects` to supersede a wrong note), `set_session_summary`, `get_session_context` (the primer a fresh terminal reads to inherit summary + findings + ruled-out). Spawned terminals bind identity via the SSE URL (`?sid=&tid=`) so these tools default to the caller's own ids. Resume-fidelity features layered on top:
-- **Conversation resume** — when a terminal spawns, `SessionService` watches the Claude transcript dir (`~/.claude/projects/<encoded-cwd>/`) and records the terminal's `ccConversationId` (via a `convo` event from `TerminalService`). On app restart, clicking a dead terminal ref calls `reopenTerminal`, which passes `--resume <id>` so Claude lands back in the same chat. If the transcript is gone, it falls back to a fresh primed terminal that still inherits state via `get_session_context`.
+- **Conversation resume** — when a terminal spawns, `SessionService` watches the Claude transcript dir (`~/.claude/projects/<encoded-cwd>/`) and records the terminal's `ccConversationId` (via a `convo` event from `TerminalService`). On app restart, all terminals auto-restore via `reopenTerminal`, which passes `--resume <id>` so Claude lands back in the same chat. If the transcript is gone, it falls back to a fresh primed terminal that still inherits state via `get_session_context`.
 - **Idle-flush summary** — when a terminal goes idle with unsaved findings (`summaryDirty`), after a grace period it gets a bracketed-paste prompt asking it to refresh the summary via `set_session_summary` (debounced to ≥60s between flushes), so a fresh terminal inherits the latest progress.
 - **Parsed-activity fallback** — `effectiveActivity` prefers a terminal's fresh self-reported `set_terminal_activity` (<20s old); otherwise it parses the last tool-call line (`● Edit(...)`) from terminal output, so heads-down terminals still show live activity in the sidebar instead of going stale.
-- **Session Overview panel** — the `session-overview` `show_panel` type (and `getOverview`) renders a bird's-eye view of a session: summary, active findings, ruled-out (with corrections), provisional findings (observer seam), and terminals with effective activity. The ⊕ button on a session in the sidebar opens it.
+- **Session Overview panel** — the `session-overview` `show_panel` type (and `getOverview`) renders a bird's-eye view of a session in the companion window: summary, active findings, ruled-out (with corrections), provisional findings (observer seam), and terminals with effective activity. The ⊕ button on a session in the sidebar opens it.
 - **Ctrl+Shift+H handoff** — "retire & continue": `handoffTerminal` force-flushes the summary, spawns a fresh terminal in the same session, and retires the old one — useful when a terminal's context fills up. (Not plain Ctrl+H, which is ASCII Backspace and would shadow the terminal's own backspace.)
 
-## Panel System
+## Panel System — Companion Window
 
-Claude renders rich UI alongside terminals via panels. State flows:
-**Claude → MCP tool → PanelService → IPC → React drawer** (`PanelDrawer`).
+Claude renders rich UI via panels in a **separate companion BrowserWindow** that opens alongside the main window. State flows:
+**Claude → MCP tool → PanelService → CompanionService → IPC → Companion React app** (`CompanionApp`).
 
-Panels live in a sliding drawer (right or bottom). `PanelDrawer` routes each
-panel's `type` to a component in `src/components/panels/`. Users can also drag an
-image onto the window (`DropZone`) to inject it into the active session.
+The companion window has its own pill tab bar for switching between panels, plus minimize/maximize/close buttons. When all panels are closed, the companion window closes. The main window stays purely: sidebar + tabs + terminals.
+
+**Panel presence indicator (PP):** the main window's `usePanels` hook tracks open panels (`panel:show`/`update`/`hide` IPC) and exposes a `recentlyChanged` pulse flag (set on show/update, cleared after ~1.2s). When panels are open, `TabBar` shows a quiet pill near the window controls with the open count; it pulses on open/update and clicking it calls `companion:focus` IPC → `CompanionService.focusIfOpen()`. Live-refresh matching (mission dashboard + session overview panels) uses `props.id` instead of a panel-id prefix, because panels have auto-generated `panel-N` ids.
 
 Forms are special: `show_form` keeps the MCP call open (a pending promise in
-`PanelService`). When the user submits, the renderer sends `panel:form-submit`
-over IPC, which resolves the promise and returns the data to Claude.
+`PanelService`). When the user submits in the companion window, the renderer sends `panel:form-submit` over IPC, which resolves the promise and returns the data to Claude.
 
 ### How to add a new panel type
 
 1. **Component** — create `src/components/panels/FooPanel.tsx`; it receives the
    tool's `props` as React props.
-2. **Route it** — add a `case "foo"` to `PanelContent` in `PanelDrawer.tsx`.
+2. **Route it** — add a `case "foo"` to `PanelContent` in both `CompanionApp.tsx` (companion window).
 3. **Allow the type** — add `"foo"` to the `type` enum of `show_panel` in
    `electron/mcp/tools.ts` (no service change needed — `PanelService` is generic).
-4. **Style** — add a `.foo-panel` block in `src/App.css` using the design tokens.
+4. **Style** — add a `.foo-panel` block in `src/App.css` using the design tokens (shared by both windows).
 
 ## Config
 
@@ -285,33 +300,103 @@ over IPC, which resolves the promise and returns the data to Claude.
   "defaultCommand": "claude",
   "defaultArgs": ["--dangerously-skip-permissions"],
   "theme": {
+    "mode": "light",
     "fontSize": 14,
-    "fontFamily": "Cascadia Code",
-    "background": "#0d1117",
-    "foreground": "#c9d1d9"
+    "fontFamily": "Cascadia Code"
   }
 }
 ```
+
+`theme.mode` controls the CSS theme (`"light"` | `"dark"` | `"cold-dark"`). Per-field overrides (`fontSize`, `fontFamily`) take precedence over theme defaults.
 
 ## Build
 
 Uses electron-vite. Config in `electron.vite.config.ts`.
 
-- Main + preload output CJS to `out/main/` and `out/preload/`
-- Renderer output to `out/renderer/`
+- Main output CJS to `out/main/`
+- Two preloads (main + companion) output CJS to `out/preload/`
+- Two renderers (main + companion) output to `out/renderer/`
 - Native modules (node-pty) and MCP SDK are externalized from the bundle
+
+## Testing
+
+Two suites, deliberately kept separate:
+
+- **`npm test`** — the unit/integration suite (Vitest, `*.test.ts` under `electron/` +
+  `src/`). 276 tests, hermetic (no real PTYs/claude spawns), fast. This is the gate.
+- **`npm run e2e`** — the Playwright **Electron smoke suite** (`e2e/*.spec.ts`, config in
+  `playwright.config.ts`). Builds first (`npm run build`), then launches the *built* app via
+  `_electron.launch({ args: ["."] })` and asserts the shell renders (sidebar brand + empty-state
+  affordances). NOT part of `npm test` — Vitest's `include` glob excludes `e2e/`, so it can
+  never destabilize the unit gate.
+
+  **Hermetic by USERPROFILE override:** the spec launches Electron with `env.USERPROFILE` set
+  to a fresh `mkdtemp` dir. The app reads all persisted state from `os.homedir()` (which on
+  Windows follows `USERPROFILE`), so `~/.claude-tui` is empty → no session auto-restore → **no
+  real `claude.exe` spawns**. No production code changes, no user data touched. The temp home
+  + Electron instance are torn down in `afterEach` (always, even on failure) — no leaks.
+  - Two Windows-specific launch details: (1) `@playwright/test` is installed with
+    `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` (Electron testing uses the app's own electron binary via
+    `_electron`, not chromium); (2) the launch passes `--user-data-dir=<tempHome>/electron-data`
+    because Chromium crashes during window creation (STATUS_BREAKPOINT) when `USERPROFILE` is
+    overridden but its disk/GPU cache can't initialize under the real profile — pointing the
+    cache inside the temp home fixes it (and keeps it hermetic). Note Electron's
+    `app.getPath("home")` does NOT follow the override, but the app uses `os.homedir()`, which does.
+
+## Packaging
+
+Distributable Windows builds via **electron-builder** (config in `electron-builder.yml`).
+Both scripts run `npm run build` first to refresh `out/`, then package into `dist/`
+(gitignored — never commit artifacts).
+
+- `npm run package` — `electron-builder --win dir`. Produces the unpacked tree
+  `dist/win-unpacked/ClaudeTUI.exe` (no installer). Fast; use this to validate a build.
+- `npm run package:installer` — `electron-builder --win nsis`. Produces the NSIS installer.
+  May download nsis resources on first run, so it's heavier than `--win dir`.
+
+Key config notes:
+- **`asarUnpack: ["**/node_modules/node-pty/**"]`** — node-pty is a native module whose
+  `.node` binaries + helper exes (`winpty-agent.exe`, `OpenConsole.exe`, `conpty.dll`) must
+  live OUTSIDE the asar or PTY spawning breaks in the packaged app. They land under
+  `dist/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/`.
+- **`npmRebuild: false`** — node-pty ships prebuilt binaries (`prebuilds/win32-*/*.node`) and
+  loads them at runtime (`build/Release` → `build/Debug` → `prebuilds/<platform>-<arch>`), so
+  no from-source rebuild (Python + C++ toolchain) is needed; skipping it avoids a build failure.
+- **Code signing is OFF** — a commented placeholder in `electron-builder.yml` (`win.certificateFile`
+  / `certificatePassword` via env) shows where a release cert would go. Signing/notarization need
+  the user's Authenticode cert.
+- **macOS/Linux packaging is a future item** — it needs the cross-platform MAC work plus an Apple
+  Developer cert for notarization. Only the unsigned Windows target is configured today.
+
+## Auto-update
+
+`electron-updater` is wired in `electron/main.ts` inside an `app.isPackaged` guard so **`npm run dev` is completely unaffected** — dev builds are not packaged, so the block never runs.
+
+The updater is a **deliberate no-op** until the user completes all three steps:
+
+1. **Uncomment + fill the `publish:` block in `electron-builder.yml`** — set `owner` and `repo` (or choose a different provider). The placeholder block is left commented so builds don't attempt to push artifacts or fail with a missing provider.
+2. **Ship SIGNED releases** — `electron-updater` on Windows requires Authenticode signature validation for security. Unsigned builds will be rejected by the updater. See the `win.certificateFile` / `certificatePassword` placeholder in `electron-builder.yml` for where the cert config goes.
+3. **Distribute via `npm run package:installer`** — this produces the NSIS installer + `latest.yml` feed file that `electron-updater` polls. The `--win dir` target (`npm run package`) does NOT produce the feed.
+
+Until all three steps are done the updater silently does nothing. Update-available, update-downloaded, and error events are routed through `logWarn`/`logError` from `electron/log.ts` so any activity leaves a trace in `~/.claude-tui/logs/main.log`.
 
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
 | Ctrl+N | New session |
+| Ctrl+T | New terminal in active session |
+| Ctrl+W | Close active terminal |
 | Ctrl+K | Kill active session |
 | Ctrl+Shift+H | Retire & continue (handoff) — flush summary, fresh terminal, retire old |
 | Ctrl+\ | Toggle split panes |
 | Ctrl+1-9 | Switch to session by index |
-| Ctrl+P | Toggle (collapse/restore) the panel drawer |
-| Escape | Close the most recently shown panel |
+| Alt+1-9 | Switch to terminal by index |
+| Ctrl+Shift+P | Command palette |
+| Ctrl+Shift+F | Search session history |
+| Ctrl+J | Jump to the top "NEEDS YOU" attention-queue entry |
+| Ctrl+Shift+Z | Focus mode (hide sidebar + tab bar) |
+| Ctrl+/ | Keyboard shortcuts overlay |
 
 ## Tech Stack
 

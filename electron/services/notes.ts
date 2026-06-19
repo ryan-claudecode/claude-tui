@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
+import { loadVersioned, saveVersioned, type Migration } from "../persist"
 
 export interface Note {
   id: string
@@ -13,8 +13,11 @@ export interface Note {
   updatedAt: string
 }
 
-const NOTES_DIR = join(homedir(), ".claude-tui")
-const NOTES_FILE = join(NOTES_DIR, "notes.json")
+const NOTES_FILE = join(homedir(), ".claude-tui", "notes.json")
+
+/** Persistence schema version. v1 = today's shape verbatim. */
+const SCHEMA_VERSION = 1
+const MIGRATIONS: Migration[] = []
 
 /**
  * NotesService — a persistent, cross-session scratchpad. One Claude session can
@@ -29,17 +32,12 @@ const NOTES_FILE = join(NOTES_DIR, "notes.json")
  */
 export class NotesService {
   private read(): Note[] {
-    try {
-      const data = JSON.parse(readFileSync(NOTES_FILE, "utf-8"))
-      return Array.isArray(data) ? data : []
-    } catch {
-      return []
-    }
+    const data = loadVersioned<Note[]>(NOTES_FILE, SCHEMA_VERSION, MIGRATIONS)
+    return Array.isArray(data) ? data : []
   }
 
   private persist(notes: Note[]): void {
-    mkdirSync(NOTES_DIR, { recursive: true })
-    writeFileSync(NOTES_FILE, JSON.stringify(notes, null, 2))
+    saveVersioned(NOTES_FILE, SCHEMA_VERSION, notes)
   }
 
   /** List notes, optionally filtered by scope (substring match) and/or tag. */

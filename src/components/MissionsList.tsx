@@ -1,14 +1,9 @@
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
+import type { MissionSummary } from "../hooks/useMissions"
+import { useFocusTrap } from "../hooks/useFocusTrap"
 
-interface Task { id: string; status: string }
-export interface Mission {
-  id: string
-  goal: string
-  status: string
-  autonomy?: string
-  tasks?: Task[]
-  updatedAt: number
-}
+// Re-export so external consumers (tests, etc.) have a stable alias.
+export type Mission = MissionSummary
 
 interface Props {
   open: boolean
@@ -35,8 +30,11 @@ function relativeTime(ts: number): string {
 }
 
 // Browse every mission (durable, on-disk) and jump into one's dashboard. The
-// list is fed by App's poll of listMissions(), so it stays live while open.
+// list is fed by useMissions (MS-2 push events), staying live without polling.
 export default function MissionsList({ open, missions, onClose, onOpen, onStop, onPause, onResume }: Props) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(panelRef, open)
+
   useEffect(() => {
     if (!open) return
     const handler = (e: KeyboardEvent) => {
@@ -53,16 +51,23 @@ export default function MissionsList({ open, missions, onClose, onOpen, onStop, 
 
   return (
     <div className="missions-list-overlay" onMouseDown={onClose}>
-      <div className="missions-list-panel" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        ref={panelRef}
+        className="missions-list-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Missions list"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="missions-list-header">
           <span className="missions-list-title">Missions</span>
           <span className="missions-list-count">{missions.length}</span>
-          <button className="missions-list-close" onClick={onClose} title="Close">
+          <button className="missions-list-close" onClick={onClose} aria-label="Close missions list">
             ×
           </button>
         </div>
         {missions.length === 0 ? (
-          <div className="missions-list-empty">No missions yet. Start one with “Start Mission…”.</div>
+          <div className="missions-list-empty">No missions yet. Start one with "Start Mission…".</div>
         ) : (
           <div className="missions-list-rows">
             {missions.map((m) => {

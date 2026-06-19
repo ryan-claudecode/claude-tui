@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react"
+import WindowControls from "./WindowControls"
 
 interface Props {
   terminals: Array<{ id: string; name: string; lastState: string; activity?: string }>
@@ -8,6 +9,10 @@ interface Props {
   onCloseTerminal: (id: string) => void
   onRenameTerminal: (id: string, newName: string) => void
   onNewTerminal: () => void
+  // PP: companion panel presence indicator
+  panelCount?: number
+  panelsRecentlyChanged?: boolean
+  onFocusCompanion?: () => void
 }
 
 export default function TabBar({
@@ -18,6 +23,9 @@ export default function TabBar({
   onCloseTerminal,
   onRenameTerminal,
   onNewTerminal,
+  panelCount = 0,
+  panelsRecentlyChanged = false,
+  onFocusCompanion,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState("")
@@ -66,20 +74,33 @@ export default function TabBar({
               {t.name}
             </span>
           )}
-          <span
+          <button
             className="tab-close"
+            aria-label={`Close terminal ${t.name}`}
             onClick={(e) => {
               e.stopPropagation()
               onCloseTerminal(t.id)
             }}
           >
             &times;
-          </span>
+          </button>
         </div>
       ))}
-      <button className="tab-new" title="New terminal in this session" onClick={onNewTerminal}>
+      <button className="tab-new" title="New terminal in this session" aria-label="New terminal in this session" onClick={onNewTerminal}>
         +
       </button>
+      {panelCount > 0 && (
+        <button
+          className={`panel-presence${panelsRecentlyChanged ? " panel-presence--pulse" : ""}`}
+          title={`${panelCount} panel${panelCount === 1 ? "" : "s"} open — click to raise`}
+          aria-label={`${panelCount} panel${panelCount === 1 ? "" : "s"} open`}
+          onClick={onFocusCompanion}
+        >
+          <span className="panel-presence-icon">⬡</span>
+          <span className="panel-presence-count">{panelCount}</span>
+        </button>
+      )}
+      <WindowControls />
     </div>
   )
 }

@@ -46,26 +46,6 @@ export interface GitBranch {
   remote: boolean
 }
 
-export interface GitTag {
-  /** Tag name (e.g. "v1.2.0"). */
-  name: string
-  /** Commit the tag points at (abbreviated hash). */
-  hash: string
-  /** Tagger/commit date (YYYY-MM-DD). */
-  date: string
-  /** Annotation message (annotated tags) or commit subject (lightweight tags). */
-  subject: string
-}
-
-export interface GitRemote {
-  /** Remote name (e.g. "origin"). */
-  name: string
-  /** Fetch URL. */
-  fetchUrl: string
-  /** Push URL (often identical to fetchUrl). */
-  pushUrl: string
-}
-
 export interface GitBlameLine {
   /** 1-based line number in the final file. */
   line: number
@@ -81,14 +61,13 @@ export interface GitBlameLine {
 }
 
 /**
- * GitService — structured git queries and operations scoped to a working dir.
+ * GitService — structured, read-only git queries scoped to a working dir.
  *
  * Gives Claude machine-readable repo state (branch, ahead/behind, staged vs.
- * unstaged changes, recent log, diffs) instead of forcing it to parse raw
- * terminal output. Also exposes the common write operations (stage, unstage,
- * commit, branch, checkout) so Claude can drive a review-and-commit flow from
- * panels/tools instead of typing into the terminal. Mutating ops return the
- * refreshed GitStatus so the caller sees the result immediately.
+ * unstaged changes, recent log, diffs, commit detail, blame, branches) instead
+ * of forcing it to parse raw terminal output. Read-only by design: write-side
+ * git (stage/commit/push/branch/stash) is deliberately not exposed — that
+ * plumbing belongs to the agent's own shell (see docs/roadmap/00-identity.md).
  */
 export class GitService {
   private run(cwd: string, args: string[]): string {
@@ -167,50 +146,10 @@ export class GitService {
     return this.run(cwd, args)
   }
 
-  /** Stage specific files, or everything (`git add -A`) when none are given. */
-  stage(cwd: string, files?: string[]): GitStatus {
-    if (files && files.length) this.run(cwd, ["add", "--", ...files])
-    else this.run(cwd, ["add", "-A"])
-    return this.status(cwd)
-  }
-
-  /** Unstage specific files, or everything, leaving working-tree changes intact. */
-  unstage(cwd: string, files?: string[]): GitStatus {
-    const args = ["restore", "--staged"]
-    if (files && files.length) args.push("--", ...files)
-    else args.push(".")
-    this.run(cwd, args)
-    return this.status(cwd)
-  }
-
-  /**
-   * Commit staged changes. When `all` is true, stages all tracked modifications
-   * first (`git commit -a`). Returns the new HEAD commit plus refreshed status.
-   */
-  commit(cwd: string, message: string, all = false): { commit: GitCommit; status: GitStatus } {
-    const args = ["commit", "-m", message]
-    if (all) args.push("-a")
-    this.run(cwd, args)
-    const commit = this.log(cwd, 1)[0]
-    return { commit, status: this.status(cwd) }
-  }
-
-  /** Create a branch (optionally checking it out) and return refreshed status. */
-  createBranch(cwd: string, name: string, checkout = true): GitStatus {
-    this.run(cwd, checkout ? ["checkout", "-b", name] : ["branch", name])
-    return this.status(cwd)
-  }
-
-  /** Switch to an existing branch/ref and return refreshed status. */
-  checkout(cwd: string, ref: string): GitStatus {
-    this.run(cwd, ["checkout", ref])
-    return this.status(cwd)
-  }
-
   /**
    * List local and remote-tracking branches with a flag for the current one.
-   * Fills the gap between `git_branch` (create) and `git_checkout` (switch):
-   * answers "what branches can I switch to?" without parsing `git branch -a`.
+   * Answers "what branches exist / which am I on?" without parsing
+   * `git branch -a`.
    */
   branches(cwd: string): GitBranch[] {
     const sep = "\x1f"
@@ -232,40 +171,6 @@ export class GitService {
       out.push({ name, current: head.trim() === "*", remote })
     }
     return out
-  }
-
-  /** Push to the remote. Uses --porcelain so the result lands on stdout. */
-  push(cwd: string): { output: string; status: GitStatus } {
-    const output = this.run(cwd, ["push", "--porcelain"])
-    return { output: output || "(pushed)", status: this.status(cwd) }
-  }
-
-  /** Pull (fast-forward only to avoid surprise merge commits). */
-  pull(cwd: string): { output: string; status: GitStatus } {
-    const output = this.run(cwd, ["pull", "--ff-only"])
-    return { output: output || "(up to date)", status: this.status(cwd) }
-  }
-
-  /** Stash the working tree (optionally with a message). */
-  stash(cwd: string, message?: string): { output: string; status: GitStatus } {
-    const args = ["stash", "push"]
-    if (message) args.push("-m", message)
-    const output = this.run(cwd, args)
-    return { output, status: this.status(cwd) }
-  }
-
-  /** Re-apply and drop the most recent (or given) stash entry. */
-  stashPop(cwd: string, ref?: string): { output: string; status: GitStatus } {
-    const args = ["stash", "pop"]
-    if (ref) args.push(ref)
-    const output = this.run(cwd, args)
-    return { output, status: this.status(cwd) }
-  }
-
-  /** List stash entries (raw `git stash list` lines). */
-  stashList(cwd: string): string[] {
-    const raw = this.run(cwd, ["stash", "list"])
-    return raw ? raw.split("\n") : []
   }
 
   /**
@@ -342,101 +247,5 @@ export class GitService {
       out.push({ line: finalLine, hash: hash.slice(0, 8), author, date, summary, content })
     }
     return out
-  }
-
-  /**
-   * Commit history for a single file (`git log --follow -- <file>`), tracking
-   * the file across renames. `git_log` covers the whole repo; this answers "how
-   * did this one file evolve?".
-   */
-  fileHistory(cwd: string, file: string, limit = 20): GitCommit[] {
-    const sep = "\x1f"
-    const fmt = ["%h", "%an", "%ad", "%s"].join(sep)
-    const raw = this.run(cwd, [
-      "log",
-      `-n${limit}`,
-      "--follow",
-      "--date=short",
-      `--pretty=format:${fmt}`,
-      "--",
-      file,
-    ])
-    if (!raw) return []
-    return raw.split("\n").map((line) => {
-      const [hash, author, date, subject] = line.split(sep)
-      return { hash, author, date, subject }
-    })
-  }
-
-  /**
-   * List tags (newest first by creation), each resolved to its target commit.
-   * Fills the release-marker gap alongside git_branches: answers "what versions
-   * are tagged?". `subject` is the annotation for annotated tags, else the
-   * pointed-at commit's subject.
-   */
-  tags(cwd: string, limit = 50): GitTag[] {
-    const sep = "\x1f"
-    const raw = this.run(cwd, [
-      "for-each-ref",
-      `--count=${limit}`,
-      "--sort=-creatordate",
-      `--format=%(refname:short)${sep}%(objectname:short)${sep}%(creatordate:short)${sep}%(contents:subject)`,
-      "refs/tags",
-    ])
-    if (!raw) return []
-    const out: GitTag[] = []
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue
-      const [name, hash, date, subject] = line.split(sep)
-      out.push({ name, hash, date, subject: subject ?? "" })
-    }
-    return out
-  }
-
-  /** List configured remotes with their fetch/push URLs. */
-  remotes(cwd: string): GitRemote[] {
-    const raw = this.run(cwd, ["remote", "-v"])
-    if (!raw) return []
-    const map = new Map<string, GitRemote>()
-    for (const line of raw.split("\n")) {
-      // Format: "origin\thttps://...\t(fetch)"
-      const m = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/)
-      if (!m) continue
-      const [, name, url, kind] = m
-      const existing = map.get(name) ?? { name, fetchUrl: "", pushUrl: "" }
-      if (kind === "fetch") existing.fetchUrl = url
-      else existing.pushUrl = url
-      map.set(name, existing)
-    }
-    return [...map.values()]
-  }
-
-  /**
-   * Read a file's content as it existed at a given ref (`git show <ref>:<file>`).
-   * git_show drills into a whole commit; this answers "what did THIS file look
-   * like at that point?" — for comparing against the working copy or recovering
-   * a prior version. Defaults to HEAD.
-   */
-  fileAtRef(cwd: string, file: string, ref = "HEAD"): { ref: string; file: string; content: string } {
-    const content = this.run(cwd, ["show", `${ref}:${file}`])
-    return { ref, file, content }
-  }
-
-  /**
-   * Search commit history by message (`git log --grep`). git_log lists recent
-   * commits and git_file_history scopes to one file; this answers "which commit
-   * mentioned X?" across the whole repo. Case-insensitive by default.
-   */
-  searchLog(cwd: string, query: string, limit = 30, caseInsensitive = true): GitCommit[] {
-    const sep = "\x1f"
-    const fmt = ["%h", "%an", "%ad", "%s"].join(sep)
-    const args = ["log", `-n${limit}`, "--date=short", `--pretty=format:${fmt}`, `--grep=${query}`]
-    if (caseInsensitive) args.push("-i")
-    const raw = this.run(cwd, args)
-    if (!raw) return []
-    return raw.split("\n").map((line) => {
-      const [hash, author, date, subject] = line.split(sep)
-      return { hash, author, date, subject }
-    })
   }
 }

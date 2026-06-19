@@ -53,7 +53,12 @@ export default function FormPanel({ panelId, title, fields = [], submitLabel = "
 
   const handleSubmit = () => {
     setSubmitted(true)
-    window.api.submitForm(panelId, values)
+    // Support both main window (window.api) and companion window (window.companionApi)
+    if (typeof window !== "undefined" && (window as any).companionApi) {
+      ;(window as any).companionApi.submitForm(panelId, values)
+    } else {
+      window.api.submitForm(panelId, values)
+    }
   }
 
   if (submitted) {

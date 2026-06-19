@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 import type { TerminalService, TerminalInfo } from "./terminals"
+import { loadVersioned, saveVersioned, type Migration } from "../persist"
 
 export interface SavedLayout {
   name: string
@@ -9,8 +9,11 @@ export interface SavedLayout {
   sessions: { name: string; cwd: string }[]
 }
 
-const LAYOUTS_DIR = join(homedir(), ".claude-tui")
-const LAYOUTS_FILE = join(LAYOUTS_DIR, "layouts.json")
+const LAYOUTS_FILE = join(homedir(), ".claude-tui", "layouts.json")
+
+/** Persistence schema version. v1 = today's shape verbatim. */
+const SCHEMA_VERSION = 1
+const MIGRATIONS: Migration[] = []
 
 /**
  * LayoutService — persists named "session layouts" (the set of open sessions and
@@ -25,17 +28,12 @@ export class LayoutService {
   constructor(private sessions: TerminalService) {}
 
   private read(): SavedLayout[] {
-    try {
-      const data = JSON.parse(readFileSync(LAYOUTS_FILE, "utf-8"))
-      return Array.isArray(data) ? data : []
-    } catch {
-      return []
-    }
+    const data = loadVersioned<SavedLayout[]>(LAYOUTS_FILE, SCHEMA_VERSION, MIGRATIONS)
+    return Array.isArray(data) ? data : []
   }
 
   private persist(layouts: SavedLayout[]): void {
-    mkdirSync(LAYOUTS_DIR, { recursive: true })
-    writeFileSync(LAYOUTS_FILE, JSON.stringify(layouts, null, 2))
+    saveVersioned(LAYOUTS_FILE, SCHEMA_VERSION, layouts)
   }
 
   list(): SavedLayout[] {

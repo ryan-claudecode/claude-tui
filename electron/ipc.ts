@@ -1,4 +1,4 @@
-import { app, ipcMain, BrowserWindow } from "electron"
+import { app, BrowserWindow, dialog } from "electron"
 import { join } from "path"
 import { TerminalService } from "./services/terminals"
 import { WorkspaceService } from "./services/workspaces"
@@ -9,34 +9,25 @@ import { GitService } from "./services/git"
 import { TemplateService } from "./services/templates"
 import { TestRunnerService } from "./services/tests"
 import { LayoutService } from "./services/layouts"
-import { SnippetService } from "./services/snippets"
 import { BroadcastService } from "./services/broadcast"
-import { CommandService } from "./services/commands"
 import { ClipboardService } from "./services/clipboard"
 import { ShellService } from "./services/shell"
 import { NotesService } from "./services/notes"
-import { TaskQueueService } from "./services/taskqueue"
-import { SystemService } from "./services/system"
-import { FileSearchService } from "./services/filesearch"
 import { FileService } from "./services/files"
-import { HttpService } from "./services/http"
-import { PortService } from "./services/ports"
-import { EditService } from "./services/edit"
-import { ProcessService } from "./services/process"
-import { EncodeService } from "./services/encode"
-import { JsonService } from "./services/json"
-import { TimeService } from "./services/time"
-import { CsvService } from "./services/csv"
-import { RegexService } from "./services/regex"
-import { TextService } from "./services/text"
-import { ColorService } from "./services/color"
-import { MathService } from "./services/math"
-import { UrlService } from "./services/url"
 import { UiService } from "./services/ui"
 import { MissionService } from "./services/mission"
 import { SessionService } from "./services/sessions"
-import { loadConfig } from "./config"
+import { CompanionService } from "./services/companion"
+import { AttentionService } from "./services/attention"
+import { Notification } from "electron"
+import { loadConfig, resolveRenderingEngine, resolveRenderingModel, claudeDefaultModel, resolveRenderingEffort, claudeDefaultEffort, resolveSkipApproval } from "./config"
 import { startMcpServer } from "./mcp/server"
+import { registerTerminalHandlers } from "./ipc/terminal-handlers"
+import { registerWorkSessionHandlers } from "./ipc/worksession-handlers"
+import { registerPanelHandlers } from "./ipc/panel-handlers"
+import { registerMissionHandlers } from "./ipc/mission-handlers"
+import { registerAppHandlers } from "./ipc/app-handlers"
+import { registerAttentionHandlers } from "./ipc/attention-handlers"
 
 export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
@@ -47,48 +38,123 @@ export const gitService = new GitService()
 export const templateService = new TemplateService(sessionService)
 export const testRunnerService = new TestRunnerService()
 export const layoutService = new LayoutService(sessionService)
-export const snippetService = new SnippetService(sessionService)
 export const broadcastService = new BroadcastService(sessionService)
-export const commandService = new CommandService()
 export const clipboardService = new ClipboardService()
 export const shellService = new ShellService()
 export const notesService = new NotesService()
-export const taskQueueService = new TaskQueueService()
-export const systemService = new SystemService()
-export const fileSearchService = new FileSearchService()
 export const fileService = new FileService()
-export const httpService = new HttpService()
-export const portService = new PortService()
-export const editService = new EditService()
-export const processService = new ProcessService()
-export const encodeService = new EncodeService()
-export const jsonService = new JsonService()
-export const timeService = new TimeService()
-export const csvService = new CsvService()
-export const regexService = new RegexService()
-export const textService = new TextService()
-export const colorService = new ColorService()
-export const mathService = new MathService()
-export const urlService = new UrlService()
 export const uiService = new UiService()
+export const companionService = new CompanionService()
 export const missionService = new MissionService(sessionService, {
   notify: (text, level) => notificationService.notify(text, level as any),
 })
 export const workSessionService = new SessionService()
 
+/**
+ * The attention queue (AQ-1). Constructed in setupIpc once the main window
+ * exists (it needs window-focus + a renderer to push snapshots to). Exported as
+ * a mutable binding so the MCP layer and tests can reach it after wiring.
+ */
+export let attentionService: AttentionService
+
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
+
+  // Attention queue: single source of truth for "who needs me?". Subscribes to
+  // panel/terminal/notification seams in its constructor; deps are injected so
+  // window-focus and the OS notification stay testable.
+  attentionService = new AttentionService(
+    panelService,
+    sessionService,
+    notificationService,
+    missionService,
+    {
+      sendToRenderer: (channel, ...args) => {
+        if (!win.isDestroyed()) win.webContents.send(channel, ...args)
+      },
+      sessionOf: (terminalId) => workSessionService.sessionIdOf(terminalId),
+      isWindowFocused: () => !win.isDestroyed() && win.isFocused(),
+      osNotificationsEnabled: () => loadConfig().attention?.osNotifications !== false,
+      notify: (message, level, title) => notificationService.notify(message, level, title),
+      showOsNotification: ({ title, body, onClick }) => {
+        const n = new Notification({ title, body })
+        n.on("click", () => {
+          // Bring the main window to the actual foreground. On Windows,
+          // BrowserWindow.focus() alone cannot steal foreground from another
+          // app (focus-stealing prevention) — win.show() + moveTop() +
+          // app.focus({ steal: true }) is required.
+          if (!win.isDestroyed()) {
+            if (win.isMinimized()) win.restore()
+            win.show()
+            win.moveTop()
+            app.focus({ steal: true })
+          }
+          // Raise the companion window on top of the main window — the form
+          // (tier-1 trigger) lives there and should be immediately actionable.
+          companionService.focusIfOpen()
+          onClick()
+        })
+        n.show()
+      },
+      logWarn: (message) => console.warn(message),
+    },
+  )
+
+  // Push mission mutations to the main renderer (MS-2's useMissions consumes
+  // these instead of polling). The full Mission rides along — the sidebar +
+  // dashboard panel need tasks/workers/eventLog. No `removed` event: missions
+  // are never deleted (see MissionServiceEvent docs).
+  missionService.onEvent((e) => {
+    if (win.isDestroyed()) return
+    if (e.type === "updated") win.webContents.send("mission:updated", e.mission)
+    else win.webContents.send("mission:removed", e.id)
+  })
 
   sessionService.setMainWindow(win)
   sessionService.setDefaults(
     config.defaultCommand ?? "claude",
     config.defaultArgs ?? ["--dangerously-skip-permissions"],
   )
+  // BO-4a — flip the structured engine ON when config.rendering.engine says so;
+  // defaults to "xterm" (resolveRenderingEngine), so create() is unchanged unless
+  // the user opts in. From here, the normal new-session / new-terminal / reopen
+  // paths (all routed through SessionService → TerminalService.create) spawn the
+  // headless stream-json engine instead of an interactive PTY.
+  sessionService.setEngine(resolveRenderingEngine(config))
+  // BO-6 — the default `--model` new structured terminals spawn with. An unset
+  // config.rendering.model seeds (best-effort) from the user's own
+  // ~/.claude/settings.json model, then falls back to the `opus` ALIAS. Aliases
+  // resolve to the latest model for the user's tier and are immune to a specific
+  // version being disabled (the fable-5 failure). A per-terminal override (the
+  // in-app picker) persists on the ref and wins over this default on respawn.
+  sessionService.setModel(resolveRenderingModel(config, claudeDefaultModel()))
+  // CAPP-46 — the default `--effort` new structured terminals spawn with. An unset
+  // config.rendering.effort seeds (best-effort) from the user's own
+  // ~/.claude/settings.json effortLevel, then falls back to UNDEFINED — when no
+  // level is configured the spawn OMITS `--effort` so the default is byte-unchanged.
+  // A per-terminal override (the in-app picker) persists on the ref and wins on respawn.
+  sessionService.setEffort(resolveRenderingEffort(config, claudeDefaultEffort()))
+  // DEV-skip-permissions (RELEASE BLOCKER) — the structured permission posture.
+  // resolveSkipApproval defaults to TRUE (skip the BO-3 gate, spawn with
+  // --dangerously-skip-permissions, matching the legacy xterm path) unless
+  // config.permissions.skipApproval is explicitly false, which re-arms the
+  // preserved BO-3 prompt-tool gate. The skip default is an owner-locked
+  // DEV-velocity choice; a PUBLIC release must NOT ship it (trust thesis: "no
+  // runaway you can't stop") — a release-blocker ticket tracks revisiting this.
+  sessionService.setSkipApproval(resolveSkipApproval(config))
+
+  // BO-10 — give TerminalService a user-visible notification seam (the permission
+  // guard timeout raises a toast when a prompt goes unanswered). Wired here, after
+  // both singletons exist, mirroring setMainWindow.
+  sessionService.setNotifier((message, level, title) =>
+    notificationService.notify(message, level, title),
+  )
 
   appService.setMainWindow(win)
   appService.setProjectRoot(join(__dirname, "../.."))
 
-  panelService.setMainWindow(win)
+  companionService.setMainWindow(win)
+  panelService.setCompanion(companionService)
   notificationService.setMainWindow(win)
   uiService.setMainWindow(win)
 
@@ -97,217 +163,67 @@ export async function setupIpc(win: BrowserWindow) {
   workSessionService.setMainWindow(win)
   workSessionService.load()
 
-  // Start MCP server and configure sessions to auto-connect
-  const { configPath, port } = await startMcpServer(
-    sessionService,
-    workspaceService,
-    appService,
-    panelService,
-    notificationService,
-    gitService,
-    templateService,
-    testRunnerService,
-    layoutService,
-    snippetService,
-    broadcastService,
-    commandService,
-    clipboardService,
-    shellService,
-    notesService,
-    taskQueueService,
-    systemService,
-    fileSearchService,
-    fileService,
-    httpService,
-    portService,
-    editService,
-    processService,
-    encodeService,
-    jsonService,
-    timeService,
-    csvService,
-    regexService,
-    textService,
-    colorService,
-    mathService,
-    urlService,
-    uiService,
-    missionService,
-    workSessionService,
-  )
-  sessionService.setMcpConfigPath(configPath)
-  sessionService.setMcpServerUrl(`http://127.0.0.1:${port}/sse`)
+  // Start MCP server and configure sessions to auto-connect. The MCP connection
+  // is the app's entire value channel, so a startup failure must be loud — but
+  // it must NOT take the app down: terminals minus MCP are degraded yet usable.
+  // On failure we surface an error dialog and skip setMcpConfigPath/setMcpServerUrl
+  // entirely, so TerminalService never pushes a --mcp-config arg pointing at a
+  // stale/invalid config file.
+  try {
+    const { configPath, port } = await startMcpServer(
+      sessionService,
+      workspaceService,
+      appService,
+      panelService,
+      notificationService,
+      gitService,
+      templateService,
+      testRunnerService,
+      layoutService,
+      broadcastService,
+      clipboardService,
+      shellService,
+      notesService,
+      fileService,
+      uiService,
+      missionService,
+      workSessionService,
+      attentionService,
+    )
+    sessionService.setMcpConfigPath(configPath)
+    sessionService.setMcpServerUrl(`http://127.0.0.1:${port}/sse`)
+  } catch (err) {
+    console.error("Failed to start MCP server:", err)
+    dialog.showErrorBox(
+      "ClaudeTUI — MCP server failed to start",
+      `Sessions will run without app control (panels, orchestration, and other MCP tools are unavailable).\n\n${String(err)}`,
+    )
+  }
 
   missionService.start()
 
-  // Session IPC -- thin wrappers around service
-  ipcMain.handle("terminal:create", (_e, name: string, cwd: string) =>
-    sessionService.create(name, cwd),
-  )
-  ipcMain.handle("terminal:kill", (_e, id: string) => sessionService.kill(id))
-  ipcMain.handle("terminal:focus", (_e, id: string) => sessionService.focus(id))
-  ipcMain.handle("terminal:list", () => sessionService.list())
-  ipcMain.handle("terminal:activity", () => sessionService.getActivity())
-  ipcMain.handle("terminal:rename", (_e, id: string, newName: string) =>
-    sessionService.rename(id, newName),
-  )
-  ipcMain.handle("terminal:handoff", (_e, id: string) => sessionService.handoff(id))
-  ipcMain.on("terminal:write", (_e, id: string, data: string) =>
-    sessionService.write(id, data),
-  )
-  ipcMain.on("terminal:resize", (_e, id: string, cols: number, rows: number) =>
-    sessionService.resize(id, cols, rows),
-  )
-  ipcMain.handle("terminal:get-output", (_e, id: string, maxChars?: number) =>
-    sessionService.getOutput(id, maxChars),
-  )
-  ipcMain.handle(
-    "terminal:search-output",
-    (_e, query: string, sessionId?: string, limit?: number) =>
-      sessionService.searchOutput(query, sessionId, limit),
-  )
-
-  // Work-session (container) IPC -- the durable session tier above terminals
-  ipcMain.handle("worksession:list", () => workSessionService.list())
-  ipcMain.handle("worksession:open", (_e, cwd?: string) => workSessionService.openSession(cwd))
-  ipcMain.handle("worksession:add-terminal", (_e, sessionId: string, cwd?: string) =>
-    workSessionService.addTerminalToSession(sessionId, cwd),
-  )
-  ipcMain.handle("worksession:reopen-terminal", (_e, sessionId: string, terminalId: string) =>
-    workSessionService.reopenTerminal(sessionId, terminalId),
-  )
-  ipcMain.handle("worksession:close-terminal", (_e, sessionId: string, terminalId: string) =>
-    workSessionService.closeTerminal(sessionId, terminalId),
-  )
-  ipcMain.handle("worksession:kill", (_e, sessionId: string) =>
-    workSessionService.killSession(sessionId),
-  )
-  ipcMain.handle("worksession:context", (_e, sessionId: string) =>
-    workSessionService.getContext(sessionId),
-  )
-  ipcMain.handle("worksession:overview", (_e, sessionId: string) =>
-    workSessionService.getOverview(sessionId),
-  )
-  ipcMain.handle("worksession:handoff", (_e, sessionId: string, terminalId: string) =>
-    workSessionService.handoffTerminal(sessionId, terminalId),
-  )
-
-  // Workspace IPC
-  ipcMain.handle("workspace:list", () =>
-    workspaceService.list().map((ws) => ({
-      name: ws.name,
-      alias: ws.alias,
-      editor: ws.editor,
-      repos: ws.repos,
-    })),
-  )
-  ipcMain.handle("workspace:activate", (_e, index: number) =>
-    workspaceService.activate(index),
-  )
-
-  // Config
-  ipcMain.handle("config:get", () => config)
-
-  // App testing tools
-  ipcMain.handle("app:screenshot", async () => appService.captureScreenshot())
-  ipcMain.handle("app:state", () =>
-    appService.getAppState(sessionService.list(), workspaceService.list()),
-  )
-  ipcMain.handle("app:save-image", (_e, base64: string, filename: string) =>
-    appService.saveDroppedImage(base64, filename),
-  )
-
-  // Panel IPC
-  ipcMain.handle("panel:list", () => panelService.list())
-  ipcMain.handle(
-    "panel:show",
-    (_e, type: string, props: Record<string, any>, position?: string) =>
-      panelService.show(type, props, position),
-  )
-  ipcMain.handle("panel:hide", (_e, id: string) => panelService.hide(id))
-  ipcMain.handle("panel:hide-all", () => panelService.hideAll())
-  ipcMain.on("panel:form-submit", (_e, id: string, data: Record<string, any>) =>
-    panelService.submitForm(id, data),
-  )
-
-  // Test runner IPC
-  ipcMain.handle("test:run", (_e, cwd: string, command?: string) =>
-    testRunnerService.run(cwd, command),
-  )
-
-  // Layout IPC -- saved session snapshots
-  ipcMain.handle("layout:list", () => layoutService.list())
-  ipcMain.handle("layout:save", (_e, name: string) => layoutService.save(name))
-  ipcMain.handle("layout:restore", (_e, name: string) => layoutService.restore(name))
-  ipcMain.handle("layout:delete", (_e, name: string) => layoutService.delete(name))
-
-  // Snippet IPC -- reusable prompt snippets
-  ipcMain.handle("snippet:list", () => snippetService.list())
-  ipcMain.handle("snippet:save", (_e, name: string, content: string) =>
-    snippetService.save(name, content),
-  )
-  ipcMain.handle("snippet:send", (_e, name: string, sessionId: string) =>
-    snippetService.send(name, sessionId),
-  )
-  ipcMain.handle("snippet:delete", (_e, name: string) => snippetService.delete(name))
-
-  // Broadcast IPC -- fan one input out to many sessions at once
-  ipcMain.handle(
-    "broadcast:send",
-    (_e, content: string, sessionIds?: string[], submit?: boolean) =>
-      broadcastService.broadcast(content, sessionIds, submit),
-  )
-
-  // Command IPC -- run an arbitrary shell command and capture its output
-  ipcMain.handle("command:run", (_e, command: string, cwd: string, timeoutMs?: number) =>
-    commandService.run(command, cwd, timeoutMs),
-  )
-
-  // Notes IPC -- persistent cross-session scratchpad
-  ipcMain.handle("notes:list", (_e, scope?: string, tag?: string) =>
-    notesService.list(scope, tag),
-  )
-  ipcMain.handle("notes:get", (_e, id: string) => notesService.get(id))
-  ipcMain.handle(
-    "notes:save",
-    (_e, title: string, body: string, opts?: { id?: string; scope?: string; tags?: string[] }) =>
-      notesService.save(title, body, opts),
-  )
-  ipcMain.handle("notes:delete", (_e, id: string) => notesService.delete(id))
-
-  // Task queue IPC -- shared job board across sessions
-  ipcMain.handle("tasks:list", (_e, status?: any) => taskQueueService.list(status))
-  ipcMain.handle("tasks:enqueue", (_e, title: string, detail?: string) =>
-    taskQueueService.enqueue(title, detail),
-  )
-  ipcMain.handle("tasks:claim", (_e, id: string, by?: string) =>
-    taskQueueService.claim(id, by),
-  )
-  ipcMain.handle("tasks:complete", (_e, id: string) => taskQueueService.complete(id))
-  ipcMain.handle("tasks:delete", (_e, id: string) => taskQueueService.delete(id))
-  ipcMain.handle("tasks:clear-done", () => taskQueueService.clearDone())
-
-  // System IPC -- read-only environment lookups
-  ipcMain.handle("system:info", () => systemService.getInfo())
-  ipcMain.handle("system:which", (_e, command: string) => systemService.which(command))
-
-  // Notification IPC
-  ipcMain.handle("notification:list", () => notificationService.list())
-  ipcMain.handle("notification:dismiss", (_e, id: string) =>
-    notificationService.dismiss(id),
-  )
-
-  // Mission orchestration IPC
-  ipcMain.handle("mission:list", () => missionService.list())
-  ipcMain.handle("mission:status", (_e, id?: string) => missionService.status(id))
-  ipcMain.handle("mission:create", (_e, goal: string, cwd: string, autonomy?: any) =>
-    missionService.create(goal, cwd, autonomy),
-  )
-  ipcMain.handle("mission:stop", (_e, id: string) => missionService.stop(id))
-  ipcMain.handle("mission:pause", (_e, id: string, resumeAt?: number) =>
-    missionService.pause(id, resumeAt),
-  )
-  ipcMain.handle("mission:resume", (_e, id: string) => missionService.resume(id))
+  // Register IPC handlers by domain (MOVE, not rewrite — see ipc/*-handlers.ts)
+  registerTerminalHandlers({ sessionService, win })
+  registerWorkSessionHandlers({ workSessionService })
+  registerPanelHandlers({
+    panelService,
+    notificationService,
+    companionService,
+    missionService,
+    sessionService,
+  })
+  registerMissionHandlers({ missionService })
+  registerAttentionHandlers({ getAttention: () => attentionService })
+  registerAppHandlers({
+    config,
+    sessionService,
+    workspaceService,
+    appService,
+    testRunnerService,
+    layoutService,
+    broadcastService,
+    notesService,
+  })
 
   // Cleanup
   app.on("before-quit", () => sessionService.killAll())

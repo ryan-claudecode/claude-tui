@@ -32,11 +32,14 @@ export default defineConfig({
     build: {
       outDir: "out/preload",
       rollupOptions: {
-        input: resolve(__dirname_, "electron/preload.ts"),
+        input: {
+          index: resolve(__dirname_, "electron/preload.ts"),
+          companion: resolve(__dirname_, "electron/companion-preload.ts"),
+        },
         external: ["electron"],
         output: {
           format: "cjs",
-          entryFileNames: "index.js",
+          entryFileNames: "[name].js",
         },
       },
     },
@@ -46,7 +49,10 @@ export default defineConfig({
     build: {
       outDir: "out/renderer",
       rollupOptions: {
-        input: resolve(__dirname_, "index.html"),
+        input: {
+          main: resolve(__dirname_, "index.html"),
+          companion: resolve(__dirname_, "src/companion/index.html"),
+        },
       },
     },
     plugins: [react()],

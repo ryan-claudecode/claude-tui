@@ -1,22 +1,48 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
+import { cmdOrCtrl } from "./lib/platform"
+import type {
+  TerminalStreamPayload,
+  PermissionRequest,
+  PermissionDecision,
+  AgentCatalog,
+  StreamEvent,
+} from "../electron/services/streamProtocol"
 import Sidebar from "./components/Sidebar"
 import TabBar from "./components/TabBar"
 import TerminalPane from "./components/TerminalPane"
+import AgentSurface from "./components/AgentSurface"
+import type { TranscriptCache } from "./components/AgentView"
+import PermissionPrompt from "./components/PermissionPrompt"
 import SplitView from "./components/SplitView"
-import StatusBar from "./components/StatusBar"
-import PanelDrawer, { PanelState } from "./components/PanelDrawer"
 import DropZone from "./components/DropZone"
+import { usePermissions } from "./hooks/usePermissions"
+import { useGeneratingTerminals } from "./hooks/useAgentBusy"
 import CommandPalette, { Command } from "./components/CommandPalette"
 import ToastHost from "./components/ToastHost"
 import ShortcutsHelp from "./components/ShortcutsHelp"
 import HistorySearch from "./components/HistorySearch"
-import MissionPrompt, { Autonomy } from "./components/MissionPrompt"
-import MissionsList, { Mission } from "./components/MissionsList"
+import MissionPrompt from "./components/MissionPrompt"
+import MissionsList from "./components/MissionsList"
+import { toast } from "./lib/toast"
+import { useSessions } from "./hooks/useSessions"
+import { useAttention } from "./hooks/useAttention"
+import { useMissions } from "./hooks/useMissions"
+import { useSplitView } from "./hooks/useSplitView"
+import { useOverlays } from "./hooks/useOverlays"
+import { useTheme } from "./hooks/useTheme"
+import { usePanels, type PanelState } from "./hooks/usePanels"
+
+// Normalize an unknown thrown value into a human-readable message for toasts.
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
 
 // TypeScript type for the API exposed by preload
 declare global {
   interface Window {
     api: {
+      // Platform info (darwin | win32 | linux) — used for Cmd vs Ctrl key mapping
+      platform: string
       // Terminal-tier transport (xterm I/O) — keyed by live PTY id
       writeToSession: (id: string, data: string) => void
       resizeSession: (id: string, cols: number, rows: number) => void
@@ -26,8 +52,28 @@ declare global {
         { sessionId: string; name: string; line: number; text: string }[]
       >
       onSessionData: (callback: (id: string, data: string) => void) => void
+      // BO-2: structured headless stream; returns a per-instance unsubscribe.
+      onStreamEvent: (callback: (payload: TerminalStreamPayload) => void) => () => void
+      // BO-3: structured composer input + permission gate
+      sendAgentInput: (terminalId: string, msg: { text?: string; attachments?: string[] }) => void
+      // BO-7: structured composer `/`-command picker catalog + native-command bridge
+      getAgentCatalog: (terminalId: string) => Promise<AgentCatalog | null>
+      // BO-12: prior turns of a conversation (by Claude Code id) to rehydrate a chat view
+      getTranscriptEvents: (ccConversationId: string) => Promise<StreamEvent[]>
+      onUiSlashCommand: (
+        callback: (payload: { command: string; terminalId: string }) => void,
+      ) => () => void
+      onPermissionRequest: (callback: (req: PermissionRequest) => void) => () => void
+      onPermissionResolved: (callback: (id: string) => void) => () => void
+      resolvePermission: (id: string, decision: PermissionDecision) => Promise<boolean>
       onSessionFocus: (callback: (id: string) => void) => void
-      onSessionState: (callback: (id: string, state: string) => void) => void
+      // BO-10 — terminal active/idle transitions; per-instance disposer (shared by
+      // usePanels overview-refresh + useAgentBusy composer gating).
+      onTerminalState: (callback: (id: string, state: string) => void) => () => void
+      // CAPP-49 — a terminal's PTY/headless proc exited; per-instance disposer.
+      // useGeneratingTerminals prunes a killed/respawned id from the busy set on exit.
+      onSessionExit: (callback: (id: string) => void) => () => void
+      onSessionRenamed: (callback: (id: string, newName: string) => void) => void
       // Work-session (container) tier
       listWorkSessions: () => Promise<any[]>
       openWorkSession: (cwd?: string) => Promise<{ session: any; terminalId: string }>
@@ -47,7 +93,6 @@ declare global {
       onSplitClose: (callback: () => void) => void
       // UI control events from MCP tools
       onUiFocusMode: (callback: (enabled?: boolean) => void) => void
-      onUiDrawer: (callback: (collapsed?: boolean) => void) => void
       onUiCommandPalette: (callback: (open?: boolean) => void) => void
       onUiShortcutsHelp: (callback: (open?: boolean) => void) => void
       onUiHistorySearch: (callback: (open?: boolean) => void) => void
@@ -65,6 +110,15 @@ declare global {
       dismissNotification: (id: string) => Promise<boolean>
       onNotificationShow: (callback: (notification: any) => void) => void
       onNotificationDismiss: (callback: (id: string) => void) => void
+      // Attention queue (AQ-2)
+      attentionSeen: (terminalId: string) => Promise<void>
+      attentionSeenMission: (missionId: string) => Promise<void>
+      attentionDismiss: (id: string) => Promise<boolean>
+      onAttentionUpdated: (callback: (entries: any[]) => void) => void
+      onAttentionJump: (callback: (id: string) => void) => void
+      // Mission push events (MS-2 — push not poll)
+      onMissionUpdated: (callback: (mission: any) => void) => void
+      onMissionRemoved?: (callback: (id: string) => void) => void
       onPanelShow: (callback: (panel: PanelState) => void) => void
       onPanelUpdate: (callback: (payload: { id: string; props: any }) => void) => void
       onPanelHide: (callback: (id: string) => void) => void
@@ -76,162 +130,312 @@ declare global {
       stopMission: (id: string) => Promise<any>
       pauseMission: (id: string) => Promise<any>
       resumeMission: (id: string) => Promise<any>
+      // WW-2b — worktree review
+      approveWorktreeTask: (missionId: string, taskId: string) => Promise<{ status?: string; reviewReason?: string } | null>
+      rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) => Promise<{ status?: string; reviewReason?: string } | null>
+      getReviewTask: (missionId: string, taskId: string) => Promise<{ missionId: string; taskId: string; title: string; diff: string; reviewReason?: string; status?: string } | null>
       removeAllListeners: (channel: string) => void
       getSessionOverview: (sessionId: string) => Promise<any>
+      getSessionTimeline: (sessionId: string) => Promise<Array<{ time: number; kind: string; text: string; terminalId?: string }>>
       handoffTerminal: (sessionId: string, terminalId: string) => Promise<{ terminalId: string } | undefined>
+      // CAPP-39 gate ② — launch an interactive `claude /login` terminal (structured
+      // engine can't show OAuth UI); from the AgentView "not signed in" Sign-in button.
+      startLogin: (sessionId?: string) => Promise<{ terminalId: string } | undefined>
+      // BO-6 — switch a structured terminal's --model (respawns + resumes the chat)
+      setTerminalModel: (sessionId: string, terminalId: string, model: string) => Promise<{ terminalId: string } | undefined>
+      // CAPP-46 — switch a structured terminal's --effort level (respawns + resumes the chat)
+      setTerminalEffort: (sessionId: string, terminalId: string, effort: string) => Promise<{ terminalId: string } | undefined>
+      // CAPP-39 gate ③ — per-terminal raw-view escape hatch: toggle one terminal between
+      // the structured and xterm engines at runtime (respawns + resumes the chat).
+      setTerminalEngine: (sessionId: string, terminalId: string, targetEngine: "xterm" | "structured") => Promise<{ terminalId: string } | undefined>
+      // BO-10 — stop/interrupt a structured terminal (kills + resumes the chat).
+      // Returns the respawned terminal id so the caller re-points the active tab.
+      interruptAgent: (terminalId: string) => Promise<{ terminalId: string } | undefined>
+      // Theme
+      getTheme: () => Promise<string>
+      setTheme: (mode: string) => Promise<void>
+      onThemeChanged: (callback: (mode: string) => void) => void
+      // Window controls (frameless)
+      windowMinimize: () => void
+      windowMaximize: () => void
+      windowClose: () => void
+      // PP: raise the companion window (panel presence indicator click)
+      focusCompanion: () => void
     }
   }
 }
 
-interface Terminal {
-  id: string
-  name: string
-  cwd: string
-  lastState: "active" | "idle" | "dead"
-  activity?: string
-}
-
-interface WorkSession {
-  id: string
-  name: string
-  status: "active" | "stopped"
-  summary: string
-  terminals: Terminal[]
-}
-
 export default function App() {
-  const [sessions, setSessions] = useState<WorkSession[]>([])
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
-  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
-  const [workspaces, setWorkspaces] = useState<any[]>([])
-  const [splitLeft, setSplitLeft] = useState<string | null>(null)
-  const [splitRight, setSplitRight] = useState<string | null>(null)
-  const [config, setConfig] = useState<any>(null)
-  const [panels, setPanels] = useState<PanelState[]>([])
-  const [dragActive, setDragActive] = useState(false)
-  const [drawerCollapsed, setDrawerCollapsed] = useState(false)
-  const [paletteOpen, setPaletteOpen] = useState(false)
-  const [helpOpen, setHelpOpen] = useState(false)
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [missionPromptOpen, setMissionPromptOpen] = useState(false)
-  const [missionsListOpen, setMissionsListOpen] = useState(false)
-  const [missions, setMissions] = useState<Mission[]>([])
-  const [zenMode, setZenMode] = useState(false)
-
-  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
-  const activeTerminals = activeSession?.terminals ?? []
-  const activeTerminal = activeTerminals.find((t) => t.id === activeTerminalId) ?? null
-
-  // Load workspaces, config, and existing session records on mount (no spawn).
-  useEffect(() => {
-    window.api.getWorkspaces().then(setWorkspaces)
-    window.api.getConfig().then(setConfig)
-    window.api.listWorkSessions().then((list: WorkSession[]) => {
-      setSessions(list)
-      if (list.length) {
-        setActiveSessionId(list[0].id)
-        setActiveTerminalId(list[0].terminals[0]?.id ?? null)
-      }
-    })
-  }, [])
-
-  // M5: ref holding the latest overview-refresh callback. Declared here so the
-  // mount-effect below can call it when worksession:updated fires, without adding
-  // a second ipcRenderer listener for that channel.
+  // M5: ref bridging two hooks. usePanels stores the latest overview-refresh
+  // callback in it; useSessions calls it when worksession:updated fires — so the
+  // container update triggers a panel refresh without a second listener on that
+  // channel. Owned by the root because both hooks share it; this is the one
+  // surviving ref-sync workaround (justified: cross-hook coupling, not a stale
+  // closure within a single hook).
   const refreshOverviewsRef = useRef<(() => void) | null>(null)
 
-  // Listen for container + terminal events from the main process
+  const {
+    sessions,
+    activeSessionId,
+    activeTerminalId,
+    setActiveTerminalId,
+    workspaces,
+    config,
+    activeSession,
+    activeTerminals,
+    handleNewSession,
+    handleNewTerminal,
+    handleCloseTerminal,
+    handleHandoff,
+    handleKillSession,
+    handleKillSessionById,
+    handleRenameTerminal,
+    handleSelectSession,
+  } = useSessions(refreshOverviewsRef)
+
+  // BO-12 (CAPP-51) — the shared, cross-pane transcript cache (folded TranscriptState
+  // keyed by the STABLE Claude Code conversation id). Held in a ref so the Map
+  // instance is stable across renders; lives above AgentView so a structured
+  // respawn (which remounts AgentView under a new terminal id, but the SAME convo
+  // id) re-seeds the prior turns INSTANTLY from memory, and split panes sharing a
+  // convo share the entry.
+  const transcriptCacheRef = useRef<TranscriptCache>(new Map())
+
+  // GC cache entries whose convo id no longer belongs to any live terminal — i.e.
+  // a closed terminal or a killed session. A `--resume` respawn keeps the convo id
+  // on its ref, so it stays "live" and is never evicted mid-respawn; only a genuine
+  // close/kill drops it. Cheap set-diff on each session change.
   useEffect(() => {
-    window.api.onWorkSessionUpdated((updated: WorkSession) => {
-      setSessions((prev) => {
-        const i = prev.findIndex((s) => s.id === updated.id)
-        if (i === -1) return [...prev, updated]
-        const next = [...prev]
-        next[i] = updated
-        return next
-      })
-      setActiveSessionId((cur) => cur ?? updated.id)
-      setActiveTerminalId(
-        (cur) => cur ?? updated.terminals[updated.terminals.length - 1]?.id ?? null,
+    const live = new Set<string>()
+    for (const s of sessions) {
+      for (const t of s.terminals) if (t.ccConversationId) live.add(t.ccConversationId)
+    }
+    for (const key of transcriptCacheRef.current.keys()) {
+      if (!live.has(key)) transcriptCacheRef.current.delete(key)
+    }
+  }, [sessions])
+
+  // BO-4b — the renderer fork is PER TERMINAL (on `t.engine`, surfaced from the
+  // backend), not a single global config boolean. The old global derived from the
+  // async-loaded config ("xterm" until it arrived) raced session restore: a
+  // structured terminal could mount under TerminalPane (a blank xterm awaiting
+  // ANSI that never comes) with no composer at all. Forking on each terminal's
+  // ACTUAL engine removes that race and fixes split panes in one move. See the
+  // `activeTerminals.map` fork and SplitView below.
+
+  // Attention queue: focus an entry's session+terminal (terminal entries), or open
+  // the mission dashboard panel (mission entries carrying missionId). Held in a ref
+  // so the hook's mount-once `attention:jump` listener always calls the latest closure.
+  const focusEntryRef = useRef<(sessionId: string, terminalId?: string) => void>(() => {})
+  // MS-2: mission attention entries open the dashboard panel. Ref so useAttention's
+  // mount-once handler always calls the latest closure. Set after usePanels is called.
+  const jumpToMissionRef = useRef<((missionId: string) => void) | null>(null)
+  // WW-2b: worktree-review attention entries (carrying a taskId) open the review
+  // panel for that mission+task. Same ref pattern as jumpToMissionRef.
+  const jumpToReviewRef = useRef<((missionId: string, taskId: string) => void) | null>(null)
+
+  const focusEntry = useCallback(
+    (sessionId: string, terminalId?: string) => {
+      if (sessionId) handleSelectSession(sessionId)
+      if (terminalId) setActiveTerminalId(terminalId)
+    },
+    [handleSelectSession, setActiveTerminalId],
+  )
+  useEffect(() => {
+    focusEntryRef.current = focusEntry
+  }, [focusEntry])
+
+  const {
+    entries: attentionEntries,
+    nowTick: attentionNow,
+    dismiss: dismissAttention,
+    jumpTo: jumpToAttention,
+  } = useAttention(focusEntryRef, jumpToMissionRef, jumpToReviewRef)
+
+  // Spec: focusing a terminal by ANY path (tab click, session select, Alt+N —
+  // not just the attention-row jump) counts as attention given and clears its
+  // tier-2/3 entries. Tier-1 persistence is service-enforced, so this is safe
+  // to fire unconditionally; a failed call is non-critical hygiene.
+  useEffect(() => {
+    if (activeTerminalId) void window.api.attentionSeen(activeTerminalId).catch(() => {})
+  }, [activeTerminalId])
+
+  // BO-3 — pending tool-permission prompts raised by the headless approve_tool
+  // gate. Resolving sends the decision AND clears the lingering tier-2 "asked"
+  // attention entry (the queue holds it until the terminal is "seen").
+  // BO-11 — pass the live terminal id set so usePermissions can prune orphaned
+  // requests (a dead terminal's card that lost the race with a Ctrl+K kill).
+  const liveTerminalIds = useMemo(
+    () => new Set(sessions.flatMap((s) => s.terminals.map((t) => t.id))),
+    [sessions],
+  )
+  const { requests: permissionRequests, resolve: resolvePermissionRequest } = usePermissions(liveTerminalIds)
+  const handlePermissionResolve = useCallback(
+    (req: PermissionRequest, decision: Omit<PermissionDecision, "id">) => {
+      resolvePermissionRequest(req.id, decision)
+      if (req.terminalId) void window.api.attentionSeen(req.terminalId).catch(() => {})
+    },
+    [resolvePermissionRequest],
+  )
+  // BO-11 — only the ACTIVE terminal's prompts are rendered, so a background/dead
+  // terminal's fixed-position card can never occlude the active composer.
+  const activePermissionRequests = useMemo(
+    () => permissionRequests.filter((r) => r.terminalId === activeTerminalId),
+    [permissionRequests, activeTerminalId],
+  )
+
+  // BO-10 — "busy" for a structured terminal = generating a turn OR parked on a
+  // permission prompt. Generating comes from terminal:state; a permission block
+  // emits idle there, so the pending permission queue supplies that half.
+  const generatingTerminals = useGeneratingTerminals()
+  const isTerminalBusy = useCallback(
+    (terminalId: string | null): boolean => {
+      if (!terminalId) return false
+      return (
+        generatingTerminals.has(terminalId) ||
+        permissionRequests.some((r) => r.terminalId === terminalId)
       )
-      // M5: also refresh any open overview panels when the container updates.
-      refreshOverviewsRef.current?.()
-    })
+    },
+    [generatingTerminals, permissionRequests],
+  )
 
-    window.api.onWorkSessionRemoved((id: string) => {
-      setSessions((prev) => prev.filter((s) => s.id !== id))
-      setActiveSessionId((cur) => (cur === id ? null : cur))
-    })
+  // BO-10 — the stop/interrupt handbrake: kill + resume the SAME conversation. The
+  // respawn mints a new terminal id, so re-point the active selection at it (like
+  // the model switch). Used by both the Esc key (App) and the composer Stop button.
+  const handleInterrupt = useCallback(
+    async (terminalId: string | null) => {
+      if (!terminalId) return
+      try {
+        const r = await window.api.interruptAgent(terminalId)
+        if (r?.terminalId) setActiveTerminalId(r.terminalId)
+      } catch (err) {
+        toast("error", `Couldn't stop the agent: ${errMsg(err)}`)
+      }
+    },
+    [setActiveTerminalId],
+  )
 
-    // Split pane events from main process (triggered by MCP tools)
-    window.api.onSplitSet((leftId, rightId) => {
-      setSplitLeft(leftId)
-      setSplitRight(rightId)
-    })
+  // CAPP-39 gate ③ — the per-terminal RAW-VIEW escape hatch. Toggle the given
+  // terminal between the structured and xterm engines at runtime (respawns, resuming
+  // the SAME conversation). The respawn mints a new terminal id, so re-point the
+  // active selection at it (like the model switch / interrupt). The service REFUSES
+  // while busy or before the first turn captures a conversation id; surface that as a
+  // toast rather than a silent no-op so the user knows what to do.
+  const handleToggleEngine = useCallback(
+    async (terminalId: string | null) => {
+      if (!terminalId) return
+      const t = activeTerminals.find((x) => x.id === terminalId)
+      if (!t) return
+      const target: "xterm" | "structured" = t.engine === "structured" ? "xterm" : "structured"
+      if (isTerminalBusy(terminalId)) {
+        toast("warning", "The agent is working — press Stop, then switch the view.")
+        return
+      }
+      try {
+        const r = await window.api.setTerminalEngine(activeSessionId ?? "", terminalId, target)
+        if (r?.terminalId) setActiveTerminalId(r.terminalId)
+        else
+          toast(
+            "warning",
+            "Couldn't switch the view yet — the session needs a started conversation first.",
+          )
+      } catch (err) {
+        toast("error", `Couldn't switch the view: ${errMsg(err)}`)
+      }
+    },
+    [activeTerminals, activeSessionId, isTerminalBusy, setActiveTerminalId],
+  )
 
-    window.api.onSplitClose(() => {
-      setSplitLeft(null)
-      setSplitRight(null)
-    })
+  // BO-10 — Esc interrupts ONLY a structured terminal that's busy; held in a ref so
+  // the (hot) keyboard effect needn't re-subscribe on every active/idle flip. For
+  // an xterm terminal (or an idle structured one) it returns false, leaving Esc to
+  // propagate to the PTY where it is load-bearing.
+  const escInterruptRef = useRef<() => boolean>(() => false)
+  useEffect(() => {
+    escInterruptRef.current = () => {
+      const t = activeTerminals.find((x) => x.id === activeTerminalId)
+      if (t?.engine !== "structured" || !isTerminalBusy(activeTerminalId)) return false
+      void handleInterrupt(activeTerminalId)
+      return true
+    }
+  }, [activeTerminals, activeTerminalId, isTerminalBusy, handleInterrupt])
 
-    // Switch the visible terminal when the focus_session MCP tool fires.
-    window.api.onSessionFocus((id) => setActiveTerminalId(id))
+  const { splitLeft, splitRight, toggleSplit } = useSplitView(activeTerminals, activeTerminalId)
 
-    // UI control events from MCP tools. A boolean payload sets the state
-    // explicitly; undefined toggles it (functional updates keep this correct
-    // despite the once-on-mount registration).
-    const setOrToggle =
-      (setter: React.Dispatch<React.SetStateAction<boolean>>) => (value?: boolean) =>
-        setter((cur) => (typeof value === "boolean" ? value : !cur))
+  const {
+    paletteOpen,
+    setPaletteOpen,
+    helpOpen,
+    setHelpOpen,
+    historyOpen,
+    setHistoryOpen,
+    missionPromptOpen,
+    setMissionPromptOpen,
+    missionsListOpen,
+    setMissionsListOpen,
+    zenMode,
+    setZenMode,
+  } = useOverlays()
 
-    window.api.onUiFocusMode(setOrToggle(setZenMode))
-    window.api.onUiCommandPalette(setOrToggle(setPaletteOpen))
-    window.api.onUiShortcutsHelp(setOrToggle(setHelpOpen))
-    window.api.onUiHistorySearch(setOrToggle(setHistoryOpen))
-    window.api.onUiDrawer((collapsed) =>
-      setDrawerCollapsed((cur) => (typeof collapsed === "boolean" ? collapsed : !cur)),
-    )
-    window.api.onUiExportLog((id) => exportLogRef.current(id ?? undefined))
+  const { themeMode } = useTheme()
 
-    // Panel events from main process (triggered by MCP tools)
-    window.api.onPanelShow((panel) => {
-      setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), panel])
-    })
+  // useMissions must come before usePanels so allMissions can be passed for panel refresh.
+  const {
+    missions: allMissions,
+    visible: visibleMissions,
+    dismiss: dismissMission,
+  } = useMissions()
 
-    window.api.onPanelUpdate(({ id, props }) => {
-      setPanels((prev) => prev.map((p) => (p.id === id ? { ...p, props } : p)))
-    })
+  const {
+    panels,
+    recentlyChanged: panelsRecentlyChanged,
+    setPanels,
+    openMission,
+    openOverview,
+    openTimeline,
+    createMission,
+  } = usePanels(refreshOverviewsRef, activeSession, missionsListOpen, allMissions)
 
-    window.api.onPanelHide((id) => {
-      setPanels((prev) => prev.filter((p) => p.id !== id))
-    })
+  // MS-2: wire the mission-dashboard opener into the attention-jump ref so that
+  // attention entries carrying missionId route to the panel (not a terminal).
+  // openMission is stable (useCallback in usePanels), so the effect runs once.
+  useEffect(() => {
+    jumpToMissionRef.current = (missionId: string) => {
+      openMission({ id: missionId }).catch(() => {})
+    }
+  }, [openMission])
 
-    window.api.onPanelHideAll(() => {
-      setPanels([])
-    })
-
-    return () => {
-      window.api.removeAllListeners("worksession:updated")
-      window.api.removeAllListeners("worksession:removed")
-      window.api.removeAllListeners("split:set")
-      window.api.removeAllListeners("split:close")
-      window.api.removeAllListeners("terminal:focus")
-      window.api.removeAllListeners("ui:focus-mode")
-      window.api.removeAllListeners("ui:drawer")
-      window.api.removeAllListeners("ui:command-palette")
-      window.api.removeAllListeners("ui:shortcuts-help")
-      window.api.removeAllListeners("ui:history-search")
-      window.api.removeAllListeners("ui:export-log")
-      window.api.removeAllListeners("panel:show")
-      window.api.removeAllListeners("panel:update")
-      window.api.removeAllListeners("panel:hide")
-      window.api.removeAllListeners("panel:hide-all")
+  // WW-2b: wire the worktree-review opener into the attention-jump ref. A review
+  // entry carries missionId+taskId; we fetch the LATEST captured diff via IPC
+  // (so the panel always has fresh content) then open the review panel in the
+  // companion window. P0-5: surface a fetch/open failure as a toast.
+  useEffect(() => {
+    jumpToReviewRef.current = (missionId: string, taskId: string) => {
+      void (async () => {
+        try {
+          const task = await window.api.getReviewTask(missionId, taskId)
+          if (!task) {
+            toast("warning", "That review task is no longer available.")
+            return
+          }
+          await window.api.showPanel("worktree-review", task, "right")
+        } catch (err) {
+          toast("error", `Couldn't open the review panel: ${errMsg(err)}`)
+        }
+      })()
     }
   }, [])
 
-  const handleClosePanel = useCallback((id: string) => {
-    setPanels((prev) => prev.filter((p) => p.id !== id))
-    window.api.hidePanel(id)
+  const [dragActive, setDragActive] = useState(false)
+
+  // ui:export-log stays in App.tsx because its handler closes over the active
+  // terminal + session list (via exportLogRef below). Owns the cleanup for this
+  // one listener.
+  useEffect(() => {
+    window.api.onUiExportLog((id) => exportLogRef.current(id ?? undefined))
+    return () => {
+      window.api.removeAllListeners("ui:export-log")
+    }
   }, [])
 
   // Drag-and-drop image support
@@ -253,108 +457,56 @@ export default function App() {
     async (e: React.DragEvent) => {
       e.preventDefault()
       setDragActive(false)
+      // BO-3: a drop INSIDE the structured composer is owned by AgentComposer
+      // (it attaches to the message instead of injecting a path). We still reset
+      // the overlay above, but skip the legacy writeToSession injection here so
+      // the image isn't also saved/sent twice.
+      if ((e.target as HTMLElement | null)?.closest?.(".agent-composer")) return
       const file = Array.from(e.dataTransfer.files).find((f) =>
         f.type.startsWith("image/"),
       )
       if (!file) return
-      const base64 = await new Promise<string>((resolve) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(reader.result as string)
-        reader.readAsDataURL(file)
-      })
-      const path = await window.api.saveDroppedImage(base64, file.name)
-      await window.api.showPanel("image", { src: path, alt: file.name })
-      if (activeTerminalId) {
-        window.api.writeToSession(activeTerminalId, `"${path}" `)
+      try {
+        const base64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.readAsDataURL(file)
+        })
+        const path = await window.api.saveDroppedImage(base64, file.name)
+        await window.api.showPanel("image", { src: path, alt: file.name })
+        if (activeTerminalId) {
+          window.api.writeToSession(activeTerminalId, `"${path}" `)
+        }
+      } catch (err) {
+        toast("error", `Couldn't attach the dropped image: ${errMsg(err)}`)
       }
     },
     [activeTerminalId],
   )
-
-  // Send text straight into the active terminal (used by the diff review button).
-  const sendToActiveSession = useCallback(
-    (text: string): boolean => {
-      if (!activeTerminalId) return false
-      window.api.writeToSession(activeTerminalId, `\x1b[200~${text}\x1b[201~\r`)
-      return true
-    },
-    [activeTerminalId],
-  )
-
-  const handleNewSession = useCallback(() => {
-    window.api.openWorkSession("")
-  }, [])
-
-  const handleNewTerminal = useCallback(() => {
-    if (activeSessionId) window.api.addTerminal(activeSessionId, "")
-    else window.api.openWorkSession("")
-  }, [activeSessionId])
-
-  const handleCloseTerminal = useCallback(() => {
-    if (activeSessionId && activeTerminalId) {
-      window.api.closeTerminal(activeSessionId, activeTerminalId)
-    }
-  }, [activeSessionId, activeTerminalId])
-
-  const handleHandoff = useCallback(async () => {
-    if (!activeSessionId || !activeTerminalId) return
-    const r = await window.api.handoffTerminal(activeSessionId, activeTerminalId)
-    if (r?.terminalId) setActiveTerminalId(r.terminalId)
-  }, [activeSessionId, activeTerminalId])
-
-  const handleKillSession = useCallback(() => {
-    if (!activeSessionId) return
-    if (window.confirm("Kill this session and all its terminals? This deletes its record.")) {
-      window.api.killWorkSession(activeSessionId)
-    }
-  }, [activeSessionId])
-
-  const handleRenameTerminal = useCallback((id: string, newName: string) => {
-    window.api.renameSession(id, newName)
-  }, [])
-
-  const handleSelectSession = useCallback(
-    (id: string) => {
-      setActiveSessionId(id)
-      const s = sessions.find((x) => x.id === id)
-      setActiveTerminalId(s?.terminals[0]?.id ?? null)
-    },
-    [sessions],
-  )
-
-  const toggleSplit = useCallback(() => {
-    if (splitLeft) {
-      setSplitLeft(null)
-      setSplitRight(null)
-    } else if (activeTerminals.length >= 2 && activeTerminalId) {
-      const other = activeTerminals.find((t) => t.id !== activeTerminalId)
-      if (other) {
-        setSplitLeft(activeTerminalId)
-        setSplitRight(other.id)
-      }
-    }
-  }, [splitLeft, activeTerminals, activeTerminalId])
-
-  const toggleDrawer = useCallback(() => {
-    if (panels.some((p) => p.visible)) setDrawerCollapsed((c) => !c)
-  }, [panels])
 
   // Save a terminal's captured scrollback to a downloaded .txt file.
   const handleExportLog = useCallback(
     async (id?: string) => {
       const target = id ?? activeTerminalId
       if (!target) return
-      const text = await window.api.getSessionOutput(target, 100000)
-      if (text == null) return
-      const name =
-        sessions.flatMap((s) => s.terminals).find((t) => t.id === target)?.name ?? target
-      const blob = new Blob([text], { type: "text/plain" })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `${name}-output.txt`
-      a.click()
-      URL.revokeObjectURL(url)
+      try {
+        const text = await window.api.getSessionOutput(target, 100000)
+        if (text == null) {
+          toast("warning", "No output to export for this terminal yet.")
+          return
+        }
+        const name =
+          sessions.flatMap((s) => s.terminals).find((t) => t.id === target)?.name ?? target
+        const blob = new Blob([text], { type: "text/plain" })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = `${name}-output.txt`
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch (err) {
+        toast("error", `Couldn't export the session log: ${errMsg(err)}`)
+      }
     },
     [activeTerminalId, sessions],
   )
@@ -364,130 +516,41 @@ export default function App() {
     exportLogRef.current = handleExportLog
   }, [handleExportLog])
 
-  // M5: keep any open Session Overview panel live. When a terminal's state or the
-  // container changes, re-fetch the overview for each open overview-* panel and
-  // replace its props. Debounced so a burst of events coalesces into one refresh.
-  //
-  // Implementation note on the footgun: the existing mount-time effect already
-  // owns onWorkSessionUpdated (registers + removeAllListeners on unmount). Adding a
-  // second onWorkSessionUpdated listener in a [panels]-dep effect would accumulate
-  // listeners on every panels change and fight with the mount-effect's cleanup.
-  // Instead, we store the refresh callback in a ref so the existing mount-effect
-  // can call it, and we register onSessionState (no existing subscriber) here.
-  // The existing mount-effect is updated above to also call refreshOverviewsRef.current().
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null
+  // The theme/config affordance — shared by the palette's "Switch theme" command
+  // and BO-7's `/config` slash command, so the cycle logic lives in ONE place.
+  const cycleTheme = useCallback(() => {
+    const modes = ["light", "dark", "cold-dark"]
+    const next = modes[(modes.indexOf(themeMode) + 1) % modes.length]
+    window.api.setTheme(next)
+  }, [themeMode])
 
-    const refreshOpenOverviews = () => {
-      if (timer) return // coalesce: a refresh is already scheduled
-      timer = setTimeout(async () => {
-        timer = null
-        const openIds = panels
-          .filter((p) => p.visible && p.id.startsWith("overview-"))
-          .map((p) => p.id.slice("overview-".length))
-        for (const sessionId of openIds) {
-          const ov = await window.api.getSessionOverview(sessionId)
-          if (!ov) continue // session gone mid-refresh: leave last content
-          setPanels((prev) =>
-            prev.map((p) =>
-              p.id === `overview-${sessionId}`
-                ? {
-                    ...p,
-                    props: {
-                      ...ov,
-                      onReopenTerminal: (terminalId: string) =>
-                        window.api.reopenTerminal(sessionId, terminalId),
-                    },
-                  }
-                : p,
-            ),
-          )
-        }
-      }, 250)
-    }
-
-    // Expose to mount-effect so worksession:updated also triggers a refresh.
-    refreshOverviewsRef.current = refreshOpenOverviews
-
-    // terminal:state has no existing subscriber — safe to own here.
-    window.api.onSessionState(refreshOpenOverviews)
-
-    return () => {
-      if (timer) clearTimeout(timer)
-      refreshOverviewsRef.current = null
-      // Only remove terminal:state — worksession:updated is owned by the mount-effect.
-      window.api.removeAllListeners("terminal:state")
-    }
-  }, [panels])
-
-  // Open (or refresh) a mission's dashboard panel.
-  const openMission = useCallback((m: { id: string }) => {
-    const panel: PanelState = {
-      id: `mission-${m.id}`,
-      type: "mission",
-      position: "right",
-      props: m,
-      visible: true,
-    }
-    setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), panel])
-    setDrawerCollapsed(false)
-  }, [])
-
-  const openOverview = useCallback(async (sessionId: string) => {
-    const ov = await window.api.getSessionOverview(sessionId)
-    if (!ov) return
-    const panel: PanelState = {
-      id: `overview-${sessionId}`,
-      type: "session-overview",
-      position: "right",
-      props: {
-        ...ov,
-        onReopenTerminal: (terminalId: string) => window.api.reopenTerminal(sessionId, terminalId),
-      },
-      visible: true,
-    }
-    setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), panel])
-    setDrawerCollapsed(false)
-  }, [])
-
-  // Create a mission from the prompt overlay, then open its dashboard panel.
-  const createMission = useCallback(
-    async (goal: string, autonomy: Autonomy) => {
-      const cwd = activeSession?.terminals[0]?.cwd ?? ""
-      const m = await window.api.createMission(goal, cwd, autonomy)
-      openMission(m)
+  // BO-7 — native-mapped slash commands fired from the structured composer. The
+  // main-process intercept (terminal-handlers.ts) classifies `/config` and
+  // `/resume` as native and bridges them here via ui:slash-command, so they trigger
+  // the SAME app affordances the command palette / Ctrl+Shift+H use — instead of
+  // being sent to Claude as literal text. Registered via a ref so the mount-once
+  // listener always sees the latest themeMode/handoff closures.
+  const handleSlashCommand = useCallback(
+    (payload: { command: string; terminalId: string }) => {
+      if (payload.command === "config") {
+        cycleTheme()
+      } else if (payload.command === "resume") {
+        handleHandoff()
+      }
+      // BO-6 HOOK (CAPP-40): a `model` arm lands here when BO-6 maps /model natively.
     },
-    [activeSession, openMission],
+    [cycleTheme, handleHandoff],
   )
-
-  const hasLiveMissionPanel = panels.some(
-    (p) =>
-      p.type === "mission" &&
-      p.visible &&
-      !["done", "stopped"].includes((p.props as { status?: string })?.status ?? ""),
-  )
+  const slashCommandRef = useRef(handleSlashCommand)
   useEffect(() => {
-    if (!missionsListOpen && !hasLiveMissionPanel) return
-    let cancelled = false
-    const refresh = async () => {
-      const list = (await window.api.listMissions()) as Mission[]
-      if (cancelled) return
-      setMissions(list)
-      setPanels((prev) =>
-        prev.map((p) => {
-          if (p.type !== "mission") return p
-          const m = list.find((x) => `mission-${x.id}` === p.id)
-          return m ? { ...p, props: m } : p
-        }),
-      )
-    }
-    refresh()
-    const t = setInterval(refresh, 3000)
+    slashCommandRef.current = handleSlashCommand
+  }, [handleSlashCommand])
+  useEffect(() => {
+    const dispose = window.api.onUiSlashCommand((p) => slashCommandRef.current(p))
     return () => {
-      cancelled = true
-      clearInterval(t)
+      dispose?.()
     }
-  }, [missionsListOpen, hasLiveMissionPanel])
+  }, [])
 
   // Commands surfaced in the Ctrl+Shift+P command palette.
   const commands = useMemo<Command[]>(() => {
@@ -497,7 +560,6 @@ export default function App() {
       { id: "close-terminal", label: "Close Active Terminal", hint: "Ctrl+W", run: handleCloseTerminal },
       { id: "kill", label: "Kill Active Session", hint: "Ctrl+K", run: handleKillSession },
       { id: "split", label: splitLeft ? "Close Split View" : "Split Panes", hint: "Ctrl+\\", run: toggleSplit },
-      { id: "drawer", label: "Toggle Panel Drawer", hint: "Ctrl+P", run: toggleDrawer },
       { id: "hide-panels", label: "Close All Panels", keywords: "hide clear", run: () => { setPanels([]); window.api.hideAllPanels() } },
       { id: "history", label: "Search Session History", hint: "Ctrl+Shift+F", keywords: "find output log scrollback", run: () => setHistoryOpen(true) },
       { id: "export-log", label: "Export Active Terminal Log", keywords: "save download output history file", run: () => handleExportLog() },
@@ -506,8 +568,35 @@ export default function App() {
       { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: () => setMissionPromptOpen(true) },
       { id: "missions", label: "View Missions", keywords: "orchestrate conductor list dashboard status", run: () => setMissionsListOpen(true) },
       { id: "session-overview", label: "Show Session Overview", keywords: "context summary findings notes birdseye", run: () => activeSessionId && openOverview(activeSessionId) },
+      { id: "session-timeline", label: "Show Session Timeline", keywords: "history events chronology activity log", run: () => { const s = sessions.find((x) => x.id === activeSessionId); if (s) openTimeline(s.id, s.name) } },
       { id: "handoff", label: "Retire & Continue Terminal", hint: "Ctrl+Shift+H", keywords: "handoff flush summary fresh terminal retire context", run: () => handleHandoff() },
+      {
+        id: "switch-theme",
+        label: `Switch theme (current: ${themeMode})`,
+        run: cycleTheme,
+      },
     ]
+    // CAPP-39 gate ③ — the per-terminal raw-view escape hatch, bidirectional from the
+    // palette. Only offered when there IS an active terminal; the label reflects the
+    // active terminal's current engine (structured → "raw terminal", xterm → "structured").
+    const active = activeTerminals.find((t) => t.id === activeTerminalId)
+    if (active) {
+      base.push(
+        active.engine === "structured"
+          ? {
+              id: "engine-raw",
+              label: "Switch to raw terminal (xterm)",
+              keywords: "engine view pty terminal raw escape hatch structured",
+              run: () => handleToggleEngine(activeTerminalId),
+            }
+          : {
+              id: "engine-structured",
+              label: "Switch to structured view",
+              keywords: "engine view agent structured headless escape hatch raw",
+              run: () => handleToggleEngine(activeTerminalId),
+            },
+      )
+    }
     const sessionCmds: Command[] = sessions.map((s, i) => ({
       id: `switch-${s.id}`,
       label: `Switch to: ${s.name}`,
@@ -516,50 +605,58 @@ export default function App() {
       run: () => handleSelectSession(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, toggleDrawer, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, activeSessionId])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, openTimeline, activeSessionId, activeTerminals, activeTerminalId, handleToggleEngine, themeMode, cycleTheme, setPaletteOpen, setHelpOpen, setHistoryOpen, setMissionPromptOpen, setMissionsListOpen, setZenMode])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
+    const platform = window.api.platform
     const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "p") {
+      const mod = cmdOrCtrl(e, platform)
+      if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault(); e.stopPropagation()
         setPaletteOpen((o) => !o)
-      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault(); e.stopPropagation()
         setHistoryOpen((o) => !o)
-      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "z") {
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === "z") {
         e.preventDefault(); e.stopPropagation()
         setZenMode((z) => !z)
-      } else if (e.ctrlKey && e.key === "/") {
+      } else if (mod && e.key === "/") {
         e.preventDefault(); e.stopPropagation()
         setHelpOpen((o) => !o)
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
-        // Ctrl+N — new session
+      } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+        // Ctrl+N / Cmd+N — new session
         e.preventDefault(); e.stopPropagation()
         handleNewSession()
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "t") {
-        // Ctrl+T — new terminal in the active session (or a new session if none)
+      } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "t") {
+        // Ctrl+T / Cmd+T — new terminal in the active session (or a new session if none)
         e.preventDefault(); e.stopPropagation()
         handleNewTerminal()
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "w") {
-        // Ctrl+W — close the active terminal (session stays alive if it was the last)
+      } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "w") {
+        // Ctrl+W / Cmd+W — close the active terminal (session stays alive if it was the last)
         e.preventDefault(); e.stopPropagation()
         handleCloseTerminal()
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
-        // Ctrl+K — kill the active session (confirm)
+      } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+        // Ctrl+K / Cmd+K — kill the active session (confirm)
         e.preventDefault(); e.stopPropagation()
         handleKillSession()
-      } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === "h") {
-        // Ctrl+Shift+H — retire & continue (handoff): flush summary, fresh terminal,
+      } else if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "h") {
+        // Ctrl+Shift+H / Cmd+Shift+H — retire & continue (handoff): flush summary, fresh terminal,
         // retire old. NOT plain Ctrl+H: that's ASCII Backspace (^H), so swallowing
         // it here would eat the user's backspace inside the terminal prompt.
         e.preventDefault(); e.stopPropagation()
         handleHandoff()
-      } else if (e.ctrlKey && e.key === "\\") {
+      } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "j") {
+        // Ctrl+J / Cmd+J — jump to the top attention-queue entry ("who needs me?"). The
+        // queue is pre-sorted (tier then oldest-first) by the service, so the
+        // first entry is the most urgent.
+        e.preventDefault(); e.stopPropagation()
+        if (attentionEntries.length) jumpToAttention(attentionEntries[0])
+      } else if (mod && e.key === "\\") {
         e.preventDefault(); e.stopPropagation()
         toggleSplit()
-      } else if (e.ctrlKey && e.key === "Tab") {
-        // Ctrl+Tab / Ctrl+Shift+Tab — cycle terminals within the active session
+      } else if (mod && e.key === "Tab") {
+        // Ctrl+Tab / Cmd+Tab / Ctrl+Shift+Tab — cycle terminals within the active session
         e.preventDefault(); e.stopPropagation()
         if (activeTerminals.length) {
           const i = Math.max(0, activeTerminals.findIndex((t) => t.id === activeTerminalId))
@@ -568,27 +665,32 @@ export default function App() {
             : (i + 1) % activeTerminals.length
           setActiveTerminalId(activeTerminals[next].id)
         }
-      } else if (e.ctrlKey && e.key === "p") {
-        e.preventDefault(); e.stopPropagation()
-        if (panels.some((p) => p.visible)) {
-          setDrawerCollapsed((c) => !c)
-        }
       } else if (e.key === "Escape" && helpOpen) {
         e.preventDefault(); e.stopPropagation()
         setHelpOpen(false)
-      } else if (e.key === "Escape") {
-        const visible = panels.filter((p) => p.visible)
-        if (visible.length > 0 && !drawerCollapsed) {
+      } else if (
+        e.key === "Escape" &&
+        !paletteOpen && !historyOpen && !missionPromptOpen && !missionsListOpen
+      ) {
+        // BO-10 — Esc stops a structured terminal mid-turn (generating OR awaiting a
+        // permission): kill + resume the conversation. escInterruptRef returns false
+        // when the active terminal isn't structured+busy, so Esc passes through
+        // untouched to an xterm/PTY (where it is load-bearing) and is a no-op when idle.
+        // Guarded on the nav overlays so an open palette/history/mission overlay closes
+        // via its OWN Esc handler instead of being hijacked into an interrupt — this
+        // capture-phase handler would otherwise stopPropagation and suppress that close.
+        // (helpOpen is handled by the arm above; the permission prompt is intentionally
+        // NOT guarded — Esc-to-stop while awaiting a permission is the whole point.)
+        if (escInterruptRef.current()) {
           e.preventDefault(); e.stopPropagation()
-          handleClosePanel(visible[visible.length - 1].id)
         }
-      } else if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key >= "1" && e.key <= "9") {
+      } else if (e.altKey && !mod && !e.shiftKey && e.key >= "1" && e.key <= "9") {
         // Alt+1–9 — switch terminal within the active session
         e.preventDefault(); e.stopPropagation()
         const t = activeTerminals[parseInt(e.key) - 1]
         if (t) setActiveTerminalId(t.id)
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= "1" && e.key <= "9") {
-        // Ctrl+1–9 — switch session
+      } else if (mod && !e.shiftKey && !e.altKey && e.key >= "1" && e.key <= "9") {
+        // Ctrl+1–9 / Cmd+1–9 — switch session
         e.preventDefault(); e.stopPropagation()
         const s = sessions[parseInt(e.key) - 1]
         if (s) handleSelectSession(s.id)
@@ -596,7 +698,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, panels, drawerCollapsed, handleClosePanel, helpOpen])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, helpOpen, paletteOpen, historyOpen, missionPromptOpen, missionsListOpen, setActiveTerminalId, setPaletteOpen, setHistoryOpen, setZenMode, setHelpOpen, attentionEntries, jumpToAttention])
 
   return (
     <div
@@ -607,6 +709,17 @@ export default function App() {
     >
       <DropZone active={dragActive} />
       <ToastHost />
+      {/* BO-4b — the permission gate fires ONLY on the structured engine (xterm
+          spawns with --dangerously-skip-permissions, so no approve_tool gate ever
+          fires). Gate on a pending request rather than a global engine flag: a
+          request is itself proof a structured terminal asked.
+          BO-11 (CAPP-50) — render ONLY the ACTIVE terminal's requests, never the
+          global queue. A background/dead terminal's position:fixed card would
+          otherwise physically overlap the active session's composer ("can't type" —
+          occluded, not disabled). isTerminalBusy still reads the global queue. */}
+      {activePermissionRequests.length > 0 && (
+        <PermissionPrompt requests={activePermissionRequests} onResolve={handlePermissionResolve} />
+      )}
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
       <HistorySearch
@@ -621,7 +734,7 @@ export default function App() {
       />
       <MissionsList
         open={missionsListOpen}
-        missions={missions}
+        missions={allMissions}
         onClose={() => setMissionsListOpen(false)}
         onOpen={(m) => {
           openMission(m)
@@ -635,11 +748,23 @@ export default function App() {
         sessions={sessions}
         activeSessionId={activeSessionId}
         workspaces={workspaces}
+        attentionEntries={attentionEntries}
+        attentionNow={attentionNow}
+        onJumpAttention={jumpToAttention}
+        onDismissAttention={dismissAttention}
+        missions={visibleMissions}
+        onOpenMission={(m) => {
+          openMission(m).catch(() => {})
+          Promise.resolve(window.api.attentionSeenMission(m.id)).catch(() => {})
+        }}
+        onDismissMission={dismissMission}
+        onNewMission={() => setMissionPromptOpen(true)}
+        onFocusConductor={(sessionId) => handleSelectSession(sessionId)}
         onNewSession={handleNewSession}
         onKillSession={handleKillSession}
+        onKillSessionById={handleKillSessionById}
         onSelectSession={handleSelectSession}
         onSelectWorkspace={(index) => window.api.activateWorkspace(index)}
-        onShowOverview={openOverview}
       />
       <div className="main-area">
         <TabBar
@@ -650,14 +775,14 @@ export default function App() {
           onCloseTerminal={(id) => activeSessionId && window.api.closeTerminal(activeSessionId, id)}
           onRenameTerminal={handleRenameTerminal}
           onNewTerminal={handleNewTerminal}
+          panelCount={panels.filter((p) => p.visible).length}
+          panelsRecentlyChanged={panelsRecentlyChanged}
+          onFocusCompanion={() => {
+            try { window.api.focusCompanion() } catch (err) {
+              toast("error", `Couldn't raise the panels window: ${err instanceof Error ? err.message : String(err)}`)
+            }
+          }}
         />
-        <div
-          className={`workspace-body ${
-            !drawerCollapsed && panels.some((p) => p.visible && p.position === "bottom")
-              ? "col"
-              : "row"
-          }`}
-        >
         <div className="terminal-container">
           {splitLeft && splitRight ? (
             <SplitView
@@ -665,22 +790,49 @@ export default function App() {
               rightId={splitRight}
               activeId={activeTerminalId ?? splitLeft}
               onSelectSession={(id) => setActiveTerminalId(id)}
-              theme={config?.theme}
+              terminals={activeTerminals}
+              sessionId={activeSessionId}
+              transcriptCache={transcriptCacheRef.current}
+              onSwitched={setActiveTerminalId}
+              isTerminalBusy={isTerminalBusy}
+              themeMode={themeMode}
               fontFamily={config?.fontFamily}
               fontSize={config?.fontSize}
             />
           ) : (
             <>
-              {activeTerminals.map((t) => (
-                <TerminalPane
-                  key={t.id}
-                  sessionId={t.id}
-                  active={t.id === activeTerminalId}
-                  theme={config?.theme}
-                  fontFamily={config?.fontFamily}
-                  fontSize={config?.fontSize}
-                />
-              ))}
+              {activeTerminals.map((t) =>
+                // BO-4b PER-TERMINAL fork: render on THIS terminal's actual engine
+                // (surfaced from the backend), not a global config boolean. A
+                // headless terminal gets AgentView + the BO-3 composer; an xterm
+                // (or legacy/undefined) terminal keeps TerminalPane. Default stays
+                // xterm, so live behavior is unchanged unless the terminal was
+                // spawned structured.
+                t.engine === "structured" ? (
+                  <AgentSurface
+                    key={t.id}
+                    terminalId={t.id}
+                    sessionId={activeSessionId}
+                    model={t.model}
+                    effort={t.effort}
+                    ccConversationId={t.ccConversationId}
+                    transcriptCache={transcriptCacheRef.current}
+                    active={t.id === activeTerminalId}
+                    busy={isTerminalBusy(t.id)}
+                    onSwitched={setActiveTerminalId}
+                  />
+                ) : (
+                  <TerminalPane
+                    key={t.id}
+                    sessionId={t.id}
+                    active={t.id === activeTerminalId}
+                    lastState={t.lastState}
+                    themeMode={themeMode}
+                    fontFamily={config?.fontFamily}
+                    fontSize={config?.fontSize}
+                  />
+                ),
+              )}
               {activeTerminals.length === 0 && (
                 <div className="empty-state">
                   <p>No active terminal.</p>
@@ -708,20 +860,6 @@ export default function App() {
             </>
           )}
         </div>
-          {!drawerCollapsed && (
-            <PanelDrawer
-              panels={panels}
-              onClose={handleClosePanel}
-              onSendToSession={sendToActiveSession}
-              onMissionStop={(id) => window.api.stopMission(id)}
-              onMissionPause={(id) => window.api.pauseMission(id)}
-            />
-          )}
-        </div>
-        <StatusBar
-          session={activeTerminal ? { id: activeTerminal.id, name: activeTerminal.name, state: activeTerminal.lastState } : null}
-          sessionCount={sessions.length}
-        />
       </div>
     </div>
   )

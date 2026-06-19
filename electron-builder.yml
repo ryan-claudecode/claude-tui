@@ -1,0 +1,54 @@
+# electron-builder configuration — unsigned Windows build.
+# Validate with `npm run package` (electron-builder --win dir); full installer
+# via `npm run package:installer` (--win nsis, may download nsis resources on
+# first run). See the "Packaging" section in CLAUDE.md.
+appId: com.claudetui.app
+productName: ClaudeTUI
+
+directories:
+  output: dist
+
+# node-pty ships prebuilt binaries (prebuilds/win32-*/*.node) and loads them at
+# runtime via its own loader (build/Release → build/Debug → prebuilds/). It does
+# NOT need a from-source rebuild, and @electron/rebuild requires a Python + C++
+# toolchain we don't assume. Skip the rebuild and ship the prebuilds as-is.
+npmRebuild: false
+
+# electron-vite emits the app into out/; ship that plus package.json.
+# electron-builder bundles production node_modules automatically.
+files:
+  - out/**/*
+  - package.json
+
+# CRITICAL — node-pty is a NATIVE module. Its compiled .node binaries and helper
+# executables (winpty-agent.exe / OpenConsole.exe / conpty.dll, under build/,
+# prebuilds/, and third_party/) MUST live OUTSIDE the asar archive or PTY
+# spawning fails in the packaged app. Unpack the whole package so every variant
+# (build/Release, prebuilds/win32-*, third_party/conpty) ends up on disk under
+# resources/app.asar.unpacked/node_modules/node-pty/.
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+
+win:
+  # dir = unpacked tree (fast, for validation); nsis = the installer.
+  target:
+    - dir
+    - nsis
+  # --- Code signing (DISABLED) -------------------------------------------------
+  # Signing requires the user's Authenticode certificate. To sign a release,
+  # supply the cert via env and uncomment:
+  #   certificateFile: ${env.WIN_CERT_FILE}        # path to .pfx
+  #   certificatePassword: ${env.WIN_CERT_PASSWORD}
+  # (or use signtoolOptions for an HSM/cloud signer). Left off so unsigned
+  # `--win dir`/`nsis` builds work without a cert.
+  # ----------------------------------------------------------------------------
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+# publish:   # ← uncomment + fill in to enable auto-update (UPD is a no-op until then)
+#   provider: github
+#   owner: YOUR_GITHUB_USER
+#   repo: claude-tui-app

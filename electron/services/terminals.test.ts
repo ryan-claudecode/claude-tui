@@ -1,9 +1,82 @@
 import { describe, it, expect, vi } from "vitest"
-import { TerminalService, encodeProjectDir, resumeArgs } from "./terminals"
+import {
+  TerminalService,
+  encodeProjectDir,
+  resumeArgs,
+  type PtyLike,
+  type SpawnPty,
+  type SpawnPtyOptions,
+} from "./terminals"
+
+/**
+ * A fake PTY: conforms to `PtyLike` but has NO real process behind it. Records
+ * its spawn args (so tests can assert `--resume` / `--mcp-config` behavior) and
+ * exposes `emitData` / `emitExit` to drive the service's listeners by hand.
+ */
+class FakePty implements PtyLike {
+  pid = Math.floor(Math.random() * 1_000_000)
+  cols: number
+  rows: number
+  killed = false
+  written: string[] = []
+  private dataCbs: Array<(data: string) => void> = []
+  private exitCbs: Array<(e: { exitCode: number; signal?: number }) => void> = []
+
+  constructor(
+    readonly file: string,
+    readonly args: string[],
+    readonly options: SpawnPtyOptions,
+  ) {
+    this.cols = options.cols
+    this.rows = options.rows
+  }
+
+  onData(cb: (data: string) => void): void {
+    this.dataCbs.push(cb)
+  }
+  onExit(cb: (e: { exitCode: number; signal?: number }) => void): void {
+    this.exitCbs.push(cb)
+  }
+  write(data: string): void {
+    this.written.push(data)
+  }
+  resize(cols: number, rows: number): void {
+    this.cols = cols
+    this.rows = rows
+  }
+  kill(): void {
+    this.killed = true
+  }
+
+  /** Test helper: simulate the PTY emitting output. */
+  emitData(data: string): void {
+    for (const cb of this.dataCbs) cb(data)
+  }
+  /** Test helper: simulate the PTY's process exiting. */
+  emitExit(exitCode = 0): void {
+    for (const cb of this.exitCbs) cb({ exitCode })
+  }
+}
+
+/**
+ * The ONE way to construct a TerminalService in tests. Injects a fake spawn seam
+ * so no real `powershell → claude` process is ever launched (the P1-6 leak), and
+ * returns the recorded `FakePty` instances so a test can inspect spawn args or
+ * drive data/exit. Every `new TerminalService()` in tests goes through here.
+ */
+function makeTestTerminalService(): { svc: TerminalService; spawned: FakePty[] } {
+  const spawned: FakePty[] = []
+  const spawnPty: SpawnPty = (file, args, options) => {
+    const fake = new FakePty(file, args, options)
+    spawned.push(fake)
+    return fake
+  }
+  return { svc: new TerminalService({ spawnPty }), spawned }
+}
 
 describe("TerminalService emit channels (terminal:* not session:*)", () => {
   it("emits terminal:created on create()", () => {
-    const svc = new TerminalService()
+    const { svc } = makeTestTerminalService()
     const sent: string[] = []
     // Override sendToRenderer before any operation so all emits are captured
     ;(svc as unknown as { sendToRenderer: (c: string, ...a: unknown[]) => void }).sendToRenderer =
@@ -17,7 +90,7 @@ describe("TerminalService emit channels (terminal:* not session:*)", () => {
 
   it("emits terminal:state (idle) via the idle monitor when mainWindow is set", () => {
     vi.useFakeTimers()
-    const svc = new TerminalService()
+    const { svc } = makeTestTerminalService()
     const sent: string[] = []
     ;(svc as unknown as { sendToRenderer: (c: string, ...a: unknown[]) => void }).sendToRenderer =
       (channel) => { sent.push(channel) }
@@ -35,7 +108,7 @@ describe("TerminalService emit channels (terminal:* not session:*)", () => {
   })
 
   it("emits terminal:renamed when rename() is called", () => {
-    const svc = new TerminalService()
+    const { svc } = makeTestTerminalService()
     const sent: string[] = []
     ;(svc as unknown as { sendToRenderer: (c: string, ...a: unknown[]) => void }).sendToRenderer =
       (channel) => { sent.push(channel) }
@@ -51,7 +124,7 @@ describe("TerminalService emit channels (terminal:* not session:*)", () => {
 
 describe("TerminalService.onEvent", () => {
   it("notifies listeners on created and exit, and unsubscribes cleanly", () => {
-    const svc = new TerminalService()
+    const { svc } = makeTestTerminalService()
     const events: any[] = []
     const off = svc.onEvent((e) => events.push(e))
 
@@ -64,16 +137,63 @@ describe("TerminalService.onEvent", () => {
     expect(events.length).toBe(before)
   })
 
-  it("clears the convo poller immediately on kill (no convo event after kill)", () => {
+  it("registers a transcript expectation on create and cancels it on kill", () => {
     vi.useFakeTimers()
-    const svc = new TerminalService()
+    const { svc } = makeTestTerminalService()
+    // Point the assigner at an empty fake projects root so it never binds a real
+    // transcript and the shared loop's lifecycle is what we observe.
+    const root = mkdtempSync(join(tmpdir(), "cc-svc-"))
+    ;(svc as unknown as { ccProjectsRoot: string }).ccProjectsRoot = root
+
     const info = svc.create("t", process.cwd())
+    const assigner = (svc as unknown as {
+      assigner: { pendingCount(): number; isRunning(): boolean }
+    }).assigner
+    // create() registered exactly one expectation and started the shared loop.
+    expect(assigner.pendingCount()).toBe(1)
+    expect(assigner.isRunning()).toBe(true)
+
     const events: string[] = []
     svc.onEvent((e) => events.push(e.type))
     svc.kill(info.id)
-    // advance well past the 1s poll interval; a leaked timer would fire here
+
+    // Expectation cancelled, loop idle, and no convo ever fires post-kill.
+    expect(assigner.pendingCount()).toBe(0)
+    expect(assigner.isRunning()).toBe(false)
     vi.advanceTimersByTime(5000)
     expect(events).not.toContain("convo")
+    vi.useRealTimers()
+  })
+
+  it("pre-claims and emits convo immediately for a resumed terminal (no expectation)", () => {
+    vi.useFakeTimers()
+    const cwd = process.cwd()
+    const root = mkdtempSync(join(tmpdir(), "cc-resume-svc-"))
+    const dir = join(root, encodeProjectDir(cwd))
+    mkdirSync(dir, { recursive: true })
+    // The transcript must exist on disk so resumeArgs() adds --resume.
+    const convId = "resume-abc"
+    writeFileSync(join(dir, `${convId}.jsonl`), "{}")
+
+    const { svc } = makeTestTerminalService()
+    ;(svc as unknown as { ccProjectsRoot: string }).ccProjectsRoot = root
+
+    const convos: string[] = []
+    svc.onEvent((e) => { if (e.type === "convo") convos.push(e.ccConversationId) })
+
+    const info = svc.create("t", cwd, undefined, convId)
+    // Resumed terminals re-emit their id immediately and pre-claim it; they do
+    // NOT register a polling expectation.
+    expect(convos).toEqual([convId])
+    const assigner = (svc as unknown as {
+      assigner: { pendingCount(): number }
+    }).assigner
+    expect(assigner.pendingCount()).toBe(0)
+    expect(
+      (svc as unknown as { claimedConvoIds: Set<string> }).claimedConvoIds.has(convId),
+    ).toBe(true)
+
+    svc.kill(info.id)
     vi.useRealTimers()
   })
 })
@@ -180,6 +300,159 @@ describe("resumeArgs", () => {
   })
 })
 
+describe("TerminalService MCP identity tokens", () => {
+  /** Pull the token query param out of a terminal's generated MCP config file. */
+  const tokenFromConfig = (terminalId: string): string | null => {
+    const path = join(tmpdir(), "claudetui", `mcp-config-${terminalId}.json`)
+    const cfg = JSON.parse(require("fs").readFileSync(path, "utf8"))
+    const url = new URL(cfg.mcpServers.claudetui.url)
+    return url.searchParams.get("token")
+  }
+
+  it("resolveIdentityToken returns undefined for an unknown token", () => {
+    const { svc } = makeTestTerminalService()
+    expect(svc.resolveIdentityToken("garbage")).toBeUndefined()
+  })
+
+  it("issueIdentityToken mints a token that resolves to exactly its own ids", () => {
+    const { svc } = makeTestTerminalService()
+    const token = svc.issueIdentityToken("sess-1", "term-1")
+    expect(typeof token).toBe("string")
+    expect(token.length).toBeGreaterThan(0)
+    expect(svc.resolveIdentityToken(token)).toEqual({
+      sessionId: "sess-1",
+      terminalId: "term-1",
+    })
+  })
+
+  it("issues unique tokens for distinct terminals", () => {
+    const { svc } = makeTestTerminalService()
+    const a = svc.issueIdentityToken("sess-1", "term-1")
+    const b = svc.issueIdentityToken("sess-1", "term-2")
+    expect(a).not.toBe(b)
+    expect(svc.resolveIdentityToken(a)).toEqual({ sessionId: "sess-1", terminalId: "term-1" })
+    expect(svc.resolveIdentityToken(b)).toEqual({ sessionId: "sess-1", terminalId: "term-2" })
+  })
+
+  it("mcpConfigFor URL carries a token that resolves to the terminal's own ids", () => {
+    const { svc } = makeTestTerminalService()
+    svc.setMcpServerUrl("http://127.0.0.1:9999/sse")
+    const info = svc.create("t", process.cwd(), "sess-abc")
+
+    const token = tokenFromConfig(info.id)
+    expect(token).toBeTruthy()
+    expect(svc.resolveIdentityToken(token!)).toEqual({
+      sessionId: "sess-abc",
+      terminalId: info.id,
+    })
+
+    svc.kill(info.id)
+  })
+
+  it("invalidates the token on kill so a stale config can't resurrect identity", () => {
+    const { svc } = makeTestTerminalService()
+    svc.setMcpServerUrl("http://127.0.0.1:9999/sse")
+    const info = svc.create("t", process.cwd(), "sess-kill")
+    const token = tokenFromConfig(info.id)
+    expect(svc.resolveIdentityToken(token!)).toBeTruthy()
+
+    svc.kill(info.id)
+    expect(svc.resolveIdentityToken(token!)).toBeUndefined()
+  })
+
+  it("clears all tokens on killAll", () => {
+    const { svc } = makeTestTerminalService()
+    const token = svc.issueIdentityToken("sess-1", "term-1")
+    expect(svc.resolveIdentityToken(token)).toBeTruthy()
+    svc.killAll()
+    expect(svc.resolveIdentityToken(token)).toBeUndefined()
+  })
+})
+
+describe("TerminalService spawn seam (FakePty — no real process)", () => {
+  it("spawns via the injected seam, never a real pty (records the powershell wrapper)", () => {
+    const { svc, spawned } = makeTestTerminalService()
+    svc.create("t", process.cwd())
+    // Exactly one fake PTY was created — and it is a FakePty, not a real process.
+    expect(spawned).toHaveLength(1)
+    const fake = spawned[0]
+    // On every platform we shell-wrap the command; the file is the shell.
+    expect(fake.file).toMatch(/powershell\.exe|bash/)
+    // The wrapped command always carries the claude default args.
+    expect(fake.args.join(" ")).toContain("--dangerously-skip-permissions")
+  })
+
+  it("records --mcp-config in the spawned args when a server URL + session id are set", () => {
+    const { svc, spawned } = makeTestTerminalService()
+    svc.setMcpServerUrl("http://127.0.0.1:9999/sse")
+    svc.create("t", process.cwd(), "sess-1")
+    expect(spawned[0].args.join(" ")).toContain("--mcp-config")
+  })
+
+  it("records --resume <id> in the spawned args when resuming an existing transcript", () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-seam-resume-"))
+    const cwd = process.cwd()
+    const dir = join(root, encodeProjectDir(cwd))
+    mkdirSync(dir, { recursive: true })
+    const convId = "resume-abc"
+    writeFileSync(join(dir, `${convId}.jsonl`), "{}")
+
+    const { svc, spawned } = makeTestTerminalService()
+    ;(svc as unknown as { ccProjectsRoot: string }).ccProjectsRoot = root
+    svc.create("t", cwd, undefined, convId)
+
+    // This is exactly the spawn that leaked a real `claude --resume resume-abc`
+    // before the seam — now it's captured by the fake, no OS process.
+    expect(spawned[0].args.join(" ")).toContain(`--resume ${convId}`)
+  })
+
+  it("emitData drives capture/state and emitExit marks the terminal dead — all in-process", () => {
+    const { svc, spawned } = makeTestTerminalService()
+    const info = svc.create("t", process.cwd())
+    const fake = spawned[0]
+
+    fake.emitData("● Edit(src/App.tsx)\n")
+    expect(svc.getOutput(info.id)).toContain("Edit(src/App.tsx)")
+
+    const events: string[] = []
+    svc.onEvent((e) => events.push(e.type))
+    fake.emitExit(0)
+    expect(events).toContain("exit")
+    expect(svc.list().find((t) => t.id === info.id)?.state).toBe("dead")
+  })
+})
+
+describe("TerminalService.list() carries isLogin (CAPP-54 gate ② BLOCKER)", () => {
+  // The re-review BLOCKER: list() rebuilds plain return objects and previously did
+  // NOT copy isLogin, so BroadcastService's `.filter(s => !s.isLogin)` was a no-op in
+  // production (the field was always undefined) — the live `claude /login` OAuth PTY
+  // stayed a valid broadcast target. This DIRECT test on list() is the one that would
+  // have caught it: it drives the real service (no stub) and asserts the flag survives.
+  it("a login terminal's entry carries isLogin===true; a normal terminal's does not", () => {
+    const { svc } = makeTestTerminalService()
+    const normal = svc.create("agent", process.cwd())
+    const login = svc.createLogin("Sign in", process.cwd())
+
+    const list = svc.list()
+    const normalEntry = list.find((t) => t.id === normal.id)
+    const loginEntry = list.find((t) => t.id === login.id)
+
+    expect(loginEntry?.isLogin).toBe(true)
+    // The normal terminal is NOT a login terminal — falsy (undefined), never true.
+    expect(normalEntry?.isLogin).not.toBe(true)
+  })
+
+  it("getActivity() also surfaces isLogin for the login terminal (FIX C consistency)", () => {
+    const { svc } = makeTestTerminalService()
+    const normal = svc.create("agent", process.cwd())
+    const login = svc.createLogin("Sign in", process.cwd())
+
+    const activity = svc.getActivity()
+    expect(activity.find((a) => a.id === login.id)?.isLogin).toBe(true)
+    expect(activity.find((a) => a.id === normal.id)?.isLogin).not.toBe(true)
+  })
+})
+
 import { parseActivityLine } from "./terminals"
 
 describe("parseActivityLine", () => {
@@ -204,5 +477,69 @@ describe("parseActivityLine", () => {
     // prose bullets / markdown lists must NOT match
     expect(parseActivityLine("* this is a note (with parens)")).toBeUndefined()
     expect(parseActivityLine("● note about something (no tool)")).toBeUndefined()
+  })
+})
+
+import { detectPromptState } from "./terminals"
+
+/**
+ * Fixtures seeded from real Claude Code idle/busy output (AQ-1). The input box
+ * renders as a bordered `>` prompt above a footer hint line; a busy session shows
+ * tool-call activity lines and no bare prompt. These strings are ANSI-stripped,
+ * matching what TerminalService captures into its output buffer.
+ */
+describe("detectPromptState", () => {
+  // FIXTURE 1: idle, sitting at the prompt (the canonical "asked you" case).
+  const PROMPT_IDLE = [
+    "● Done. The refactor is complete and tests pass.",
+    "",
+    "╭──────────────────────────────────────────────────╮",
+    "│ >                                                │",
+    "╰──────────────────────────────────────────────────╯",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+  ].join("\n")
+
+  // FIXTURE 2: busy — a tool-call activity line, no prompt box.
+  const BUSY_WITH_ACTIVITY = [
+    "● Edit(electron/services/terminals.ts)",
+    "  ⎿ Updated electron/services/terminals.ts with 12 additions",
+    "● Bash(npm test)",
+    "  ⎿ Running…",
+  ].join("\n")
+
+  // FIXTURE 3: mid-output — prose containing a `>` (a quoted shell line) but no
+  // footer hint, so it must NOT be read as a prompt.
+  const MID_OUTPUT = [
+    "Here's the command you should run:",
+    "  > git push origin main",
+    "and then check the CI dashboard.",
+  ].join("\n")
+
+  // FIXTURE 4: empty buffer.
+  const EMPTY = ""
+
+  it("detects the idle prompt (prompt box + footer hint)", () => {
+    expect(detectPromptState(PROMPT_IDLE)).toBe(true)
+  })
+
+  it("does not fire on a busy session with activity lines", () => {
+    expect(detectPromptState(BUSY_WITH_ACTIVITY)).toBe(false)
+  })
+
+  it("does not fire on mid-output prose that merely contains a '>'", () => {
+    expect(detectPromptState(MID_OUTPUT)).toBe(false)
+  })
+
+  it("does not fire on empty output", () => {
+    expect(detectPromptState(EMPTY)).toBe(false)
+  })
+
+  it("requires BOTH the prompt box and the footer hint", () => {
+    // Footer hint alone (no empty prompt box) — not idle-at-prompt.
+    const footerOnly = ["working...", "  ⏵⏵ bypass permissions on (shift+tab to cycle)", "● Read(x)"].join("\n")
+    expect(detectPromptState(footerOnly)).toBe(false)
+    // Prompt box alone (no footer) — not enough either.
+    const boxOnly = ["│ > │"].join("\n")
+    expect(detectPromptState(boxOnly)).toBe(false)
   })
 })

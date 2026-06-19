@@ -1,7 +1,10 @@
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "fs"
+import { readdirSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 import type { TerminalInfo, TerminalActivity } from "./terminals"
+import { WorktreeService, type MergeResult } from "./worktree"
+import { logWarn } from "../log"
+import { loadVersioned, saveVersioned, type Migration } from "../persist"
 
 /** The slice of TerminalService that MissionService drives. A fake is used in tests. */
 export interface SessionDriver {
@@ -16,9 +19,34 @@ export interface SessionDriver {
   kill(id: string): boolean
 }
 
+/**
+ * The slice of WorktreeService (WW-1) that MissionService drives for isolated
+ * workers. Injectable so mission.test.ts uses a FAKE with scripted clean/conflict
+ * results — real git stays in worktree.test.ts. Mirrors the WW-1 signatures
+ * exactly so the production `new WorktreeService()` satisfies it structurally.
+ */
+export interface WorktreeLike {
+  isGitRepo(cwd: string): boolean
+  headSha(cwd: string): string | null
+  create(args: { repoCwd: string; branch: string; base: string; path: string }): { path: string; branch: string } | null
+  commitAll(worktreePath: string, message: string): { ok: boolean }
+  diff(worktreePath: string, base: string): string
+  merge(args: { repoCwd: string; branch: string }): MergeResult
+  remove(args: { repoCwd: string; path: string; deleteBranch?: string }): { ok: boolean }
+  reapOrphans(repoCwd: string, keepBranches: string[]): { removed: string[] }
+}
+
 export type Autonomy = "hands-off" | "checkpoints" | "supervised"
 export type MissionStatus = "planning" | "running" | "paused" | "blocked" | "done" | "stopped"
-export type TaskStatus = "pending" | "assigned" | "in-progress" | "review" | "done" | "failed"
+export type TaskStatus =
+  | "pending"
+  | "assigned"
+  | "in-progress"
+  | "review"
+  | "awaiting-review"
+  | "merge-conflict"
+  | "done"
+  | "failed"
 export type EventKind = "info" | "task" | "worker" | "review" | "commit" | "pause" | "error"
 
 export interface MissionTask {
@@ -32,9 +60,39 @@ export interface MissionTask {
   /** When the worker's prompt is expected to land (now + boot delay). Used as
    *  the await() idle floor so a booting worker isn't marked done prematurely. */
   dispatchedAt?: number
+  /** Isolated-worker (WW-2) fields, set only when the mission has
+   *  `isolateWorkers`. The worker runs in this private worktree/branch; on
+   *  resolve-done its diff vs `baseRef` is captured for review before merge. */
+  worktreePath?: string
+  branch?: string
+  /** The mission-cwd HEAD SHA at dispatch time — the immutable base the review
+   *  diff compares against (not a moving HEAD a sibling merge may advance). */
+  baseRef?: string
+  /** The captured review diff (worker branch vs baseRef), set on resolve-done. */
+  diff?: string
+  /** Merge-conflict summary (on `merge-conflict`) or rejection reason (on a
+   *  reject back to `pending`) — a short human-readable note for the dashboard. */
+  reviewReason?: string
 }
 export interface MissionWorker { sessionId: string; role?: string; currentTaskId?: string; startedAt?: number }
 export interface MissionEvent { time: number; kind: EventKind; text: string }
+
+/**
+ * The service-level event seam (distinct from a Mission's own `eventLog`
+ * `MissionEvent`s). Callback-set style, like TerminalService/PanelService —
+ * subscribers (the renderer push in ipc.ts, AttentionService) react to live
+ * mission mutations instead of polling. `updated` fires once per `persist()`
+ * with the full Mission snapshot (it already serializes to JSON for disk, so
+ * tasks/workers/eventLog ride along — the dashboard panel needs them anyway).
+ *
+ * No `removed` variant: missions are never deleted from the in-memory map or
+ * disk — `stop`/`finish` only flip `status` (a terminal-state mission lingers
+ * until the renderer dismisses it client-side). The variant is reserved here so
+ * a future delete path can add it without churning subscribers.
+ */
+export type MissionServiceEvent =
+  | { type: "updated"; mission: Mission }
+  | { type: "removed"; id: string }
 
 export interface Mission {
   id: string
@@ -42,6 +100,10 @@ export interface Mission {
   cwd: string
   autonomy: Autonomy
   status: MissionStatus
+  /** Opt-in (WW-2): when true, each worker spawns into a private git worktree and
+   *  its work is review-gated before merge. Default off — non-isolated missions
+   *  are byte-identical to the pre-WW-2 flow. */
+  isolateWorkers?: boolean
   conductorSessionId?: string
   resumeAt?: number
   tasks: MissionTask[]
@@ -52,6 +114,10 @@ export interface Mission {
 }
 
 const TERMINAL: MissionStatus[] = ["done", "stopped"]
+
+/** Persistence schema version. v1 = today's Mission shape verbatim. */
+const SCHEMA_VERSION = 1
+const MIGRATIONS: Migration[] = []
 
 // Require a phrase that only appears when a limit is actually HIT — not the
 // bare words "usage limit", which would false-positive on the Conductor's own
@@ -70,6 +136,9 @@ export interface MissionServiceOpts {
   workerStallMs?: number
   usageBackoffMs?: number
   notify?: (text: string, level?: string) => void
+  /** WW-2 worktree primitives. Default: a real `WorktreeService`. Tests inject a
+   *  fake with scripted clean/conflict results — real git stays in worktree.test.ts. */
+  worktree?: WorktreeLike
 }
 
 export class MissionService {
@@ -80,8 +149,10 @@ export class MissionService {
   private workerStallMs: number
   private usageBackoffMs: number
   private notify?: (text: string, level?: string) => void
+  private worktree: WorktreeLike
   private missions = new Map<string, Mission>()
   private timer: ReturnType<typeof setInterval> | null = null
+  private eventListeners = new Set<(e: MissionServiceEvent) => void>()
 
   constructor(private sessions: SessionDriver, opts: MissionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "missions")
@@ -91,31 +162,69 @@ export class MissionService {
     this.workerStallMs = opts.workerStallMs ?? 10 * 60_000
     this.usageBackoffMs = opts.usageBackoffMs ?? 60 * 60_000
     this.notify = opts.notify
+    this.worktree = opts.worktree ?? new WorktreeService()
     this.loadAll()
+    this.reapOrphanWorktrees()
+  }
+
+  /**
+   * Best-effort reap of orphaned worktrees left by a crashed run, on load. For
+   * each isolated mission whose cwd is a git repo, prune managed worktrees whose
+   * branch isn't held by a live task. Logged, never throws — a git hiccup here
+   * must not block startup. Non-isolated missions (no `isolateWorkers`) are
+   * skipped entirely, so this is a true no-op for the byte-identical path.
+   */
+  private reapOrphanWorktrees(): void {
+    for (const m of this.missions.values()) {
+      if (!m.isolateWorkers) continue
+      try {
+        if (!this.worktree.isGitRepo(m.cwd)) continue
+        const keep = m.tasks.map((t) => t.branch).filter((b): b is string => !!b)
+        const { removed } = this.worktree.reapOrphans(m.cwd, keep)
+        if (removed.length) this.log(m, "info", `Reaped ${removed.length} orphan worktree(s) on load`)
+      } catch (err) {
+        logWarn("missions", `orphan reap failed for ${m.id}: ${err}`)
+      }
+    }
   }
 
   private loadAll(): void {
     try {
       for (const f of readdirSync(this.dir)) {
         if (!f.endsWith(".json")) continue
-        try {
-          const m = JSON.parse(readFileSync(join(this.dir, f), "utf-8")) as Mission
-          this.missions.set(m.id, m)
-        } catch { /* skip corrupt file */ }
+        // loadVersioned read-repairs a legacy (envelope-less) file to v1 and
+        // warns (instead of silently swallowing) on corrupt JSON.
+        const m = loadVersioned<Mission>(join(this.dir, f), SCHEMA_VERSION, MIGRATIONS)
+        if (m) this.missions.set(m.id, m)
       }
-    } catch { /* dir absent yet */ }
+    } catch (err) {
+      // ENOENT = missions dir not created yet (expected on first run); stay
+      // silent. Any other readdir failure is worth surfacing.
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        logWarn("missions", `could not read missions dir: ${err}`)
+      }
+    }
+  }
+
+  /** Subscribe to live mission mutations. Returns an unsubscribe fn. */
+  onEvent(cb: (e: MissionServiceEvent) => void): () => void {
+    this.eventListeners.add(cb)
+    return () => this.eventListeners.delete(cb)
+  }
+
+  private emitEvent(e: MissionServiceEvent): void {
+    for (const cb of this.eventListeners) cb(e)
   }
 
   private persist(m: Mission): void {
     m.updatedAt = this.now()
-    mkdirSync(this.dir, { recursive: true })
-    // Write-then-rename: a crash mid-write leaves the stale-but-valid file
-    // intact rather than a truncated one. The mission JSON is the durable
-    // source of truth, so a corrupt write would lose the whole mission.
-    const dest = join(this.dir, `${m.id}.json`)
-    const tmp = `${dest}.tmp`
-    writeFileSync(tmp, JSON.stringify(m, null, 2))
-    renameSync(tmp, dest)
+    // Write-then-rename (in saveVersioned): a crash mid-write leaves the
+    // stale-but-valid file intact rather than a truncated one. The mission JSON
+    // is the durable source of truth, so a corrupt write would lose the mission.
+    saveVersioned(join(this.dir, `${m.id}.json`), SCHEMA_VERSION, m)
+    // The choke point every mutation routes through — emit exactly one
+    // `updated` per persist so subscribers see one event per mutation.
+    this.emitEvent({ type: "updated", mission: m })
   }
 
   private log(m: Mission, kind: EventKind, text: string): void {
@@ -138,16 +247,23 @@ export class MissionService {
     else this.sessions.write(id, "\r")
   }
 
-  create(goal: string, cwd: string, autonomy: Autonomy = "hands-off"): Mission {
+  create(goal: string, cwd: string, autonomy: Autonomy = "hands-off", isolateWorkers = false): Mission {
+    // Isolation requires git — refuse loudly rather than silently downgrade, so
+    // the Conductor/user knows isolation isn't actually in effect (Decision 6 /
+    // Error handling).
+    if (isolateWorkers && !this.worktree.isGitRepo(cwd)) {
+      throw new Error(`Cannot isolate workers: ${cwd} is not a git repository (worktree isolation requires git).`)
+    }
     const t = this.now()
     const m: Mission = {
       id: `mission-${t}-${Math.random().toString(36).slice(2, 8)}`,
       goal, cwd, autonomy,
       status: "planning",
+      ...(isolateWorkers ? { isolateWorkers: true } : {}),
       tasks: [], workers: [], eventLog: [],
       createdAt: t, updatedAt: t,
     }
-    this.log(m, "info", `Mission created: ${goal}`)
+    this.log(m, "info", `Mission created: ${goal}${isolateWorkers ? " (isolated workers)" : ""}`)
     this.missions.set(m.id, m)
     this.persist(m)
     return m
@@ -165,9 +281,21 @@ export class MissionService {
     return this.list().find((m) => !TERMINAL.includes(m.status))
   }
 
-  plan(id: string, tasks: Array<{ title: string; detail?: string }>): Mission | undefined {
+  plan(
+    id: string,
+    tasks: Array<{ title: string; detail?: string }>,
+    isolateWorkers?: boolean,
+  ): Mission | undefined {
     const m = this.missions.get(id)
     if (!m) return undefined
+    // Allow enabling isolation at plan time too (the Conductor may decide to
+    // isolate after decomposing). Refuse on a non-git cwd, same as create.
+    if (isolateWorkers !== undefined) {
+      if (isolateWorkers && !this.worktree.isGitRepo(m.cwd)) {
+        throw new Error(`Cannot isolate workers: ${m.cwd} is not a git repository (worktree isolation requires git).`)
+      }
+      m.isolateWorkers = isolateWorkers || undefined
+    }
     m.tasks = tasks.map((t, i) => ({
       id: `t${i + 1}-${Math.random().toString(36).slice(2, 6)}`,
       title: t.title,
@@ -181,6 +309,12 @@ export class MissionService {
     return m
   }
 
+  /** A short, branch-safe slug of an id's trailing token (e.g. the random suffix). */
+  private shortId(id: string): string {
+    const tail = id.split("-").pop() ?? id
+    return tail.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "x"
+  }
+
   /** Spawn (or reuse) a worker for a task, inject its prompt, mark in-progress. */
   dispatch(missionId: string, taskId: string, prompt: string): { sessionId: string } | undefined {
     const m = this.missions.get(missionId)
@@ -190,7 +324,27 @@ export class MissionService {
     // retry after a timed-out MCP call) must NOT spawn a second worker and
     // orphan the first — hand back the existing assignment instead.
     if (task.status === "in-progress" && task.assignedTo) return { sessionId: task.assignedTo }
-    const info = this.sessions.create(`${m.goal.slice(0, 20)} · ${task.title.slice(0, 20)}`, m.cwd)
+    // Isolated dispatch: carve a private git worktree for this task and spawn the
+    // worker INTO it (instead of the shared mission cwd), so parallel workers
+    // can't collide on the same tree. On a git failure, leave the task pending and
+    // spawn nothing — the supervisor will retry on a later tick.
+    let workerCwd = m.cwd
+    if (m.isolateWorkers) {
+      const baseRef = this.worktree.headSha(m.cwd) ?? "HEAD"
+      const branch = `claudetui/mission/${this.shortId(m.id)}/${this.shortId(task.id)}`
+      const wtPath = join(m.cwd, ".claude-tui", "worktrees", m.id, task.id)
+      const created = this.worktree.create({ repoCwd: m.cwd, branch, base: "HEAD", path: wtPath })
+      if (!created) {
+        this.log(m, "error", `Worktree creation failed for "${task.title}"; task left pending`)
+        this.persist(m)
+        return undefined
+      }
+      task.worktreePath = created.path
+      task.branch = created.branch
+      task.baseRef = baseRef
+      workerCwd = created.path
+    }
+    const info = this.sessions.create(`${m.goal.slice(0, 20)} · ${task.title.slice(0, 20)}`, workerCwd)
     // A freshly-spawned worker's Claude Code TUI needs a moment to boot before
     // it can accept input — the same boot delay the Conductor gets. Sending the
     // prompt immediately lands it mid-boot, where the Enter doesn't submit.
@@ -232,21 +386,138 @@ export class MissionService {
     const m = this.missions.get(missionId)
     const task = m?.tasks.find((t) => t.id === taskId)
     if (!m || !task) return undefined
+
+    // Isolated + "done": DON'T finish. Commit the worker's private tree, capture
+    // its diff for review, and park the task at `awaiting-review` — nothing lands
+    // unseen. The attention review entry is raised purely via the persist() event
+    // seam (AttentionService is a pure subscriber); we never call it here.
+    if (status === "done" && task.worktreePath) {
+      this.worktree.commitAll(task.worktreePath, `wip: ${task.title}`)
+      const baseRef = task.baseRef ?? "HEAD"
+      task.diff = this.worktree.diff(task.worktreePath, baseRef)
+      task.status = "awaiting-review"
+      task.result = result
+      const w = m.workers.find((x) => x.currentTaskId === taskId)
+      if (w) w.currentTaskId = undefined
+      this.log(m, "review", `Task "${task.title}" → awaiting-review (captured diff)`)
+      // No completion recompute: an awaiting-review task is NOT done yet.
+      this.persist(m)
+      return m
+    }
+
+    // Isolated + "failed": discard the private worktree+branch before recording
+    // the failure, so a rejected/failed task leaves no orphaned tree behind.
+    if (status === "failed" && task.worktreePath) {
+      this.worktree.remove({ repoCwd: m.cwd, path: task.worktreePath, deleteBranch: task.branch })
+      task.worktreePath = undefined
+      task.branch = undefined
+      task.diff = undefined
+      task.baseRef = undefined
+    }
+
     task.status = status
     task.result = result
     const worker = m.workers.find((w) => w.currentTaskId === taskId)
     if (worker) worker.currentTaskId = undefined
     this.log(m, "review", `Task "${task.title}" → ${status}${result ? `: ${result}` : ""}`)
+    this.recomputeCompletion(m)
+    this.persist(m)
+    return m
+  }
+
+  /**
+   * Shared mission-completion tail, called from `resolve` (non-isolated/failed
+   * paths) and `approveTask` (the isolated done path). All tasks done → mission
+   * `done`; every task done-or-failed (with at least one failure) → `blocked`.
+   * A task in any other state (pending/in-progress/awaiting-review/merge-conflict)
+   * keeps the mission `running`. Mutates `m` in place — the caller persists.
+   */
+  private recomputeCompletion(m: Mission): void {
     if (m.tasks.length > 0 && m.tasks.every((t) => t.status === "done")) {
       m.status = "done"
       this.log(m, "info", "All tasks done — mission complete")
-    } else if (m.tasks.every((t) => t.status === "done" || t.status === "failed")) {
+    } else if (m.tasks.length > 0 && m.tasks.every((t) => t.status === "done" || t.status === "failed")) {
       m.status = "blocked"
       this.log(m, "error", "Remaining tasks failed — mission blocked")
       this.notify?.(`Mission blocked: ${m.goal}`, "warning")
     }
+  }
+
+  /**
+   * Approve an awaiting-review task: merge its branch into the mission cwd's
+   * working branch. Clean → remove the worktree (keep nothing), mark `done`, and
+   * recompute mission completion. Conflict → mark `merge-conflict`, KEEP the
+   * worktree+branch for manual handling (NEVER auto-resolve), record the conflict
+   * summary, notify, and persist. Returns the mission, or undefined if the task
+   * isn't awaiting review.
+   */
+  approveTask(missionId: string, taskId: string): Mission | undefined {
+    const m = this.missions.get(missionId)
+    const task = m?.tasks.find((t) => t.id === taskId)
+    if (!m || !task) return undefined
+    if (task.status !== "awaiting-review" || !task.branch) return undefined
+    const res = this.worktree.merge({ repoCwd: m.cwd, branch: task.branch })
+    if (res.ok) {
+      if (task.worktreePath) {
+        this.worktree.remove({ repoCwd: m.cwd, path: task.worktreePath, deleteBranch: task.branch })
+      }
+      task.status = "done"
+      task.worktreePath = undefined
+      task.branch = undefined
+      task.diff = undefined
+      task.baseRef = undefined
+      task.reviewReason = undefined
+      this.log(m, "commit", `Approved & merged "${task.title}"`)
+      this.recomputeCompletion(m)
+      this.persist(m)
+      return m
+    }
+    // Conflict: surfaced, never auto-resolved. Keep the worktree+branch so the
+    // user/Conductor can resolve it by hand.
+    task.status = "merge-conflict"
+    task.reviewReason = res.conflict
+    this.log(m, "error", `Merge conflict on "${task.title}" — branch preserved for manual handling`)
+    this.notify?.(`Merge conflict: ${task.title} (${m.goal})`, "warning")
     this.persist(m)
     return m
+  }
+
+  /**
+   * Reject an awaiting-review (or merge-conflict) task: discard its private
+   * worktree+branch and set it back to `pending` (re-dispatchable). The rejection
+   * reason is recorded in the event log + `task.reviewReason`. Nothing merges.
+   */
+  rejectTask(missionId: string, taskId: string, reason?: string): Mission | undefined {
+    const m = this.missions.get(missionId)
+    const task = m?.tasks.find((t) => t.id === taskId)
+    if (!m || !task) return undefined
+    if (task.status !== "awaiting-review" && task.status !== "merge-conflict") return undefined
+    if (task.worktreePath) {
+      this.worktree.remove({ repoCwd: m.cwd, path: task.worktreePath, deleteBranch: task.branch })
+    }
+    task.worktreePath = undefined
+    task.branch = undefined
+    task.diff = undefined
+    task.baseRef = undefined
+    task.status = "pending"
+    task.assignedTo = undefined
+    task.reviewReason = reason
+    this.log(m, "review", `Rejected "${task.title}" — back to pending${reason ? `: ${reason}` : ""}`)
+    this.persist(m)
+    return m
+  }
+
+  /** List every awaiting-review task across all missions (the review queue). */
+  reviewQueue(): Array<{ missionId: string; taskId: string; title: string; diff: string; reviewReason?: string }> {
+    const out: Array<{ missionId: string; taskId: string; title: string; diff: string; reviewReason?: string }> = []
+    for (const m of this.missions.values()) {
+      for (const t of m.tasks) {
+        if (t.status === "awaiting-review") {
+          out.push({ missionId: m.id, taskId: t.id, title: t.title, diff: t.diff ?? "", reviewReason: t.reviewReason })
+        }
+      }
+    }
+    return out
   }
 
   logEvent(missionId: string, kind: EventKind, text: string): Mission | undefined {
@@ -257,11 +528,34 @@ export class MissionService {
     return m
   }
 
+  /**
+   * Remove ALL of a mission's worktrees+branches (every task carrying a
+   * worktreePath). Called on stop/finish so a terminated mission leaves no
+   * orphaned trees. Best-effort and wrapped — a git failure can't block the
+   * stop/finish. Clears the task's worktree fields so the persisted state is
+   * clean. No-op for non-isolated missions (no task has a worktreePath).
+   */
+  private cleanupAllWorktrees(m: Mission): void {
+    for (const t of m.tasks) {
+      if (!t.worktreePath) continue
+      try {
+        this.worktree.remove({ repoCwd: m.cwd, path: t.worktreePath, deleteBranch: t.branch })
+      } catch (err) {
+        logWarn("missions", `worktree cleanup failed for ${m.id}/${t.id}: ${err}`)
+      }
+      t.worktreePath = undefined
+      t.branch = undefined
+      t.diff = undefined
+      t.baseRef = undefined
+    }
+  }
+
   stop(missionId: string): Mission | undefined {
     const m = this.missions.get(missionId)
     if (!m) return undefined
     for (const w of m.workers) this.sessions.kill(w.sessionId)
     if (m.conductorSessionId) this.sessions.kill(m.conductorSessionId)
+    this.cleanupAllWorktrees(m)
     m.workers = []
     m.conductorSessionId = undefined
     m.status = "stopped"
@@ -273,6 +567,7 @@ export class MissionService {
   finish(id: string): Mission | undefined {
     const m = this.missions.get(id)
     if (!m) return undefined
+    this.cleanupAllWorktrees(m)
     m.status = "done"
     this.log(m, "info", "Mission finished")
     this.persist(m)
@@ -322,10 +617,14 @@ export class MissionService {
   }
 
   private conductorSeed(m: Mission): string {
+    const reviewGate = m.isolateWorkers
+      ? `This mission has ISOLATED WORKERS: each worker runs in its own git worktree, and a resolved-done task enters review instead of finishing — call mission_review_queue to see pending diffs, then mission_approve_task (merge clean / surface conflict) or mission_reject_task (discard, back to pending). Tasks only count done once approved. `
+      : ""
     return `You are the Conductor for ClaudeTUI mission "${m.id}". ` +
       `Call the mission_status MCP tool to load the goal and task list, then drive the mission: ` +
       `if planning, decompose the goal with mission_plan; otherwise pick the next pending task, ` +
       `mission_dispatch it to a worker, mission_await it, review the output, and mission_resolve it. ` +
+      reviewGate +
       `Commit completed work with the git_* tools. Loop until every task is done, then mission_finish. ` +
       `If the model becomes unavailable and you cannot continue, call mission_pause with a resumeAt timestamp. ` +
       `You may stop anytime — a fresh Conductor resumes from mission_status.`

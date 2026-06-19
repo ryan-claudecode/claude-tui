@@ -9,6 +9,13 @@ export interface NotificationState {
   message: string
   timeout: number // ms before auto-dismiss; 0 = sticky
   createdAt: number
+  /**
+   * The work-session that raised this notification, when the caller is an
+   * identity-bound terminal. Lets the attention queue enqueue an `error` entry
+   * for an attributable error/warning toast. Absent = unattributable; behaves
+   * exactly as today and never enqueues.
+   */
+  sessionId?: string
 }
 
 /**
@@ -22,6 +29,16 @@ export class NotificationService {
   private notifications = new Map<string, NotificationState>()
   private mainWin: BrowserWindow | null = null
   private nextId = 1
+
+  // Subscribers (AttentionService) observing every raised notification — the
+  // error/warning-with-sessionId ones become tier-2 attention entries.
+  private eventListeners = new Set<(n: NotificationState) => void>()
+
+  /** Subscribe to raised notifications. Returns an unsubscribe fn. */
+  onNotification(cb: (n: NotificationState) => void): () => void {
+    this.eventListeners.add(cb)
+    return () => this.eventListeners.delete(cb)
+  }
 
   setMainWindow(win: BrowserWindow) {
     this.mainWin = win
@@ -38,6 +55,7 @@ export class NotificationService {
     level: NotificationLevel = "info",
     title?: string,
     timeout = 5000,
+    sessionId?: string,
   ): NotificationState {
     const id = `notif-${this.nextId++}`
     const notification: NotificationState = {
@@ -47,9 +65,11 @@ export class NotificationService {
       message,
       timeout,
       createdAt: Date.now(),
+      ...(sessionId ? { sessionId } : {}),
     }
     this.notifications.set(id, notification)
     this.sendToRenderer("notification:show", notification)
+    for (const cb of this.eventListeners) cb(notification)
     return notification
   }
 

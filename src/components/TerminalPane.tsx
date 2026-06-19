@@ -1,44 +1,23 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
+import { xtermThemes } from "../lib/xtermThemes"
 import "@xterm/xterm/css/xterm.css"
 
 interface Props {
   sessionId: string
   active: boolean
-  theme?: any // xterm.js ITheme
+  lastState?: string
+  themeMode?: string
   fontFamily?: string
   fontSize?: number
 }
 
-const defaultTheme = {
-  background: "#0d1117",
-  foreground: "#c9d1d9",
-  cursor: "#58a6ff",
-  cursorAccent: "#0d1117",
-  selectionBackground: "#264f78",
-  black: "#0d1117",
-  red: "#ff7b72",
-  green: "#3fb950",
-  yellow: "#d29922",
-  blue: "#58a6ff",
-  magenta: "#bc8cff",
-  cyan: "#39d353",
-  white: "#c9d1d9",
-  brightBlack: "#484f58",
-  brightRed: "#ffa198",
-  brightGreen: "#56d364",
-  brightYellow: "#e3b341",
-  brightBlue: "#79c0ff",
-  brightMagenta: "#d2a8ff",
-  brightCyan: "#56d364",
-  brightWhite: "#f0f6fc",
-}
-
-export default function TerminalPane({ sessionId, active, theme, fontFamily, fontSize }: Props) {
+export default function TerminalPane({ sessionId, active, lastState, themeMode, fontFamily, fontSize }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const [hasData, setHasData] = useState(false)
 
   // Create terminal on mount
   useEffect(() => {
@@ -48,7 +27,7 @@ export default function TerminalPane({ sessionId, active, theme, fontFamily, fon
       cursorBlink: true,
       fontSize: fontSize ?? 14,
       fontFamily: fontFamily ?? "'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace",
-      theme: theme ?? defaultTheme,
+      theme: xtermThemes[themeMode ?? "light"] ?? xtermThemes.light,
     })
 
     const fitAddon = new FitAddon()
@@ -78,6 +57,7 @@ export default function TerminalPane({ sessionId, active, theme, fontFamily, fon
     const dataHandler = (id: string, data: string) => {
       if (id === sessionId) {
         terminal.write(data)
+        setHasData(true)
       }
     }
     window.api.onSessionData(dataHandler)
@@ -94,6 +74,13 @@ export default function TerminalPane({ sessionId, active, theme, fontFamily, fon
     }
   }, [sessionId])
 
+  // Update xterm theme when themeMode changes
+  useEffect(() => {
+    if (terminalRef.current && themeMode) {
+      terminalRef.current.options.theme = xtermThemes[themeMode] ?? xtermThemes.light
+    }
+  }, [themeMode])
+
   // Focus terminal when tab becomes active
   useEffect(() => {
     if (active && terminalRef.current) {
@@ -102,10 +89,19 @@ export default function TerminalPane({ sessionId, active, theme, fontFamily, fon
     }
   }, [active])
 
+  const restoring = lastState === "dead" && !hasData
+
   return (
     <div
       ref={containerRef}
       className={`terminal-pane ${active ? "active" : "hidden"}`}
-    />
+    >
+      {restoring && (
+        <div className="terminal-restoring">
+          <div className="terminal-restoring-spinner" />
+          <span>Restoring session...</span>
+        </div>
+      )}
+    </div>
   )
 }

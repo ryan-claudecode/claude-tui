@@ -28,7 +28,10 @@ export class BroadcastService {
    * input is sent (Enter) rather than just staged in the prompt.
    */
   broadcast(content: string, sessionIds?: string[], submit?: boolean): BroadcastResult {
-    const open = this.sessions.list()
+    // CAPP-39 gate ② — exclude the one-time interactive `claude /login` terminal:
+    // fanning text into the live OAuth prompt would corrupt the sign-in flow. It is
+    // never a valid broadcast target, even when explicitly listed in `sessionIds`.
+    const open = this.sessions.list().filter((s) => !s.isLogin)
     const validIds = new Set(open.map((s) => s.id))
     const targets = sessionIds && sessionIds.length > 0 ? sessionIds : open.map((s) => s.id)
 

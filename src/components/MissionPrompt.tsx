@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react"
+import { useFocusTrap } from "../hooks/useFocusTrap"
 
 export type Autonomy = "hands-off" | "checkpoints" | "supervised"
 
@@ -20,6 +21,8 @@ export default function MissionPrompt({ open, onClose, onSubmit }: Props) {
   const [goal, setGoal] = useState("")
   const [autonomy, setAutonomy] = useState<Autonomy>("hands-off")
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(panelRef, open)
 
   useEffect(() => {
     if (open) {
@@ -50,10 +53,17 @@ export default function MissionPrompt({ open, onClose, onSubmit }: Props) {
 
   return (
     <div className="mission-prompt-overlay" onMouseDown={onClose}>
-      <div className="mission-prompt-panel" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        ref={panelRef}
+        className="mission-prompt-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Start mission"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="mission-prompt-header">
           <span className="mission-prompt-title">Start Mission</span>
-          <button className="mission-prompt-close" onClick={onClose} title="Close">
+          <button className="mission-prompt-close" onClick={onClose} aria-label="Close start mission dialog">
             ×
           </button>
         </div>

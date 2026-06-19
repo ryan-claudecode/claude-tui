@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react"
+import { useFocusTrap } from "../hooks/useFocusTrap"
 
 export interface Command {
   id: string
@@ -32,6 +33,8 @@ export default function CommandPalette({ open, commands, onClose }: Props) {
   const [selected, setSelected] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(panelRef, open)
 
   const results = useMemo(
     () =>
@@ -88,7 +91,14 @@ export default function CommandPalette({ open, commands, onClose }: Props) {
 
   return (
     <div className="cmdk-overlay" onMouseDown={onClose}>
-      <div className="cmdk-panel" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        ref={panelRef}
+        className="cmdk-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="cmdk-input-row">
           <span className="cmdk-prompt">›</span>
           <input

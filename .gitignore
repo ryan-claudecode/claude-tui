@@ -4,3 +4,13 @@ dist/
 .DS_Store
 *.log
 logs/
+.superpowers/
+
+# Claude Code local (per-user, untracked) settings — written by BO-3's
+# "always allow" permission persistence into a session's <cwd>/.claude/
+.claude/settings.local.json
+
+# Playwright E2E artifacts (npm run e2e)
+test-results/
+playwright-report/
+playwright/.cache/

@@ -1,0 +1,643 @@
+import { useEffect, useRef, useState, useCallback } from "react"
+import type { StreamEvent } from "../../electron/services/streamProtocol"
+import {
+  reduceTranscript,
+  emptyTranscript,
+  settleRunningTools,
+  panelForBlock,
+  USER_BLOCK_KIND,
+  type TranscriptBlock,
+  type TranscriptState,
+  type ToolBlock,
+  type ResultBlock,
+  type ResultCost,
+  type ModelErrorBlock,
+  type NeedsAuthBlock,
+} from "../lib/agentTranscript"
+import { nextScrollTop, scrollFollowBehavior } from "../lib/scrollStick"
+import AgentModelPicker from "./AgentModelPicker"
+import MarkdownView from "./MarkdownView"
+
+/**
+ * BO-12 — an in-memory cache of folded transcript state, keyed by the STABLE
+ * Claude Code conversation id (not terminal id, which changes on respawn). Lives
+ * above AgentView (App.tsx) and is shared across panes, so a respawn or a rapid
+ * tab-switch re-seeds the prior turns INSTANTLY from memory (no transcript reparse)
+ * — and survives the terminal-id churn that remounts this component.
+ */
+export type TranscriptCache = Map<string, TranscriptState>
+
+/**
+ * WS1 — pure decision for the branded "working" row. The row exists for ONE job:
+ * cover the DEAD-AIR gap between submit and the turn's first sign of life. Returns a
+ * single calm "Thinking" state while that gap is open, or `null` once any content
+ * exists (or we're not busy).
+ *
+ * Rule: show IFF `busy` AND we're still in the pre-content gap — i.e. there are no
+ * blocks yet, or the trailing block is the user's own just-sent message. The instant
+ * ANY content block lands as trailing (assistant / tool / thinking / result / error /
+ * needs_auth / model_error), the streaming content + tool cards ARE the activity
+ * signal, so the row suppresses itself. Because content blocks always APPEND after the
+ * user block, the trailing block is the user message ONLY in that initial gap — so the
+ * row shows exactly once per turn and can never flicker as the turn alternates
+ * prose↔tool. (Pre-content, the word is always a calm "Thinking" — no cycling.)
+ *
+ * Kept pure (no React) so it renders identically in SSR and is unit-testable.
+ */
+export function workingRowState(
+  blocks: readonly TranscriptBlock[],
+  busy: boolean,
+): { status: "Thinking" } | null {
+  if (!busy) return null
+  const last = blocks[blocks.length - 1]
+  // Dead air only: nothing back yet (fresh turn / cold start) OR the trailing block
+  // is still the user's own message. Any content block as trailing → the transcript
+  // itself signals life → suppress.
+  if (!last || last.kind === USER_BLOCK_KIND) return { status: "Thinking" }
+  return null
+}
+
+/**
+ * WS5 — pure decision for the STREAMING CARET. Mirrors {@link workingRowState}'s
+ * shape (trailing-block + busy) so the show/hide is unit-testable and renders
+ * identically in SSR. Returns the id of the assistant block that should carry a
+ * thin breathing caret at the end of its text — or `null` when no caret should
+ * show. The caret gives a live "typing" feel WHILE the turn streams, and vanishes
+ * the instant the block settles or the turn ends.
+ *
+ * Rule: caret shows IFF `busy` AND the TRAILING block is an `assistant` block —
+ * i.e. the agent is actively appending prose right now. Because `assistant_delta`
+ * coalesces into the trailing assistant block, the trailing block is that block
+ * exactly while prose is streaming; the moment a tool / result / error block
+ * appends after it (or `busy` flips false at turn end), the trailing block is no
+ * longer that assistant block, so the caret disappears with no flicker.
+ */
+export function streamingCaretId(
+  blocks: readonly TranscriptBlock[],
+  busy: boolean,
+): string | null {
+  if (!busy) return null
+  const last = blocks[blocks.length - 1]
+  if (last && last.kind === "assistant") return last.id
+  return null
+}
+
+interface Props {
+  /** The live terminal (PTY/headless) id this view renders. */
+  terminalId: string
+  active: boolean
+  /**
+   * WS1 — the agent is generating a turn (or parked on a permission prompt). Drives
+   * the branded "working" row pinned at the bottom of the transcript. `busy` flips
+   * true synchronously on submit (the `terminal:state` "active" event), so the row
+   * paints within a frame of Enter — covering the multi-second `claude -p` cold
+   * start where init + the first tokens only arrive AFTER the first stdin message.
+   * The row is suppressed the moment the turn's first content block lands (so it
+   * covers only the dead-air gap, never double-signals beside streaming content).
+   */
+  busy?: boolean
+  /** BO-6 — the work-session + current model, so the model-unavailable banner can
+   *  render an inline picker that respawns this terminal on a different model. */
+  sessionId?: string | null
+  model?: string
+  /**
+   * BO-12 — the STABLE Claude Code conversation id this terminal is bound to. When
+   * present, the view rehydrates its prior turns on mount (cache-first, then the
+   * on-disk transcript) so a Stop/model-switch/handoff respawn or an app-restart
+   * restore KEEPS showing the conversation instead of blanking.
+   */
+  ccConversationId?: string
+  /** BO-12 — the shared, cross-pane transcript cache (see {@link TranscriptCache}). */
+  transcriptCache?: TranscriptCache
+  /** Re-point the active selection at the respawned terminal after a model switch. */
+  onSwitched?: (terminalId: string) => void
+}
+
+/**
+ * BO-2 — the custom React surface that renders a headless Claude session's
+ * structured stream IN PLACE of xterm. Deliberately imports NO xterm: it
+ * subscribes to the BO-1 stream channel, folds events through the pure reducer
+ * (`src/lib/agentTranscript.ts`), and renders the resulting blocks. The detail
+ * surface reuses the EXISTING companion panels via `window.api.showPanel`.
+ *
+ * Mounted by App.tsx when the structured rendering engine is configured
+ * (config.rendering.engine = "structured"; see src/lib/renderingEngine.ts). BO-4a
+ * flipped this from the BO-2 dev flag to the real config-driven engine switch.
+ */
+export default function AgentView({
+  terminalId,
+  active,
+  busy = false,
+  sessionId,
+  model,
+  ccConversationId,
+  transcriptCache,
+  onSwitched,
+}: Props) {
+  // BO-12 — SEED from the cache synchronously in the initializer so a respawn's
+  // cache hit paints the prior conversation on the VERY FIRST render (zero blank
+  // flash). The dangling-tool settle here covers a Stop-aborted tool the live
+  // cache may have left "running". A disk-only restore (cache cold) falls through
+  // to emptyTranscript and is filled by the seed effect below.
+  const [state, setState] = useState<TranscriptState>(() => {
+    if (ccConversationId) {
+      const cached = transcriptCache?.get(ccConversationId)
+      if (cached && cached.blocks.length > 0) return settleRunningTools(cached)
+    }
+    return emptyTranscript()
+  })
+  // True while the on-disk transcript read is in flight (cache cold + a convo id
+  // present → app-restart restore). Seeds the "Restoring conversation…" rest state
+  // instead of flashing "Ready when you are" (which reads as data loss).
+  const [seeding, setSeeding] = useState<boolean>(() => {
+    if (!ccConversationId) return false
+    const cached = transcriptCache?.get(ccConversationId)
+    return !(cached && cached.blocks.length > 0)
+  })
+  const seededRef = useRef(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Subscribe to the structured stream, filtered to THIS terminal. The reducer
+  // runs incrementally (append-in-place coalescing keeps settled block ids
+  // stable) so React never remounts settled blocks. Live events fold onto the
+  // SEEDED baseline; because a resumed conversation always starts the next turn
+  // with the user's own message (a `user_message` block breaks coalescing), live
+  // turns APPEND after the rehydrated history rather than double-rendering it.
+  useEffect(() => {
+    const dispose = window.api.onStreamEvent((payload) => {
+      if (payload.terminalId !== terminalId) return
+      setState((prev) => reduceTranscript(prev, payload.event as StreamEvent))
+    })
+    return () => {
+      // Per-instance unsubscribe (preload returns a disposer) — no sibling
+      // AgentView's listener is clobbered, and nothing leaks across remounts.
+      dispose?.()
+    }
+  }, [terminalId])
+
+  // BO-12 — rehydrate from the ON-DISK transcript when the cache is cold (an app
+  // restart starts with an empty cache). Runs once; the cache-hit path is already
+  // handled by the useState initializer above. Guards against clobbering live
+  // state: if events streamed in before the read resolved, keep them.
+  useEffect(() => {
+    if (seededRef.current) return
+    if (!ccConversationId) return
+    seededRef.current = true
+    const cached = transcriptCache?.get(ccConversationId)
+    if (cached && cached.blocks.length > 0) return // already seeded from cache
+    let cancelled = false
+    window.api
+      .getTranscriptEvents(ccConversationId)
+      .then((events) => {
+        if (cancelled) return
+        setSeeding(false)
+        if (!events || events.length === 0) return
+        const seeded = settleRunningTools(events.reduce(reduceTranscript, emptyTranscript()))
+        setState((prev) => (prev.blocks.length === 0 ? seeded : prev))
+      })
+      .catch(() => {
+        if (!cancelled) setSeeding(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [ccConversationId, transcriptCache])
+
+  // BO-12 — keep the shared cache current with live folding, so a later respawn
+  // (which remounts this component under a new terminal id but the SAME convo id)
+  // re-seeds from memory. Keyed by the stable convo id.
+  useEffect(() => {
+    if (ccConversationId && state.blocks.length > 0) {
+      transcriptCache?.set(ccConversationId, state)
+    }
+  }, [state, ccConversationId, transcriptCache])
+
+  // Sticky-to-bottom: follow new content only when the user is pinned to the
+  // bottom; never yank the viewport if they scrolled up to read history.
+  const stickRef = useRef(true)
+  // WS5 — the FIRST settle after mount (the BO-12 rehydrate/restore seed, or the
+  // first turn) snaps instantly so a long restored transcript doesn't animate a
+  // top→bottom slide; every subsequent follow during streaming is SMOOTH so the
+  // viewport glides with the arriving tokens instead of hard-jumping. Honors
+  // prefers-reduced-motion via `matchMedia` (the global CSS reset only governs
+  // CSS-driven scroll; an explicit `scrollTo({behavior:'smooth'})` must opt out here).
+  const didFirstScrollRef = useRef(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (!stickRef.current) return
+    const target = nextScrollTop(
+      { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight },
+      el.scrollHeight,
+      el.clientHeight,
+    )
+    // We just appended, so `before` reflects pre-append metrics only loosely;
+    // when pinned we always snap to the bottom, which is the intended behavior.
+    const top = target ?? el.scrollHeight
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    // WS5 fix — decide instant-vs-smooth via the pure helper, passing the block
+    // count so the EMPTY initial mount (blocks.length === 0, before the async BO-12
+    // disk seed commits) does NOT consume the one-shot. Only the first NON-EMPTY
+    // settle counts as "the first scroll" and snaps `behavior:"auto"` — so a
+    // cache-cold app-restart restore lands instantly instead of sliding top→bottom,
+    // and only post-restore streaming animates smooth. `scrollTo` retargets any
+    // in-flight animation (it doesn't queue) so rapid deltas glide without piling up.
+    const { behavior, markFirstDone } = scrollFollowBehavior(
+      didFirstScrollRef.current,
+      state.blocks.length,
+      reduceMotion,
+    )
+    if (markFirstDone) didFirstScrollRef.current = true
+    el.scrollTo({ top, behavior })
+  }, [state.blocks])
+
+  // Track stick state from scroll position. The smooth follow's own intermediate
+  // scroll events may briefly read as "not at bottom" and transiently de-stick, but
+  // this is self-correcting: the animation's final frame lands at the bottom (re-
+  // sticking), and every new block re-evaluates follow — so at worst one delta's
+  // follow is skipped, never a permanent freeze. A genuine user scroll-up is ALWAYS
+  // honored (it de-sticks and we never yank them back).
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    stickRef.current =
+      el.scrollHeight - (el.scrollTop + el.clientHeight) <= 24
+  }, [])
+
+  const expand = useCallback((block: TranscriptBlock) => {
+    const req = panelForBlock(block)
+    if (!req) return
+    try {
+      window.api.showPanel(req.type, req.props)
+    } catch {
+      // Panels are best-effort; a missing companion window must not crash the view.
+    }
+  }, [])
+
+  // WS1 — the branded "working" row, pinned to the bottom of the transcript. Derived
+  // purely from `busy` + the trailing block, so it paints in the same render `busy`
+  // flips true (a frame after Enter) and self-suppresses the instant the turn's first
+  // content block lands (assistant / tool / thinking / result / …).
+  const working = workingRowState(state.blocks, busy)
+
+  // WS5 — id of the assistant block (if any) that should carry the live streaming
+  // caret. Derived from the same trailing-block + busy signals as the working row,
+  // so it appears only while prose is actively streaming and clears the instant the
+  // block settles / the turn ends.
+  const caretId = streamingCaretId(state.blocks, busy)
+
+  return (
+    <div
+      className={`agent-view ${active ? "active" : "hidden"}`}
+      ref={scrollRef}
+      onScroll={onScroll}
+    >
+      {state.blocks.length === 0 && !working ? (
+        seeding ? (
+          // BO-12 — a convo id is bound but the on-disk transcript read is still in
+          // flight (app-restart restore, cache cold). Show a restoring rest state,
+          // never the bare "Ready" — the conversation is being rehydrated.
+          <div className="agent-view-empty">
+            <span className="agent-view-empty-glyph" aria-hidden="true">↻</span>
+            <span className="agent-view-empty-title">Restoring conversation…</span>
+          </div>
+        ) : ccConversationId ? (
+          // BO-12 — resumed conversation but no transcript could be read (missing /
+          // empty). It is NOT data loss (the agent still has full context via
+          // --resume), so say so instead of "Ready when you are".
+          <div className="agent-view-empty">
+            <span className="agent-view-empty-glyph" aria-hidden="true">↻</span>
+            <span className="agent-view-empty-title">Conversation resumed</span>
+            <span className="agent-view-empty-hint">
+              History appears on your next message.
+            </span>
+          </div>
+        ) : (
+          // BO-4b — a structured session emits NOTHING until the first user message
+          // (`claude -p` waits on stdin), so this empty state is the resting state a
+          // freshly opened session sits in. It must read as "ready, type to start",
+          // NOT an indefinite "Waiting for the agent…" spinner (which made the
+          // working composer look like a stuck/blank screen).
+          <div className="agent-view-empty">
+            <span className="agent-view-empty-glyph" aria-hidden="true">›_</span>
+            <span className="agent-view-empty-title">Ready when you are</span>
+            <span className="agent-view-empty-hint">Type a message below to start the agent.</span>
+          </div>
+        )
+      ) : (
+        <>
+          {state.blocks.map((block) => (
+            <BlockView
+              key={block.id}
+              block={block}
+              onExpand={() => expand(block)}
+              terminalId={terminalId}
+              sessionId={sessionId ?? null}
+              model={model}
+              onSwitched={onSwitched}
+              streaming={block.id === caretId}
+            />
+          ))}
+          {working && <WorkingRow status={working.status} />}
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * WS1 — OURS, not a Claude Code spinner clone: a single warm breathing dot in the
+ * accent with a soft accent-glow halo, a calm "Thinking" label, and a thin shimmer
+ * along a 1px baseline. It only ever shows during the pre-content dead-air gap (see
+ * {@link workingRowState}), so the label is a single steady word — no cycling. The
+ * breathe + shimmer + arrival fade are all CSS (`.agent-working` in App.css); this
+ * component is pure presentation.
+ */
+function WorkingRow({ status }: { status: "Thinking" }) {
+  return (
+    <div className="agent-working" role="status" aria-live="polite">
+      <span className="agent-working-dot" aria-hidden="true" />
+      <span className="agent-working-label">{status}</span>
+      <span className="agent-working-baseline" aria-hidden="true" />
+    </div>
+  )
+}
+
+export function BlockView({
+  block,
+  onExpand,
+  terminalId,
+  sessionId,
+  model,
+  onSwitched,
+  streaming = false,
+}: {
+  block: TranscriptBlock
+  onExpand: () => void
+  terminalId: string
+  sessionId: string | null
+  model?: string
+  onSwitched?: (terminalId: string) => void
+  /** WS5 — this is the trailing assistant block of an actively streaming turn:
+   *  render a subtle live caret at the end of its text. */
+  streaming?: boolean
+}) {
+  switch (block.kind) {
+    case "user":
+      return (
+        <div className="agent-block agent-user">
+          <div className="agent-user-bubble">{block.text}</div>
+        </div>
+      )
+    case "assistant":
+      return (
+        <div
+          className={`agent-block agent-assistant${streaming ? " agent-streaming" : ""}`}
+          onClick={onExpand}
+          title="Open in markdown panel"
+        >
+          {/* WS5 — the streaming caret is a CSS `::after` on the LAST block of the
+              markdown body (driven by the `.agent-streaming` class), NOT a sibling
+              span. A sibling rendered AFTER the block-level `.markdown-body` wrapped
+              onto its own line at the left margin below the prose; the pseudo-element
+              flows inline at the END of the final text line, reading as a real typing
+              caret. It self-clears the instant the block stops being the trailing
+              streaming block (the class drops). */}
+          <MarkdownView source={block.text} />
+        </div>
+      )
+    case "thinking":
+      return (
+        <details className="agent-block agent-thinking">
+          <summary>Thinking</summary>
+          <div className="agent-thinking-body">{block.text || "…"}</div>
+        </details>
+      )
+    case "tool":
+      return <ToolView tool={block} onExpand={onExpand} />
+    case "error":
+      return (
+        <div className="agent-block agent-error" role="alert">
+          <span className="agent-error-icon">!</span>
+          <span>{block.message}</span>
+        </div>
+      )
+    case "model_error":
+      return (
+        <ModelErrorView
+          block={block}
+          terminalId={terminalId}
+          sessionId={sessionId}
+          model={model}
+          onSwitched={onSwitched}
+        />
+      )
+    case "needs_auth":
+      return <NeedsAuthView block={block} sessionId={sessionId} />
+    case "result":
+      return <ResultView result={block} onExpand={onExpand} />
+    case "raw":
+      return (
+        <div className="agent-block agent-raw" onClick={onExpand} title="Open raw event in code panel">
+          <span className="agent-raw-tag">raw event</span>
+          <code>{previewJson(block.raw)}</code>
+        </div>
+      )
+  }
+}
+
+/** A one-line, compact summary of a tool call's input for the inline widget. */
+function toolSummary(input: unknown): string {
+  if (input == null) return ""
+  if (typeof input !== "object") return String(input)
+  const o = input as Record<string, unknown>
+  const pick =
+    pickStr(o.command) ??
+    pickStr(o.file_path) ??
+    pickStr(o.path) ??
+    pickStr(o.query) ??
+    pickStr(o.pattern) ??
+    pickStr(o.url)
+  if (pick) return pick
+  try {
+    return JSON.stringify(o)
+  } catch {
+    return ""
+  }
+}
+
+function pickStr(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined
+}
+
+function ToolView({ tool, onExpand }: { tool: ToolBlock; onExpand: () => void }) {
+  const summary = toolSummary(tool.input)
+  return (
+    <div
+      className={`agent-block agent-tool agent-tool-${tool.status}`}
+      onClick={onExpand}
+      title="Open tool detail"
+    >
+      <span className={`agent-tool-status agent-tool-status-${tool.status}`} aria-label={tool.status} />
+      <span className="agent-tool-name">{tool.name || "tool"}</span>
+      {summary && <span className="agent-tool-summary">{truncate(summary, 80)}</span>}
+    </div>
+  )
+}
+
+function ResultView({ result, onExpand }: { result: ResultBlock; onExpand: () => void }) {
+  return (
+    <div className={`agent-block agent-result ${result.isError ? "agent-result-error" : ""}`}>
+      {result.text && (
+        <div className="agent-result-text" onClick={onExpand} title="Open in markdown panel">
+          <MarkdownView source={result.text} />
+        </div>
+      )}
+      <div className="agent-result-meta">
+        <span className="agent-result-label">{result.isError ? "Turn failed" : "Turn complete"}</span>
+        <CostChips cost={result.cost} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * BO-6 — the model-unavailable banner. Distinct from the bare "Turn failed"
+ * result: it names the offending model and embeds the picker inline so the user
+ * fixes it in one click (the pick respawns this terminal on a working model). This
+ * is what future-proofs the next model disablement.
+ */
+function ModelErrorView({
+  block,
+  terminalId,
+  sessionId,
+  model,
+  onSwitched,
+}: {
+  block: ModelErrorBlock
+  terminalId: string
+  sessionId: string | null
+  model?: string
+  onSwitched?: (terminalId: string) => void
+}) {
+  const name = block.model ?? model
+  return (
+    <div className="agent-block agent-model-error" role="alert">
+      <span className="agent-error-icon">!</span>
+      <div className="agent-model-error-body">
+        <div className="agent-model-error-msg">
+          {name ? (
+            <>
+              Model <code>{name}</code> is unavailable — pick another.
+            </>
+          ) : (
+            "The selected model is unavailable — pick another."
+          )}
+        </div>
+        <AgentModelPicker
+          sessionId={sessionId}
+          terminalId={terminalId}
+          model={model}
+          variant="banner"
+          onSwitched={onSwitched}
+        />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * CAPP-39 gate ② — the "not signed in" banner. The headless `claude -p` path
+ * CANNOT show Claude's OAuth login UI, so the Sign-in button launches a ONE-TIME
+ * INTERACTIVE xterm terminal running `claude /login` (via window.api.startLogin →
+ * a dedicated IPC → TerminalService.createLogin). The user completes the OAuth flow
+ * there, then re-sends their message in this structured session. AUTO-RETRY of the
+ * failed turn is intentionally OUT OF SCOPE (follow-up: CAPP-39 gate ② polish).
+ */
+function NeedsAuthView({
+  block,
+  sessionId,
+}: {
+  block: NeedsAuthBlock
+  sessionId: string | null
+}) {
+  const [busy, setBusy] = useState(false)
+  const [launched, setLaunched] = useState(false)
+  const signIn = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await window.api.startLogin(sessionId ?? undefined)
+      setLaunched(true)
+    } catch {
+      // Best-effort: a failed launch leaves the banner so the user can retry.
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, sessionId])
+
+  return (
+    <div className="agent-block agent-needs-auth" role="alert">
+      <span className="agent-needs-auth-icon" aria-hidden="true">🔑</span>
+      <div className="agent-needs-auth-body">
+        <div className="agent-needs-auth-title">You're not signed in to Claude</div>
+        <div className="agent-needs-auth-msg">
+          {block.message || "Sign in to continue, then re-send your message."}
+        </div>
+        <div className="agent-needs-auth-actions">
+          <button
+            type="button"
+            className="agent-needs-auth-btn"
+            onClick={signIn}
+            disabled={busy}
+          >
+            {busy ? "Opening login…" : "Sign in"}
+          </button>
+          {launched && (
+            <span className="agent-needs-auth-hint">
+              Complete login in the new terminal, then re-send your message.
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** The user-facing cost surface for a completed turn (automation-credit burn). */
+function CostChips({ cost }: { cost?: ResultCost }) {
+  if (!cost) return null
+  const chips: string[] = []
+  if (cost.costUsd != null) chips.push(`$${cost.costUsd.toFixed(4)}`)
+  if (cost.totalTokens != null) chips.push(`${cost.totalTokens.toLocaleString()} tok`)
+  else {
+    if (cost.inputTokens != null) chips.push(`${cost.inputTokens.toLocaleString()} in`)
+    if (cost.outputTokens != null) chips.push(`${cost.outputTokens.toLocaleString()} out`)
+  }
+  if (cost.durationMs != null) chips.push(`${(cost.durationMs / 1000).toFixed(2)}s`)
+  if (chips.length === 0) return null
+  return (
+    <span className="agent-cost">
+      {chips.map((c, i) => (
+        <span key={i} className="agent-cost-chip">
+          {c}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s
+}
+
+function previewJson(raw: unknown): string {
+  try {
+    return truncate(JSON.stringify(raw), 120)
+  } catch {
+    return String(raw)
+  }
+}

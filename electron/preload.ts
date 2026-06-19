@@ -1,6 +1,17 @@
 import { contextBridge, ipcRenderer } from "electron"
+import {
+  TERMINAL_STREAM_CHANNEL,
+  PERMISSION_REQUEST_CHANNEL,
+  PERMISSION_RESOLVED_CHANNEL,
+  type TerminalStreamPayload,
+  type PermissionRequest,
+  type PermissionDecision,
+} from "./services/streamProtocol"
 
 contextBridge.exposeInMainWorld("api", {
+  // Platform info (used by renderer for cross-platform key mapping)
+  platform: process.platform,
+
   // Session management
   createSession: (name: string, cwd: string) => ipcRenderer.invoke("terminal:create", name, cwd),
   killSession: (id: string) => ipcRenderer.invoke("terminal:kill", id),
@@ -27,8 +38,30 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("worksession:context", sessionId),
   getSessionOverview: (sessionId: string) =>
     ipcRenderer.invoke("worksession:overview", sessionId),
+  getSessionTimeline: (sessionId: string) =>
+    ipcRenderer.invoke("worksession:timeline", sessionId),
   handoffTerminal: (sessionId: string, terminalId: string) =>
     ipcRenderer.invoke("worksession:handoff", sessionId, terminalId),
+  // CAPP-39 gate ② — launch an interactive `claude /login` terminal from the
+  // structured engine's "not signed in" Sign-in button (headless can't show OAuth).
+  startLogin: (sessionId?: string) => ipcRenderer.invoke("worksession:start-login", sessionId),
+  // BO-6 — switch a structured terminal's --model (respawns + resumes the chat)
+  setTerminalModel: (sessionId: string, terminalId: string, model: string) =>
+    ipcRenderer.invoke("worksession:set-terminal-model", sessionId, terminalId, model),
+  // CAPP-46 — switch a structured terminal's reasoning --effort level (respawns +
+  // resumes the chat); a blank value clears it (the respawn omits --effort).
+  setTerminalEffort: (sessionId: string, terminalId: string, effort: string) =>
+    ipcRenderer.invoke("worksession:set-terminal-effort", sessionId, terminalId, effort),
+  // CAPP-39 gate ③ — the per-terminal raw-view escape hatch: toggle one terminal
+  // between the structured and xterm engines at runtime (respawns + resumes the chat).
+  // Returns the new terminal id so the caller re-points the active selection.
+  setTerminalEngine: (sessionId: string, terminalId: string, targetEngine: "xterm" | "structured") =>
+    ipcRenderer.invoke("worksession:set-terminal-engine", sessionId, terminalId, targetEngine),
+  // BO-10 — stop/interrupt a structured terminal mid-turn: kills the proc (denying
+  // any pending permission) and respawns the SAME conversation via --resume.
+  // Returns the new terminal id so the caller re-points the active selection (the
+  // respawn mints a fresh id, like the model switch).
+  interruptAgent: (terminalId: string) => ipcRenderer.invoke("agent:interrupt", terminalId),
 
   // Workspace management
   getWorkspaces: () => ipcRenderer.invoke("workspace:list"),
@@ -39,6 +72,20 @@ contextBridge.exposeInMainWorld("api", {
 
   // Config
   getConfig: () => ipcRenderer.invoke("config:get"),
+
+  // Theme
+  getTheme: () => ipcRenderer.invoke("config:get-theme"),
+  setTheme: (mode: string) => ipcRenderer.invoke("config:set-theme", mode),
+  onThemeChanged: (callback: (mode: string) => void) =>
+    ipcRenderer.on("theme:changed", (_e, mode) => callback(mode)),
+
+  // Window controls (frameless)
+  windowMinimize: () => ipcRenderer.send("window:minimize"),
+  windowMaximize: () => ipcRenderer.send("window:maximize"),
+  windowClose: () => ipcRenderer.send("window:close"),
+
+  // PP: raise the companion window (panel presence indicator click)
+  focusCompanion: () => ipcRenderer.send("companion:focus"),
 
   // Handoff
   triggerHandoff: (id: string) => ipcRenderer.invoke("terminal:handoff", id),
@@ -67,13 +114,20 @@ contextBridge.exposeInMainWorld("api", {
   pauseMission: (id: string) => ipcRenderer.invoke("mission:pause", id),
   resumeMission: (id: string) => ipcRenderer.invoke("mission:resume", id),
 
+  // WW-2b — worktree review: approve merges the worker's branch, reject discards
+  // it (back to pending). Both return the resulting task state ({ status,
+  // reviewReason } | null). getReviewTask fetches the latest captured diff so the
+  // review panel always has fresh content when opened from an attention jump.
+  approveWorktreeTask: (missionId: string, taskId: string) =>
+    ipcRenderer.invoke("worktree:approve", missionId, taskId),
+  rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) =>
+    ipcRenderer.invoke("worktree:reject", missionId, taskId, reason),
+  getReviewTask: (missionId: string, taskId: string) =>
+    ipcRenderer.invoke("worktree:get-review-task", missionId, taskId),
+
   // Broadcast -- send one input to many sessions at once
   broadcastInput: (content: string, sessionIds?: string[], submit?: boolean) =>
     ipcRenderer.invoke("broadcast:send", content, sessionIds, submit),
-
-  // Command runner -- run a one-off shell command and capture output
-  runCommand: (command: string, cwd: string, timeoutMs?: number) =>
-    ipcRenderer.invoke("command:run", command, cwd, timeoutMs),
 
   // Notifications
   listNotifications: () => ipcRenderer.invoke("notification:list"),
@@ -83,15 +137,97 @@ contextBridge.exposeInMainWorld("api", {
   onNotificationDismiss: (callback: (id: string) => void) =>
     ipcRenderer.on("notification:dismiss", (_e, id) => callback(id)),
 
+  // Attention queue (AQ-2) — "who needs me?" the renderer is a thin view
+  attentionSeen: (terminalId: string) => ipcRenderer.invoke("attention:seen", terminalId),
+  attentionSeenMission: (missionId: string) => ipcRenderer.invoke("attention:seen-mission", missionId),
+  attentionDismiss: (id: string) => ipcRenderer.invoke("attention:dismiss", id),
+  onAttentionUpdated: (callback: (entries: any[]) => void) =>
+    ipcRenderer.on("attention:updated", (_e, entries) => callback(entries)),
+  onAttentionJump: (callback: (id: string) => void) =>
+    ipcRenderer.on("attention:jump", (_e, id) => callback(id)),
+
+  // Mission push events from main (MS-2 — replaces polling in usePanels)
+  onMissionUpdated: (callback: (mission: any) => void) =>
+    ipcRenderer.on("mission:updated", (_e, mission) => callback(mission)),
+  onMissionRemoved: (callback: (id: string) => void) =>
+    ipcRenderer.on("mission:removed", (_e, id) => callback(id)),
+
   // Events from main -> renderer
   onSessionData: (callback: (id: string, data: string) => void) =>
     ipcRenderer.on("terminal:data", (_e, id, data) => callback(id, data)),
-  onSessionExit: (callback: (id: string) => void) =>
-    ipcRenderer.on("terminal:exit", (_e, id) => callback(id)),
+
+  // BO-2: structured headless stream events (parsed StreamEvents forwarded from
+  // TerminalService.onEvent). Mirrors onSessionData but returns a PER-INSTANCE
+  // unsubscribe so an AgentView's listener can be torn down on unmount without
+  // clobbering sibling panes (a generic removeAllListeners would).
+  onStreamEvent: (callback: (payload: TerminalStreamPayload) => void) => {
+    const handler = (_e: unknown, payload: TerminalStreamPayload) => callback(payload)
+    ipcRenderer.on(TERMINAL_STREAM_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(TERMINAL_STREAM_CHANNEL, handler)
+  },
+
+  // BO-3 — AgentComposer: send a structured human→agent message (text + image
+  // attachment paths). Fire-and-forget; the main process folds it into an
+  // AgentUserMessage and routes it to the headless stdin sink.
+  sendAgentInput: (terminalId: string, msg: { text?: string; attachments?: string[] }) =>
+    ipcRenderer.send("agent:send-input", terminalId, msg),
+
+  // BO-7 — the structured composer's `/`-picker catalog (slash commands + skills)
+  // captured off the headless `init` event. Returns null until init arrives.
+  getAgentCatalog: (terminalId: string) => ipcRenderer.invoke("agent:catalog", terminalId),
+
+  // BO-12 — prior turns of a conversation (by its Claude Code id), read off the
+  // on-disk transcript, to rehydrate a respawned/restored structured chat view.
+  getTranscriptEvents: (ccConversationId: string) =>
+    ipcRenderer.invoke("transcript:get-events", ccConversationId),
+
+  // BO-7 — a native-mapped slash command (e.g. /config, /resume) fired an app
+  // affordance instead of being sent to Claude. Per-instance unsubscribe so the
+  // App listener can be torn down cleanly.
+  onUiSlashCommand: (
+    callback: (payload: { command: string; terminalId: string }) => void,
+  ) => {
+    const handler = (_e: unknown, payload: { command: string; terminalId: string }) =>
+      callback(payload)
+    ipcRenderer.on("ui:slash-command", handler)
+    return () => ipcRenderer.removeListener("ui:slash-command", handler)
+  },
+
+  // BO-3 — permission gate. onPermissionRequest/onPermissionResolved mirror
+  // onStreamEvent's per-instance unsubscribe so usePermissions can tear down on
+  // unmount without clobbering siblings. resolvePermission returns whether a
+  // pending request was actually resolved.
+  onPermissionRequest: (callback: (req: PermissionRequest) => void) => {
+    const handler = (_e: unknown, req: PermissionRequest) => callback(req)
+    ipcRenderer.on(PERMISSION_REQUEST_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(PERMISSION_REQUEST_CHANNEL, handler)
+  },
+  onPermissionResolved: (callback: (id: string) => void) => {
+    const handler = (_e: unknown, id: string) => callback(id)
+    ipcRenderer.on(PERMISSION_RESOLVED_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(PERMISSION_RESOLVED_CHANNEL, handler)
+  },
+  resolvePermission: (id: string, decision: PermissionDecision) =>
+    ipcRenderer.invoke("permission:resolve", id, decision),
+  // CAPP-49 — per-instance disposer (mirrors onTerminalState) so a subscriber (e.g.
+  // useGeneratingTerminals, which prunes a respawned/killed id from the busy set on
+  // exit) can tear down its own handler without a removeAllListeners clobbering it.
+  onSessionExit: (callback: (id: string) => void) => {
+    const handler = (_e: unknown, id: string) => callback(id)
+    ipcRenderer.on("terminal:exit", handler)
+    return () => ipcRenderer.removeListener("terminal:exit", handler)
+  },
   onSessionCreated: (callback: (session: any) => void) =>
     ipcRenderer.on("terminal:created", (_e, session) => callback(session)),
-  onSessionState: (callback: (id: string, state: string) => void) =>
-    ipcRenderer.on("terminal:state", (_e, id, state) => callback(id, state)),
+  // BO-10 — per-instance disposer (mirrors onStreamEvent) so multiple subscribers
+  // can share the terminal:state channel without a removeAllListeners clobbering
+  // each other. usePanels (overview refresh) AND useAgentBusy (composer Stop/Send
+  // gating) both subscribe; each tears down only its own handler.
+  onTerminalState: (callback: (id: string, state: string) => void) => {
+    const handler = (_e: unknown, id: string, state: string) => callback(id, state)
+    ipcRenderer.on("terminal:state", handler)
+    return () => ipcRenderer.removeListener("terminal:state", handler)
+  },
   onSessionRenamed: (callback: (id: string, newName: string) => void) =>
     ipcRenderer.on("terminal:renamed", (_e, id, newName) => callback(id, newName)),
 

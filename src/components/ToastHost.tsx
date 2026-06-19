@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { TOAST_EVENT } from "../lib/toast"
 
 export interface ToastState {
   id: string
@@ -36,7 +37,9 @@ export default function ToastHost() {
   }
 
   useEffect(() => {
-    window.api.onNotificationShow((toast: ToastState) => {
+    // Shared add path for both IPC-driven and renderer-local toasts: dedupe by
+    // id, then schedule auto-dismiss unless the toast is sticky (timeout 0).
+    const addToast = (toast: ToastState) => {
       setToasts((prev) => [...prev.filter((t) => t.id !== toast.id), toast])
       if (toast.timeout > 0) {
         const timer = setTimeout(() => {
@@ -45,16 +48,25 @@ export default function ToastHost() {
         }, toast.timeout)
         timers.current.set(toast.id, timer)
       }
-    })
+    }
+
+    window.api.onNotificationShow(addToast)
 
     window.api.onNotificationDismiss((id: string) => {
       setToasts((prev) => prev.filter((t) => t.id !== id))
     })
 
+    // Renderer-local toasts (src/lib/toast.ts) arrive as a DOM CustomEvent.
+    const onLocalToast = (e: Event) => {
+      addToast((e as CustomEvent<ToastState>).detail)
+    }
+    window.addEventListener(TOAST_EVENT, onLocalToast)
+
     const pending = timers.current
     return () => {
       window.api.removeAllListeners("notification:show")
       window.api.removeAllListeners("notification:dismiss")
+      window.removeEventListener(TOAST_EVENT, onLocalToast)
       pending.forEach((t) => clearTimeout(t))
       pending.clear()
     }

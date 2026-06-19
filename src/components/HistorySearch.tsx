@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react"
+import { useFocusTrap } from "../hooks/useFocusTrap"
 
 export interface OutputMatch {
   sessionId: string
@@ -23,6 +24,8 @@ export default function HistorySearch({ open, onClose, onSelectSession }: Props)
   const [searching, setSearching] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(panelRef, open)
 
   useEffect(() => {
     if (open) {
@@ -100,7 +103,14 @@ export default function HistorySearch({ open, onClose, onSelectSession }: Props)
 
   return (
     <div className="cmdk-overlay" onMouseDown={onClose}>
-      <div className="cmdk-panel history-panel" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        ref={panelRef}
+        className="cmdk-panel history-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search session history"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="cmdk-input-row">
           <span className="cmdk-prompt">⌕</span>
           <input
