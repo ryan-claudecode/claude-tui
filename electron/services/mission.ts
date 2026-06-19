@@ -106,6 +106,13 @@ export interface Mission {
    *  its work is review-gated before merge. Default off — non-isolated missions
    *  are byte-identical to the pre-WW-2 flow. */
   isolateWorkers?: boolean
+  /**
+   * WS-C — the workspace this mission is scoped to, stamped at mint time from the
+   * active workspace (undefined when "All" mode is active). OPTIONAL/additive: old
+   * persisted missions predate the field and load with `workspaceId === undefined`
+   * (→ the "All" bucket), so no migration / schemaVersion bump is needed.
+   */
+  workspaceId?: string
   conductorSessionId?: string
   resumeAt?: number
   tasks: MissionTask[]
@@ -148,6 +155,15 @@ export interface MissionServiceOpts {
   /** WW-2 worktree primitives. Default: a real `WorktreeService`. Tests inject a
    *  fake with scripted clean/conflict results — real git stays in worktree.test.ts. */
   worktree?: WorktreeLike
+  /**
+   * WS-C — active-workspace getter, stamped onto every freshly-minted mission
+   * (default = active workspace id, undefined in "All" mode). Injected as a
+   * callback (not the WorkspaceService) to keep this service decoupled +
+   * testable; `ipc.ts` wires it to `workspaceService.getActiveId()`. Absent →
+   * every mission is untagged (the "All" bucket), so existing call sites/tests
+   * are unaffected.
+   */
+  getActiveWorkspaceId?: () => string | null | undefined
 }
 
 export class MissionService {
@@ -159,6 +175,8 @@ export class MissionService {
   private usageBackoffMs: number
   private notify?: (text: string, level?: string) => void
   private worktree: WorktreeLike
+  /** WS-C — active-workspace getter, stamped onto every freshly-minted mission. */
+  private getActiveWorkspaceId: () => string | null | undefined
   private missions = new Map<string, Mission>()
   private timer: ReturnType<typeof setInterval> | null = null
   private eventListeners = new Set<(e: MissionServiceEvent) => void>()
@@ -172,6 +190,7 @@ export class MissionService {
     this.usageBackoffMs = opts.usageBackoffMs ?? 60 * 60_000
     this.notify = opts.notify
     this.worktree = opts.worktree ?? new WorktreeService()
+    this.getActiveWorkspaceId = opts.getActiveWorkspaceId ?? (() => undefined)
     this.loadAll()
     this.reapOrphanWorktrees()
   }
@@ -272,11 +291,17 @@ export class MissionService {
       throw new Error(`Cannot isolate workers: ${cwd} is not a git repository (worktree isolation requires git).`)
     }
     const t = this.now()
+    // WS-C — stamp the active workspace at mint time (default = active workspace
+    // id). When no workspace is active ("All" mode), leave `workspaceId` UNSET via
+    // the conditional spread (undefined → the "All" bucket) so the persisted JSON
+    // is additive/byte-identical to the pre-WS-C shape for untagged missions.
+    const activeWorkspaceId = this.getActiveWorkspaceId() ?? undefined
     const m: Mission = {
       id: `mission-${t}-${Math.random().toString(36).slice(2, 8)}`,
       goal, cwd, autonomy,
       status: "planning",
       ...(isolateWorkers ? { isolateWorkers: true } : {}),
+      ...(activeWorkspaceId ? { workspaceId: activeWorkspaceId } : {}),
       tasks: [], workers: [], eventLog: [],
       createdAt: t, updatedAt: t,
     }

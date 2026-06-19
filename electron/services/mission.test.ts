@@ -167,6 +167,56 @@ describe("MissionService create/get/list", () => {
   })
 })
 
+describe("MissionService workspace scoping (WS-C)", () => {
+  it("stamps the active workspace id on a mission created while a workspace is active", () => {
+    const svc = new MissionService(fakeDriver(), { dir, getActiveWorkspaceId: () => "ws-42" })
+    const m = svc.create("g", "/r")
+    expect(m.workspaceId).toBe("ws-42")
+    // persisted inside the versioned envelope
+    const onDisk = JSON.parse(readFileSync(join(dir, `${m.id}.json`), "utf-8"))
+    expect(onDisk.data.workspaceId).toBe("ws-42")
+  })
+
+  it("leaves workspaceId UNSET when no workspace is active ('All' mode)", () => {
+    const svc = new MissionService(fakeDriver(), { dir, getActiveWorkspaceId: () => null })
+    const m = svc.create("g", "/r")
+    expect(m.workspaceId).toBeUndefined()
+    // the field is omitted from the persisted JSON (additive/byte-clean)
+    const onDisk = JSON.parse(readFileSync(join(dir, `${m.id}.json`), "utf-8"))
+    expect("workspaceId" in onDisk.data).toBe(false)
+  })
+
+  it("defaults to UNSET when no getActiveWorkspaceId is injected (existing call sites unaffected)", () => {
+    const svc = new MissionService(fakeDriver(), { dir })
+    expect(svc.create("g", "/r").workspaceId).toBeUndefined()
+  })
+
+  it("the stamped workspaceId survives a fresh service load (persists across reload)", () => {
+    const a = new MissionService(fakeDriver(), { dir, now: () => 1000, getActiveWorkspaceId: () => "ws-7" })
+    const m = a.create("g", "/r")
+    const b = new MissionService(fakeDriver(), { dir, now: () => 2000 })
+    expect(b.get(m.id)?.workspaceId).toBe("ws-7")
+  })
+
+  it("loads an OLD persisted mission that predates workspaceId cleanly (→ undefined / 'All' bucket)", () => {
+    const legacy = {
+      id: "legacy-no-ws-mission",
+      goal: "old goal",
+      cwd: "/r",
+      autonomy: "hands-off",
+      status: "running",
+      tasks: [],
+      workers: [],
+      eventLog: [],
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+    writeFileSync(join(dir, "legacy-no-ws-mission.json"), JSON.stringify(legacy, null, 2))
+    const svc = new MissionService(fakeDriver(), { dir, now: () => 2000 })
+    expect(svc.get("legacy-no-ws-mission")?.workspaceId).toBeUndefined()
+  })
+})
+
 describe("MissionService plan", () => {
   it("adds tasks and flips planning -> running", () => {
     const svc = new MissionService(fakeDriver(), { dir })

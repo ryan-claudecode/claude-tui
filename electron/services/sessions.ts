@@ -124,6 +124,16 @@ export interface SessionServiceOpts {
   dir?: string
   now?: () => number
   idleFlushGraceMs?: number
+  /**
+   * WS-C — data-scoping seam. A getter returning the CURRENTLY-ACTIVE workspace id
+   * (or null/undefined when "All" mode), so a session minted while a workspace is
+   * active is stamped with it. Injected as a callback (not the WorkspaceService
+   * itself) to keep this service decoupled + testable — the same posture
+   * MissionService/AttentionService use for their cross-service deps. `ipc.ts`
+   * wires it to `workspaceService.getActiveId()`. Absent → every session is
+   * untagged (the "All" bucket), so existing call sites/tests are unaffected.
+   */
+  getActiveWorkspaceId?: () => string | null | undefined
 }
 
 /** Persistence schema version. v1 = today's WorkSession shape verbatim. */
@@ -205,11 +215,14 @@ export class SessionService {
   private lastFlushAt = new Map<string, number>()
   private readonly idleFlushMinIntervalMs = 60_000
   private idleFlushGraceMs: number
+  /** WS-C — active-workspace getter, stamped onto every freshly-minted session. */
+  private getActiveWorkspaceId: () => string | null | undefined
 
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
     this.now = opts.now ?? (() => Date.now())
     this.idleFlushGraceMs = opts.idleFlushGraceMs ?? 20000
+    this.getActiveWorkspaceId = opts.getActiveWorkspaceId ?? (() => undefined)
   }
 
   attachTerminals(terminals: TerminalLike): void {
@@ -782,10 +795,17 @@ export class SessionService {
 
   create(): WorkSession {
     const t = this.now()
+    // WS-C — stamp the active workspace at mint time so the session is scoped to
+    // it (default = active workspace id). When no workspace is active ("All"
+    // mode), leave `workspaceId` UNSET (undefined → the "All" bucket): the field
+    // is additive/optional, so an untagged session persists + reloads cleanly and
+    // is byte-identical to the pre-WS-C shape.
+    const activeWorkspaceId = this.getActiveWorkspaceId() ?? undefined
     const s: WorkSession = {
       id: `session-${t}-${Math.random().toString(36).slice(2, 8)}`,
       name: "Untitled session",
       status: "active",
+      ...(activeWorkspaceId ? { workspaceId: activeWorkspaceId } : {}),
       summary: "",
       notes: [],
       provisionalFindings: [],

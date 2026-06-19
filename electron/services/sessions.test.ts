@@ -82,6 +82,60 @@ describe("SessionService persistence", () => {
   })
 })
 
+describe("SessionService workspace scoping (WS-C)", () => {
+  it("stamps the active workspace id on a session created while a workspace is active", () => {
+    const svc = new SessionService({ dir, now: () => 1000, getActiveWorkspaceId: () => "ws-42" })
+    const s = svc.create()
+    expect(s.workspaceId).toBe("ws-42")
+    // persisted inside the versioned envelope
+    const stored = JSON.parse(readFileSync(join(dir, `${s.id}.json`), "utf-8")).data
+    expect(stored.workspaceId).toBe("ws-42")
+  })
+
+  it("leaves workspaceId UNSET when no workspace is active ('All' mode)", () => {
+    const svc = new SessionService({ dir, now: () => 1000, getActiveWorkspaceId: () => null })
+    const s = svc.create()
+    expect(s.workspaceId).toBeUndefined()
+    // the field is omitted from the persisted JSON (additive/byte-clean)
+    const stored = JSON.parse(readFileSync(join(dir, `${s.id}.json`), "utf-8")).data
+    expect("workspaceId" in stored).toBe(false)
+  })
+
+  it("defaults to UNSET when no getActiveWorkspaceId is injected (existing call sites unaffected)", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    expect(s.workspaceId).toBeUndefined()
+  })
+
+  it("the stamped workspaceId survives a fresh service load (persists across reload)", () => {
+    const a = new SessionService({ dir, now: () => 1000, getActiveWorkspaceId: () => "ws-7" })
+    const s = a.create()
+    const b = new SessionService({ dir, now: () => 2000 })
+    b.load()
+    expect(b.get(s.id)!.workspaceId).toBe("ws-7")
+  })
+
+  it("loads an OLD persisted session that predates workspaceId cleanly (→ undefined / 'All' bucket)", () => {
+    // A legacy on-disk session with no workspaceId field at all.
+    const legacy = {
+      id: "legacy-no-ws",
+      name: "Old session",
+      status: "active",
+      summary: "",
+      notes: [],
+      provisionalFindings: [],
+      terminals: [],
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+    writeFileSync(join(dir, "legacy-no-ws.json"), JSON.stringify(legacy, null, 2))
+    const svc = new SessionService({ dir, now: () => 2000 })
+    svc.load()
+    const loaded = svc.get("legacy-no-ws")!
+    expect(loaded.workspaceId).toBeUndefined()
+  })
+})
+
 describe("SessionService terminals", () => {
   it("addTerminal stores a TerminalRef and persists", () => {
     const svc = new SessionService({ dir, now: () => 1000 })

@@ -48,8 +48,17 @@ export const uiService = new UiService()
 export const companionService = new CompanionService()
 export const missionService = new MissionService(sessionService, {
   notify: (text, level) => notificationService.notify(text, level as any),
+  // WS-C — stamp the active workspace onto each freshly-minted mission. A getter
+  // (not the WorkspaceService itself) keeps MissionService decoupled + testable.
+  // workspaceService is constructed above, so this closure is safe.
+  getActiveWorkspaceId: () => workspaceService.getActiveId(),
 })
-export const workSessionService = new SessionService()
+// WS-C — scope work sessions to the active workspace: the durable container is
+// stamped at create() time via this getter (undefined in "All" mode). Same
+// callback-injection posture as missionService above.
+export const workSessionService = new SessionService({
+  getActiveWorkspaceId: () => workspaceService.getActiveId(),
+})
 
 /**
  * The attention queue (AQ-1). Constructed in setupIpc once the main window
