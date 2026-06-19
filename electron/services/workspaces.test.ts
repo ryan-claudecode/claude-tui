@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from "fs"
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, statSync } from "fs"
 import { tmpdir } from "os"
-import { join } from "path"
-import { WorkspaceService } from "./workspaces"
+import { join, resolve } from "path"
+import { WorkspaceService, canonSeedDir } from "./workspaces"
 import type { TerminalService, TerminalInfo } from "./terminals"
 
 /**
@@ -200,7 +200,10 @@ describe("WorkspaceService discovery seeding", () => {
     expect(existsSync(join(wsDir, "workspace.json"))).toBe(true)
   })
 
-  it("discovery refreshes a seeded entry's name in place on re-scan", () => {
+  it("discovery is SEED-ONCE for user fields: a re-scan never reverts a rename", () => {
+    // Seed-once policy (registry is the source of truth): once an entry exists,
+    // discovery must NEVER overwrite the user-owned `name`, even if the manifest
+    // on disk later disagrees. (Pre-fix this clobbered the rename on next boot.)
     const dir = join(root, "ws-renamed")
     seedManifest(dir, { name: "First", repos: [] })
     const pattern = join(root, "ws-*")
@@ -208,12 +211,153 @@ describe("WorkspaceService discovery seeding", () => {
     s.discover([pattern])
     const id = s.list()[0].id
     expect(s.list()[0].name).toBe("First")
-    // rewrite the manifest with a new name, re-scan
-    seedManifest(dir, { name: "Second", repos: [] })
+
+    // User renames the imported workspace via the registry API.
+    s.rename(id, "UserName")
+
+    // Re-scan the UNCHANGED manifest (still "First"): the name STAYS "UserName".
     s.discover([pattern])
     expect(s.list()).toHaveLength(1)
     expect(s.list()[0].id).toBe(id)
-    expect(s.list()[0].name).toBe("Second")
+    expect(s.list()[0].name).toBe("UserName")
+
+    // Even if the manifest is rewritten with a different name, discovery still
+    // does not clobber the user-owned name.
+    seedManifest(dir, { name: "Second", repos: [] })
+    s.discover([pattern])
+    expect(s.list()[0].name).toBe("UserName")
+
+    // Survives a fresh load from disk too.
+    expect(svc().get(id)?.name).toBe("UserName")
+  })
+
+  it("discovery preserves a user's addDir on a re-scan (dirs are user-owned)", () => {
+    const dir = join(root, "ws-dirs")
+    seedManifest(dir, { name: "Imported", repos: [{ name: "api", path: "/repo/api", open_on_boot: false }] })
+    const pattern = join(root, "ws-*")
+    const s = svc()
+    s.discover([pattern])
+    const id = s.list()[0].id
+    expect(s.get(id)?.dirs).toEqual(["/repo/api"])
+
+    // User adds a dir via the registry API.
+    s.addDir(id, "/extra")
+    expect(s.get(id)?.dirs).toEqual(["/repo/api", "/extra"])
+
+    // Re-scan the unchanged manifest — the extra dir is PRESERVED, not reverted.
+    s.discover([pattern])
+    expect(s.get(id)?.dirs).toEqual(["/repo/api", "/extra"])
+    expect(svc().get(id)?.dirs).toEqual(["/repo/api", "/extra"])
+  })
+
+  it("a brand-new manifest still seeds fully (name + dirs from the manifest)", () => {
+    seedManifest(join(root, "ws-new"), {
+      name: "Fresh",
+      repos: [{ name: "web", path: "/repo/web", open_on_boot: false }],
+    })
+    const s = svc()
+    s.discover([join(root, "ws-*")])
+    expect(s.list()).toHaveLength(1)
+    expect(s.list()[0].name).toBe("Fresh")
+    expect(s.list()[0].dirs).toEqual(["/repo/web"])
+  })
+
+  it("a steady-state re-discover (unchanged manifests) does ZERO writes", () => {
+    const dir = join(root, "ws-steady")
+    seedManifest(dir, {
+      name: "Steady",
+      editor: "code",
+      repos: [{ name: "api", path: "/repo/api", open_on_boot: false }],
+    })
+    const pattern = join(root, "ws-*")
+    const s = svc()
+    s.discover([pattern])
+    const id = s.list()[0].id
+    const updatedAt = s.get(id)!.updatedAt
+    const mtimeBefore = statSync(file).mtimeMs
+
+    // A later boot with the identical manifest must not bump updatedAt nor
+    // re-persist the registry file.
+    clock = 999999
+    s.discover([pattern])
+    expect(s.get(id)!.updatedAt).toBe(updatedAt)
+    expect(statSync(file).mtimeMs).toBe(mtimeBefore)
+  })
+
+  it("re-discover refreshes manifest-owned seedEditor on a REAL delta only", () => {
+    const dir = join(root, "ws-editor")
+    seedManifest(dir, { name: "Ed", editor: "code", repos: [] })
+    const pattern = join(root, "ws-*")
+    const s = svc()
+    s.discover([pattern])
+    const id = s.list()[0].id
+    const before = s.get(id)!.updatedAt
+
+    // Change the manifest's editor — a manifest-owned field — and re-scan.
+    clock = 7000
+    seedManifest(dir, { name: "Ed", editor: "vim", repos: [] })
+    s.discover([pattern])
+    // updatedAt bumped because a manifest-owned field genuinely changed.
+    expect(s.get(id)!.updatedAt).toBe(7000)
+    expect(s.get(id)!.updatedAt).not.toBe(before)
+  })
+
+  it("canonSeedDir collapses drive-letter case on win32 (no-op elsewhere)", () => {
+    if (process.platform === "win32") {
+      expect(canonSeedDir("c:\\projects\\demo")).toBe("C:\\projects\\demo")
+      expect(canonSeedDir("C:\\projects\\demo")).toBe("C:\\projects\\demo")
+      // Same target, two spellings → one canonical key.
+      expect(canonSeedDir("c:\\projects\\demo")).toBe(canonSeedDir("C:\\projects\\demo"))
+    } else {
+      // POSIX has no drive letter; the canonicalizer is an identity function.
+      expect(canonSeedDir("/projects/demo")).toBe("/projects/demo")
+    }
+  })
+
+  it("a re-scan whose seedDir spelling differs only by drive-letter case does NOT duplicate", () => {
+    // The manifest dir `discover()` resolves uses whatever case the real temp
+    // dir has. Hand-write an existing registry entry whose stored seedDir is the
+    // OPPOSITE drive-letter case of that resolved dir, so the only thing letting
+    // the re-scan match it is the canonicalized de-dup key.
+    const wsDir = seedManifest(join(root, "ws-case"), { name: "Cased", repos: [] })
+    const resolvedDir = resolve(wsDir)
+    // Flip the drive-letter case of the stored seedDir (win32 only — POSIX has
+    // no drive letter, so there the two spellings are identical and this still
+    // exercises the in-place-update path).
+    const flipped =
+      process.platform === "win32"
+        ? resolvedDir.replace(/^([A-Za-z]):/, (_m, d: string) =>
+            d === d.toUpperCase() ? `${d.toLowerCase()}:` : `${d.toUpperCase()}:`,
+          )
+        : resolvedDir
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        data: {
+          workspaces: [
+            {
+              id: "ws-pre",
+              name: "Cased",
+              dirs: [resolvedDir],
+              createdAt: 1,
+              updatedAt: 1,
+              seedDir: flipped,
+              seedRepos: [],
+              seedEditor: "code",
+            },
+          ],
+          activeWorkspaceId: null,
+        },
+      }),
+    )
+    const s = svc()
+    expect(s.list()).toHaveLength(1)
+    s.discover([join(root, "ws-*")])
+    // Still exactly one entry — the differently-cased seedDir matched the
+    // canonical key instead of minting a duplicate.
+    expect(s.list()).toHaveLength(1)
+    expect(s.list()[0].id).toBe("ws-pre")
   })
 
   it("a manifest with no repos seeds its own dir as the workspace dir", () => {
@@ -230,6 +374,33 @@ describe("WorkspaceService discovery seeding", () => {
     s.discover([join(root, "ws-*")])
     expect(s.list()).toHaveLength(2)
     expect(s.get(manual.id)?.name).toBe("Manual")
+  })
+
+  it("listPublic strips the internal seed* fields (no leak across MCP)", () => {
+    seedManifest(join(root, "ws-pub"), {
+      name: "Imported",
+      editor: "code",
+      repos: [{ name: "api", path: "/repo/api", open_on_boot: true }],
+    })
+    const s = svc()
+    s.discover([join(root, "ws-*")])
+
+    // The internal model still carries the seed* boot fields...
+    const internal = s.list()[0]
+    expect(internal.seedDir).toBeDefined()
+    expect(internal.seedRepos).toBeDefined()
+    expect(internal.seedEditor).toBe("code")
+
+    // ...but the public projection exposes ONLY the registry-owned fields.
+    const pub = s.listPublic()[0] as unknown as Record<string, unknown>
+    expect(Object.keys(pub).sort()).toEqual(
+      ["color", "createdAt", "dirs", "id", "name", "updatedAt"].sort(),
+    )
+    expect("seedDir" in pub).toBe(false)
+    expect("seedRepos" in pub).toBe(false)
+    expect("seedEditor" in pub).toBe(false)
+    expect(pub.name).toBe("Imported")
+    expect(pub.dirs).toEqual(["/repo/api"])
   })
 })
 
@@ -258,6 +429,30 @@ describe("WorkspaceService load resilience", () => {
     const s = svc()
     expect(s.list()).toEqual([])
     expect(s.getActiveId()).toBeNull()
+  })
+
+  it("normalizes a partial entry missing `dirs` so addDir/removeDir don't crash", () => {
+    // A persisted/hand-edited entry with a valid id but no `dirs` array must
+    // load as a usable workspace (dirs defaulted to []), not a landmine that
+    // throws on the first mutator.
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        data: {
+          workspaces: [{ id: "ws-partial" }],
+          activeWorkspaceId: null,
+        },
+      }),
+    )
+    const s = svc()
+    expect(s.get("ws-partial")?.dirs).toEqual([])
+    // The first addDir succeeds instead of throwing on `undefined.includes`.
+    expect(() => s.addDir("ws-partial", "/added")).not.toThrow()
+    expect(s.get("ws-partial")?.dirs).toEqual(["/added"])
+    // removeDir is likewise safe.
+    expect(() => s.removeDir("ws-partial", "/added")).not.toThrow()
+    expect(s.get("ws-partial")?.dirs).toEqual([])
   })
 })
 

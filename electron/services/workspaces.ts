@@ -4,7 +4,6 @@ import { homedir } from "node:os"
 import { discoverWorkspaces, type DiscoveredManifest, type WorkspaceRepo } from "../workspace/discovery"
 import type { TerminalService, TerminalInfo } from "./terminals"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
-import { logWarn } from "../log"
 
 /**
  * The durable workspace MODEL (WS-A). A workspace is a user-named grouping of
@@ -39,6 +38,21 @@ export interface Workspace {
 }
 
 /**
+ * The PUBLIC projection of a workspace — the registry-owned, user-facing fields
+ * only. The internal `seed*` fields (`seedDir`/`seedRepos`/`seedEditor`) are
+ * boot/import plumbing and MUST NOT leak across the MCP surface
+ * (`list_workspaces` / `get_app_state`), so `listPublic()` returns this shape.
+ */
+export interface PublicWorkspace {
+  id: string
+  name: string
+  dirs: string[]
+  color?: string
+  createdAt: number
+  updatedAt: number
+}
+
+/**
  * The on-disk registry payload. `activeWorkspaceId` lives as a TOP-LEVEL field
  * of this one cohesive durable store (NOT a separate file and NOT in the
  * versioned config) so the registry + the active selection load/save atomically
@@ -54,6 +68,46 @@ interface WorkspaceRegistry {
  *  starts at its OWN 1 (independent of the missions/sessions stores). */
 const SCHEMA_VERSION = 1
 const MIGRATIONS: Migration[] = []
+
+/** Strip the internal `seed*` fields from a stored workspace, yielding the
+ *  public, registry-owned projection. */
+function toPublic(ws: Workspace): PublicWorkspace {
+  return {
+    id: ws.id,
+    name: ws.name,
+    dirs: ws.dirs,
+    color: ws.color,
+    createdAt: ws.createdAt,
+    updatedAt: ws.updatedAt,
+  }
+}
+
+/**
+ * Canonicalize a manifest dir for use as the seedDir de-dup key. On win32 the
+ * drive letter's case is not significant (`c:\` and `C:\` are the same path),
+ * yet `path.resolve` preserves whatever case the scan glob produced — so a
+ * config spelling change between scans would otherwise mint a duplicate entry.
+ * Upper-casing the leading `<letter>:` collapses those spellings to one key.
+ * KNOWN LIMITATION: this does NOT resolve junctions/symlinks or `8.3` short
+ * names — two genuinely different spellings of the same target still dup.
+ */
+export function canonSeedDir(dir: string): string {
+  return process.platform === "win32"
+    ? dir.replace(/^([a-z]):/, (_m, d: string) => `${d.toUpperCase()}:`)
+    : dir
+}
+
+/** Structural equality for the manifest-owned `seedRepos` metadata, so discovery
+ *  only re-persists when the repo list genuinely changed (not on every boot). */
+function sameRepos(a: WorkspaceRepo[] | undefined, b: WorkspaceRepo[] | undefined): boolean {
+  const x = a ?? []
+  const y = b ?? []
+  if (x.length !== y.length) return false
+  return x.every((r, i) => {
+    const s = y[i]
+    return r.name === s.name && r.path === s.path && r.open_on_boot === s.open_on_boot
+  })
+}
 
 /**
  * Registry-backed, persisted workspace container service. Reworked from the
@@ -81,7 +135,19 @@ export class WorkspaceService {
     const reg = loadVersioned<WorkspaceRegistry>(this.file, SCHEMA_VERSION, MIGRATIONS)
     if (!reg || !Array.isArray(reg.workspaces)) return
     for (const ws of reg.workspaces) {
-      if (ws && typeof ws.id === "string") this.workspaces.set(ws.id, ws)
+      if (!ws || typeof ws.id !== "string") continue
+      // Normalize each admitted entry so a persisted/hand-edited record that is
+      // missing fields can't crash a later mutator: `addDir`/`removeDir` assume
+      // `dirs` is an array (`.includes`/`.filter`), and `list()` sorts on the
+      // timestamps. Default the user-facing fields rather than rejecting the row.
+      const t = this.now()
+      this.workspaces.set(ws.id, {
+        ...ws,
+        name: typeof ws.name === "string" ? ws.name : "",
+        dirs: Array.isArray(ws.dirs) ? ws.dirs : [],
+        createdAt: typeof ws.createdAt === "number" ? ws.createdAt : t,
+        updatedAt: typeof ws.updatedAt === "number" ? ws.updatedAt : t,
+      })
     }
     // Only honor a persisted active id that still resolves to a real workspace.
     this.activeWorkspaceId =
@@ -108,6 +174,12 @@ export class WorkspaceService {
 
   list(): Workspace[] {
     return Array.from(this.workspaces.values()).sort((a, b) => a.createdAt - b.createdAt)
+  }
+
+  /** Public, registry-owned projection of `list()` — strips the internal `seed*`
+   *  boot/import fields so they don't leak across the MCP surface. */
+  listPublic(): PublicWorkspace[] {
+    return this.list().map(toPublic)
   }
 
   get(id: string): Workspace | undefined {
@@ -191,32 +263,52 @@ export class WorkspaceService {
 
   /**
    * Scan `scanPaths` for `workspace.json` manifests and SEED them into the
-   * registry. A manifest is keyed by its absolute dir (`seedDir`): if no entry
-   * already represents that dir, it becomes a new registry entry; if one does,
-   * its name/dirs/repo metadata are refreshed in place. So a re-scan NEVER
-   * duplicates a previously-seeded workspace. Hand-created workspaces (no
-   * `seedDir`) are untouched. Persists once if anything changed.
+   * registry. A manifest is keyed by its canonicalized absolute dir
+   * (`canonSeedDir(seedDir)`): if no entry already represents that dir, it
+   * becomes a new registry entry (a full one-time seed); if one does, the seed
+   * is SEED-ONCE for the user-owned fields.
+   *
+   * SEED-ONCE POLICY (zero data-loss — the registry is the source of truth):
+   *  - `name` + `dirs` are USER-OWNED once an entry exists. Discovery NEVER
+   *    refreshes them, so a user's rename()/addDir()/removeDir() on an imported
+   *    workspace survives every subsequent boot/re-scan. (Pre-fix this branch
+   *    overwrote them from the manifest, silently reverting user edits.)
+   *  - `seedRepos` + `seedEditor` are MANIFEST-OWNED boot metadata (they drive
+   *    the legacy `activate()` editor-spawn and are NOT user-editable via the
+   *    registry API), so they MAY be refreshed — but ONLY when they actually
+   *    differ from the stored value, so a steady-state re-discover (unchanged
+   *    manifests) performs ZERO writes and never bumps `updatedAt`.
+   *
+   * So a re-scan NEVER duplicates a previously-seeded workspace and NEVER
+   * clobbers user edits. Hand-created workspaces (no `seedDir`) are untouched.
+   * A manifest disappearing from disk is deliberately IGNORED here — discovery
+   * only adds/refreshes, never deletes; the registry is the source of truth, so
+   * a vanished manifest leaves its registry entry intact (no auto-delete).
+   * Persists once, and only if something actually changed.
    */
   discover(scanPaths: string[]): void {
     const manifests = discoverWorkspaces(scanPaths)
     const bySeedDir = new Map<string, Workspace>()
     for (const ws of this.workspaces.values()) {
-      if (ws.seedDir) bySeedDir.set(ws.seedDir, ws)
+      if (ws.seedDir) bySeedDir.set(canonSeedDir(ws.seedDir), ws)
     }
 
     let changed = false
     for (const m of manifests) {
-      const existing = bySeedDir.get(m.dir)
+      const key = canonSeedDir(m.dir)
+      const existing = bySeedDir.get(key)
       if (existing) {
-        // Refresh the seeded fields in place — keyed by the stable seedDir, so
-        // no duplicate is ever minted for a re-encountered manifest.
-        existing.name = m.name
-        existing.dirs = this.manifestDirs(m)
-        existing.seedRepos = m.repos
-        existing.seedEditor = m.editor
-        existing.updatedAt = this.now()
-        changed = true
+        // Seed-once: leave user-owned name/dirs alone. Only refresh the
+        // manifest-owned boot metadata, and only on a REAL delta — so an
+        // unchanged manifest is a no-op (no persist, no updatedAt bump).
+        if (!sameRepos(existing.seedRepos, m.repos) || existing.seedEditor !== m.editor) {
+          existing.seedRepos = m.repos
+          existing.seedEditor = m.editor
+          existing.updatedAt = this.now()
+          changed = true
+        }
       } else {
+        // New (unseen) manifest → full one-time seed.
         const t = this.now()
         const ws: Workspace = {
           id: this.mintId(),
@@ -224,12 +316,14 @@ export class WorkspaceService {
           dirs: this.manifestDirs(m),
           createdAt: t,
           updatedAt: t,
-          seedDir: m.dir,
+          // Store the canonicalized dir so the de-dup key is stable across
+          // reloads regardless of the drive-letter case a scan produced.
+          seedDir: key,
           seedRepos: m.repos,
           seedEditor: m.editor,
         }
         this.workspaces.set(ws.id, ws)
-        bySeedDir.set(m.dir, ws)
+        bySeedDir.set(key, ws)
         changed = true
       }
     }

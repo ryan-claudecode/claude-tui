@@ -27,10 +27,16 @@ export function registerAppTools(
   shellService: ShellService,
   identity: TerminalIdentity = {},
 ) {
-  server.tool("list_workspaces", "List discovered ClaudeTUI workspaces", {}, async () => {
-    const list = workspaces.list()
-    return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
-  })
+  server.tool(
+    "list_workspaces",
+    "List ClaudeTUI workspaces from the durable registry. A workspace is a user-named grouping of one-or-more directories (registry-owned, not just whatever was discovered on disk) — entries created by the user or seeded once from a workspace.json manifest.",
+    {},
+    async () => {
+      // Public projection only — never leak the internal seed* boot fields.
+      const list = workspaces.listPublic()
+      return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
+    },
+  )
 
   server.tool(
     "activate_workspace",
@@ -67,7 +73,7 @@ export function registerAppTools(
     "Get current ClaudeTUI application state (sessions, workspaces, window info)",
     {},
     async () => {
-      const state = appService.getAppState(sessions.list(), workspaces.list())
+      const state = appService.getAppState(sessions.list(), workspaces.listPublic())
       return { content: [{ type: "text" as const, text: JSON.stringify(state, null, 2) }] }
     },
   )
