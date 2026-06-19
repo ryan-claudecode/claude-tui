@@ -58,7 +58,7 @@ export function registerTools(
   attention: AttentionService,
   identity: TerminalIdentity = {},
 ) {
-  registerSessionTools(server, sessions, broadcast, attention, workSessions, identity)
+  registerSessionTools(server, sessions, broadcast, attention, workSessions, workspaces, identity)
   registerWorkSessionTools(server, workSessions, panels, identity)
   registerMissionTools(server, mission)
   registerPanelTools(server, panels, notes, files, sessions, identity)

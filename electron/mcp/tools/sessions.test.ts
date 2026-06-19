@@ -13,6 +13,7 @@ import {
 import { SessionService } from "../../services/sessions"
 import type { BroadcastService } from "../../services/broadcast"
 import type { AttentionService } from "../../services/attention"
+import type { WorkspaceService } from "../../services/workspaces"
 
 // Keep headless stderr warnings out of the real log dir.
 vi.mock("../../log", () => ({ logWarn: vi.fn(), logError: vi.fn() }))
@@ -59,7 +60,17 @@ function fakeServer() {
   return { server, handlers }
 }
 
-function register(terminals: TerminalService, work: SessionService) {
+/** Minimal fake WorkspaceService — create_session only ever reads the active
+ *  workspace dir off it. `activeDir` controls what getActiveWorkspaceDir returns. */
+function fakeWorkspaces(activeDir: string | null = null): WorkspaceService {
+  return { getActiveWorkspaceDir: () => activeDir } as unknown as WorkspaceService
+}
+
+function register(
+  terminals: TerminalService,
+  work: SessionService,
+  workspaces: WorkspaceService = fakeWorkspaces(),
+) {
   const { server, handlers } = fakeServer()
   registerSessionTools(
     server as any,
@@ -67,6 +78,7 @@ function register(terminals: TerminalService, work: SessionService) {
     {} as unknown as BroadcastService,
     {} as unknown as AttentionService,
     work,
+    workspaces,
   )
   return handlers
 }
@@ -114,5 +126,35 @@ describe("trigger_handoff MCP routing (BO-4a punch-list c)", () => {
     const res = await handlers["trigger_handoff"]({ id: info.id })
     expect(res.content[0].text).toBe("Handoff triggered")
     expect(ptys[0].written.join("")).toContain("/handoff")
+  })
+})
+
+describe("create_session MCP — active workspace dir default (WS-G parity with the renderer path)", () => {
+  it("with NO explicit cwd, defaults the session cwd to the active workspace dir", async () => {
+    const { svc: terminals, ptys } = makeTerminals()
+    const work = new SessionService({ dir: mkdtempSync(join(tmpdir(), "ws-g-create-")) })
+    const handlers = register(terminals, work, fakeWorkspaces("/ws/active"))
+    const res = await handlers["create_session"]({})
+    // The created terminal spawned in the active workspace dir.
+    const info = JSON.parse(res.content[0].text)
+    expect(info.cwd).toBe("/ws/active")
+    expect(ptys[0].options.cwd).toBe("/ws/active")
+  })
+
+  it("an EXPLICIT cwd always wins over the active workspace dir", async () => {
+    const { svc: terminals } = makeTerminals()
+    const work = new SessionService({ dir: mkdtempSync(join(tmpdir(), "ws-g-create-")) })
+    const handlers = register(terminals, work, fakeWorkspaces("/ws/active"))
+    const res = await handlers["create_session"]({ cwd: "/explicit/dir" })
+    expect(JSON.parse(res.content[0].text).cwd).toBe("/explicit/dir")
+  })
+
+  it("NO active workspace → falls back to the default cwd (process.cwd via TerminalService)", async () => {
+    const { svc: terminals } = makeTerminals()
+    const work = new SessionService({ dir: mkdtempSync(join(tmpdir(), "ws-g-create-")) })
+    const handlers = register(terminals, work, fakeWorkspaces(null))
+    const res = await handlers["create_session"]({})
+    // null → undefined → TerminalService.create falls back to process.cwd().
+    expect(JSON.parse(res.content[0].text).cwd).toBe(process.cwd())
   })
 })

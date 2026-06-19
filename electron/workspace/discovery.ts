@@ -2,6 +2,35 @@ import { readFileSync, globSync } from "node:fs"
 import { join, resolve } from "node:path"
 
 /**
+ * The ONE canonicalizer for a workspace dir used as a de-dup key. It MUST be
+ * applied identically everywhere a dir becomes a key — discovery's stored
+ * manifest `dir`, the scaffold/create/addDir `seedDir` bind, and `discover`'s
+ * `byListedDir`/`bySeedDir` indexes — or the keys disagree and a rescan mints a
+ * DUPLICATE workspace. It lives HERE (not in workspaces.ts) so discovery can use
+ * it without a circular import; `workspaces.ts` re-exports it.
+ *
+ * Two steps, both load-bearing:
+ *  1. `path.resolve` — normalizes separators (`/`→`\` on win32) and collapses
+ *     `.`/`..`/trailing slashes to ONE spelling. Without this, a forward-slash
+ *     dir (`C:/foo`, which the MCP create_workspace/add_workspace_dir tools pass
+ *     straight through — an LLM naturally emits POSIX slashes on Windows) or a
+ *     trailing-slash dir stored a key that MISSED discovery's backslash lookup
+ *     on rescan → duplicate. (`resolve` is idempotent on an already-resolved
+ *     absolute path, so applying it more than once is a no-op.)
+ *  2. On win32 the drive letter's case is not significant (`c:\` ≡ `C:\`), yet
+ *     `resolve` preserves whatever case the source produced, so we upper-case the
+ *     leading `<letter>:` to collapse those spellings to one key too.
+ * KNOWN LIMITATION: this does NOT resolve junctions/symlinks or `8.3` short
+ * names — two genuinely different spellings of the same target still dup.
+ */
+export function canonSeedDir(dir: string): string {
+  const abs = resolve(dir)
+  return process.platform === "win32"
+    ? abs.replace(/^([a-z]):/, (_m, d: string) => `${d.toUpperCase()}:`)
+    : abs
+}
+
+/**
  * A repo entry inside a discovered `workspace.json` manifest. Retained so the
  * existing `activate()` boot path (open editors + spawn one session per repo)
  * keeps working — the registry stores the manifest's dirs, while the boot path
@@ -56,9 +85,10 @@ export function discoverWorkspaces(scanPatterns: string[]): DiscoveredManifest[]
             path: r.path ?? "",
             open_on_boot: r.open_on_boot ?? false,
           })),
-          // Normalize to an absolute path so the de-dup key is stable regardless
-          // of how the scan glob happened to spell the directory.
-          dir: resolve(dir),
+          // Canonicalize so the de-dup key is stable regardless of how the scan
+          // glob spelled the directory (separators, trailing slash, drive case).
+          // Same canonicalizer the registry's seedDir bind + lookup use.
+          dir: canonSeedDir(dir),
         })
       } catch {
         // Skip directories without a valid workspace.json

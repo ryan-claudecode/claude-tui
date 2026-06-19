@@ -40,6 +40,7 @@ class FakeStreamProc implements ProcLike {
   private outCbs: Array<(d: string) => void> = []
   private errCbs: Array<(d: string) => void> = []
   private exitCbs: Array<(e: { code: number | null }) => void> = []
+  private spawnErrCbs: Array<(err: Error) => void> = []
 
   constructor(
     readonly file: string,
@@ -55,6 +56,9 @@ class FakeStreamProc implements ProcLike {
   }
   onExit(cb: (e: { code: number | null }) => void): void {
     this.exitCbs.push(cb)
+  }
+  onError(cb: (err: Error) => void): void {
+    this.spawnErrCbs.push(cb)
   }
   write(data: string): void {
     this.written.push(data)
@@ -74,6 +78,11 @@ class FakeStreamProc implements ProcLike {
   }
   emitExit(code: number | null = 0): void {
     for (const cb of this.exitCbs) cb({ code })
+  }
+  /** Drive an async spawn failure (e.g. ENOENT for a bad cwd) — fires INSTEAD of
+   *  exit, exactly as child_process.spawn does for a process that never started. */
+  emitError(err: Error): void {
+    for (const cb of this.spawnErrCbs) cb(err)
   }
 }
 
@@ -311,6 +320,42 @@ describe("createHeadless — needs-auth signal", () => {
     const stream = events.filter((e) => e.type === "stream") as Extract<TerminalEvent, { type: "stream" }>[]
     expect(stream.some((e) => e.event.kind === "needs_auth")).toBe(false)
     expect(events.filter((e) => e.type === "exit" && e.id === info.id)).toHaveLength(1)
+  })
+})
+
+describe("createHeadless — spawn 'error' (bad cwd) degrades gracefully (no main-process crash)", () => {
+  it("tears the terminal down (emits exit) and toasts when the spawn emits 'error' instead of 'exit'", () => {
+    const spawned: FakeStreamProc[] = []
+    const spawnProc: SpawnProc = (file, args, options) => {
+      const fake = new FakeStreamProc(file, args, options)
+      spawned.push(fake)
+      return fake
+    }
+    const toasts: Array<{ message: string; level: string }> = []
+    const svc = new TerminalService({
+      spawnProc,
+      notify: (message, level) => toasts.push({ message, level }),
+    })
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    // A bad cwd makes child_process.spawn emit 'error' (ENOENT) and NEVER 'exit'.
+    // The handler must not re-throw (which would crash the main process) — instead
+    // it routes through teardownHeadless: marks dead + emits exit, plus a toast.
+    expect(() => spawned[0].emitError(new Error("spawn ENOENT"))).not.toThrow()
+    expect(events.some((e) => e.type === "exit" && e.id === info.id)).toBe(true)
+    expect(toasts.some((t) => t.level === "error" && /spawn ENOENT/.test(t.message))).toBe(true)
+    // The terminal is gone from the live registry (degraded, not lingering).
+    expect(svc.isHeadless(info.id)).toBe(false)
+  })
+
+  it("synthAuth=false on a spawn error — a failed spawn is not reported as a needs_auth/login problem", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    svc.createHeadless("t", process.cwd())
+    spawned[0].emitError(new Error("spawn ENOENT"))
+    const stream = events.filter((e) => e.type === "stream") as Extract<TerminalEvent, { type: "stream" }>[]
+    // A spawn failure is NOT an auth failure — no needs_auth event.
+    expect(stream.some((e) => e.event.kind === "needs_auth")).toBe(false)
   })
 })
 

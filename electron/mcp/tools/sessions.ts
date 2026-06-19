@@ -4,6 +4,7 @@ import type { TerminalService } from "../../services/terminals"
 import type { BroadcastService } from "../../services/broadcast"
 import type { AttentionService } from "../../services/attention"
 import type { SessionService } from "../../services/sessions"
+import type { WorkspaceService } from "../../services/workspaces"
 import type { TerminalIdentity } from "./shared"
 
 export function registerSessionTools(
@@ -12,6 +13,7 @@ export function registerSessionTools(
   broadcast: BroadcastService,
   attention: AttentionService,
   workSessions: SessionService,
+  workspaces: WorkspaceService,
   identity: TerminalIdentity = {},
 ) {
   server.tool(
@@ -22,7 +24,14 @@ export function registerSessionTools(
       cwd: z.string().optional().describe("Working directory"),
     },
     async ({ name, cwd }) => {
-      const info = sessions.create(name, cwd)
+      // WS-G — parity with the renderer path (SessionService.openSession): when NO
+      // explicit cwd is given, default to the active workspace's primary dir so
+      // agent/MCP-created sessions also land in the active workspace ("ALL chats
+      // should spawn in that directory"). null → TerminalService falls back to its
+      // own default cwd (process.cwd()).
+      const resolvedCwd =
+        cwd && cwd.trim() ? cwd : workspaces.getActiveWorkspaceDir() ?? undefined
+      const info = sessions.create(name, resolvedCwd)
       return { content: [{ type: "text" as const, text: JSON.stringify(info) }] }
     },
   )

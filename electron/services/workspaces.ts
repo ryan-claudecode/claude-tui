@@ -2,7 +2,7 @@ import { spawn } from "child_process"
 import { join, isAbsolute } from "node:path"
 import { homedir } from "node:os"
 import { existsSync, statSync, writeFileSync } from "node:fs"
-import { discoverWorkspaces, type DiscoveredManifest, type WorkspaceRepo } from "../workspace/discovery"
+import { discoverWorkspaces, canonSeedDir, type DiscoveredManifest, type WorkspaceRepo } from "../workspace/discovery"
 import type { TerminalService, TerminalInfo } from "./terminals"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
 import { logWarn } from "../log"
@@ -15,10 +15,15 @@ import { logWarn } from "../log"
  *
  * The optional `seed*` fields exist only to keep two seams working without a
  * dedicated B/C/D strand:
- *  - `seedDir` — the absolute `workspace.json` manifest directory this entry was
- *    imported from. It is the STABLE de-dup key: a re-scan that re-encounters the
+ *  - `seedDir` — the CANONICALIZED (`canonSeedDir`) manifest directory this entry
+ *    is keyed by. It is the STABLE de-dup key: a re-scan that re-encounters the
  *    same manifest dir updates the existing entry instead of creating a duplicate.
- *    Absent for entries created directly via `create()`.
+ *    Set either when an entry is imported from a discovered manifest OR when a
+ *    hand-created/added dir is scaffolded (WS-G) — in which case it is bound to the
+ *    FIRST scaffolded dir NOT already owned as another workspace's `seedDir` (so no
+ *    two entries share a seedDir key). Absent only when an entry has no eligible
+ *    canonical dir to claim (every key was already taken); such entries still
+ *    de-dup on rescan via `discover`'s `byListedDir` dir-match.
  *  - `seedRepos` / `seedEditor` — the manifest's richer repo metadata, retained so
  *    the legacy `activate()` boot path (open editors + spawn one session per repo)
  *    still works for imported workspaces. Not part of the public model surface.
@@ -30,8 +35,9 @@ export interface Workspace {
   color?: string
   createdAt: number
   updatedAt: number
-  /** Absolute manifest dir this entry was seeded from (de-dup key); unset for
-   *  hand-created workspaces. */
+  /** Canonicalized (`canonSeedDir`) manifest/scaffold dir this entry is keyed by
+   *  (the de-dup key). Unique across the registry; unset only when no eligible
+   *  canonical dir was free to claim. */
   seedDir?: string
   /** Manifest repo metadata, retained so `activate()` can still open editors +
    *  spawn per-repo sessions for imported workspaces. */
@@ -101,20 +107,11 @@ function toPublic(ws: Workspace): PublicWorkspace {
   }
 }
 
-/**
- * Canonicalize a manifest dir for use as the seedDir de-dup key. On win32 the
- * drive letter's case is not significant (`c:\` and `C:\` are the same path),
- * yet `path.resolve` preserves whatever case the scan glob produced — so a
- * config spelling change between scans would otherwise mint a duplicate entry.
- * Upper-casing the leading `<letter>:` collapses those spellings to one key.
- * KNOWN LIMITATION: this does NOT resolve junctions/symlinks or `8.3` short
- * names — two genuinely different spellings of the same target still dup.
- */
-export function canonSeedDir(dir: string): string {
-  return process.platform === "win32"
-    ? dir.replace(/^([a-z]):/, (_m, d: string) => `${d.toUpperCase()}:`)
-    : dir
-}
+// The single workspace-dir canonicalizer now lives in discovery.ts (so discovery
+// can use it without a circular import). It's imported above for the registry's
+// bind/lookup call sites; re-exported here for the existing test imports + any
+// external caller that historically imported it from this module.
+export { canonSeedDir }
 
 /** Structural equality for the manifest-owned `seedRepos` metadata, so discovery
  *  only re-persists when the repo list genuinely changed (not on every boot). */
@@ -495,6 +492,17 @@ export class WorkspaceService {
 
   // ── Scaffold (WS-G / G3) ────────────────────────────────────────────────────
 
+  /** Does any workspace OTHER than `selfId` already own `key` (a canonicalized
+   *  dir) as its `seedDir`? Used by the scaffold bind so two entries never share a
+   *  seedDir de-dup key. Compares already-canonical keys (seedDir is stored
+   *  canonicalized) so no re-canonicalization is needed here. */
+  private seedDirOwnedByOther(selfId: string, key: string): boolean {
+    for (const other of this.workspaces.values()) {
+      if (other.id !== selfId && other.seedDir === key) return true
+    }
+    return false
+  }
+
   /**
    * WS-G (G3) — write a minimal `workspace.json` manifest into `dir` so the
    * workspace is self-documenting + re-discoverable, and TOAST the user. The
@@ -507,9 +515,12 @@ export class WorkspaceService {
    * so a later rescan would discover the scaffolded manifest, find no entry keyed by
    * that dir, and mint a DUPLICATE. We prevent it by BINDING this dir to the existing
    * entry — set `ws.seedDir` to the canonicalized scaffolded dir if the workspace has
-   * none yet — so a rescan maps the manifest back to THIS workspace. (For a multi-dir
-   * workspace only the first scaffold binds `seedDir`; the rest are caught by the
-   * `discover` belt-and-suspenders dir-match. Both layers keep rescans duplicate-free.)
+   * none yet AND no OTHER workspace already owns that dir as ITS seedDir — so a rescan
+   * maps the manifest back to THIS workspace WITHOUT two entries sharing a seedDir key.
+   * (When the bind is skipped because of a collision, the `discover` belt-and-suspenders
+   * dir-match still de-dups via `byListedDir`. For a multi-dir workspace only the first
+   * eligible scaffold binds `seedDir`; the rest ride the dir-match. All layers keep
+   * rescans duplicate-free.)
    *
    * NO-CLOBBER: if `dir` already has a `workspace.json` we skip the write entirely
    * (never overwrite a user's/another workspace's manifest) and do NOT toast a
@@ -532,8 +543,14 @@ export class WorkspaceService {
     if (!isDir) return
 
     // Bind seedDir so a rescan reconciles the manifest back to THIS workspace
-    // (rescan-duplicate prevention). Only bind once — the first scaffolded dir owns it.
-    if (!ws.seedDir) ws.seedDir = canonSeedDir(target)
+    // (rescan-duplicate prevention). Only bind once — the first eligible scaffolded
+    // dir owns it — and never to a (canonical) dir another workspace already owns as
+    // ITS seedDir, so two entries can't share a seedDir key (byListedDir still de-dups
+    // the skipped case on rescan).
+    if (!ws.seedDir) {
+      const key = canonSeedDir(target)
+      if (!this.seedDirOwnedByOther(ws.id, key)) ws.seedDir = key
+    }
 
     const manifestPath = join(target, "workspace.json")
     // NO-CLOBBER: never overwrite an existing manifest (could be another workspace's

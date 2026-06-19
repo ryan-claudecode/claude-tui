@@ -5335,6 +5335,7 @@ body {
 
 .workspace-create-close:focus-visible,
 .workspace-add-folder-btn:focus-visible,
+.workspace-folders-add:focus-visible,
 .workspace-dir-chip-remove:focus-visible,
 .workspace-create-cancel:focus-visible,
 .workspace-create-submit:focus-visible {

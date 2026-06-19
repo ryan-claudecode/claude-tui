@@ -149,14 +149,21 @@ describe("SessionService workspace spawn-cwd (WS-G / G1)", () => {
 
   it("a NEW session with an active workspace dir spawns in that dir (structured engine)", () => {
     // The cwd seam is engine-agnostic: SessionService.spawnInto always calls
-    // terminals.create(name, cwd, sessionId), and create() routes to the headless
-    // path internally when the engine is structured. We assert the cwd flows to the
-    // spawn regardless — the FakeTerminals.create records the cwd it was passed.
+    // terminals.create(name, cwd, sessionId), and create() routes to the HEADLESS
+    // path internally when the engine is structured. The fake routes create() →
+    // createHeadless when structuredEngine is set, exactly like the real service, so
+    // this exercises the real headless dispatch and asserts the headless spawn (not
+    // the xterm branch) received the workspace cwd.
     const term = new FakeTerminals()
+    term.structuredEngine = true
     const svc = new SessionService({ dir, now: () => 1000, getActiveWorkspaceDir: () => "/ws/headless" })
     svc.attachTerminals(term as any)
-    svc.openSession("")
+    const { session, terminalId } = svc.openSession("")
+    // The spawn that recorded the cwd is a HEADLESS one, and it got the workspace dir.
+    expect(term.spawned[0].headless).toBe(true)
     expect(term.spawned[0].cwd).toBe("/ws/headless")
+    expect(term.isHeadless(terminalId)).toBe(true)
+    expect(svc.get(session.id)!.terminals.find((t) => t.id === terminalId)!.cwd).toBe("/ws/headless")
   })
 
   it("an EXPLICIT cwd always wins over the active workspace dir", () => {
@@ -424,10 +431,20 @@ class FakeTerminals {
    *  pendingDrains so a test can race a kill in DURING the drain before resolving. */
   drainMode: "auto" | "manual" = "auto"
   pendingDrains: Array<{ id: string; resolve: (v: boolean) => void }> = []
+  /** WS-G test fidelity: when set, `create()` ROUTES to `createHeadless()` exactly
+   *  like the real TerminalService.create() does when the engine is "structured" —
+   *  so a structured-engine test exercises the real headless dispatch (and records
+   *  the cwd on a `headless: true` spawn), not the xterm branch. */
+  structuredEngine = false
   // BO-6: model is the 5th arg on create() and the 6th on createHeadless()
   // (after allowedTools); CAPP-46: effort is the next positional arg on each,
   // matching the real TerminalService positions.
   create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string) {
+    if (this.structuredEngine) {
+      // Mirror create()'s structured routing: createHeadless(name, cwd, sessionId,
+      // resumeConvId, allowedTools=undefined, model, effort).
+      return this.createHeadless(name, cwd, sessionId, resumeConvId, undefined, model, effort)
+    }
     const id = `live-${++this.n}`
     this.spawned.push({ id, name, cwd, sessionId, resumeConvId, model, effort })
     return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const, engine: "xterm" as const, model, effort }

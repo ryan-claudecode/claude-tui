@@ -385,6 +385,15 @@ export interface ProcLike {
   onStderr(cb: (data: string) => void): void
   /** Process exit. `code` is null when the process was killed by a signal. */
   onExit(cb: (e: { code: number | null }) => void): void
+  /**
+   * Async spawn failure (e.g. an invalid `cwd` → ENOENT). OPTIONAL on the
+   * contract so the hermetic fakes (FakeStreamProc, fakeStreamProc) need not
+   * implement it; the real `realSpawnProc` always wires it. When a spawn fails
+   * `error` fires INSTEAD of `exit` (Node never emits `exit` for a process that
+   * never started), so the consumer must tear down on `error` too — otherwise an
+   * unhandled `error` on a ChildProcess crashes the main process.
+   */
+  onError?(cb: (err: Error) => void): void
   /** Write to the child's stdin (the structured user-message sink). */
   write(data: string): void
   kill(signal?: string): void
@@ -431,6 +440,13 @@ const realSpawnProc: SpawnProc = (file, args, options) => {
     },
     onExit: (cb) => {
       child.on("exit", (code) => cb({ code }))
+    },
+    onError: (cb) => {
+      // A spawn failure (invalid cwd → ENOENT, missing shell, EACCES) emits
+      // 'error' INSTEAD of 'exit'. Without a listener Node re-throws it as an
+      // uncaught exception that crashes the main process — so we must forward it
+      // to the consumer (which tears the terminal down gracefully).
+      child.on("error", (err) => cb(err))
     },
     write: (data) => {
       child.stdin?.write(data)
@@ -1306,6 +1322,21 @@ export class TerminalService {
       // it down) gets the needs-auth check.
       drain(entry.buffer.flush())
       this.teardownHeadless(id, { synthAuth: true })
+    })
+    // A bad cwd (TOCTOU after the statSync guard, or a caller-supplied cwd that
+    // bypassed it) makes child_process.spawn emit an async 'error' (ENOENT)
+    // INSTEAD of 'exit'. Without this listener that error is an uncaught
+    // exception that crashes the main process. Route it through the SAME teardown
+    // as a normal exit (mark dead, settle pending permissions, emit exit) so the
+    // headless terminal degrades gracefully, plus a logged warning + a toast.
+    proc.onError?.((err) => {
+      logWarn("headless", `${id} spawn error: ${err?.message ?? err}`)
+      this.notify?.(
+        `Could not start the agent — ${err?.message ?? err}. Check the working directory.`,
+        "error",
+        "Agent spawn failed",
+      )
+      this.teardownHeadless(id, { synthAuth: false })
     })
 
     const info: TerminalInfo = { id, name: sessionName, cwd: sessionCwd, state: "idle", engine: "structured", model: resolvedModel, effort: resolvedEffort }

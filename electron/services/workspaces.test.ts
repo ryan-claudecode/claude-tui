@@ -850,4 +850,61 @@ describe("WorkspaceService WS-G (G3) workspace.json scaffold", () => {
     expect(after[0].id).toBe(ws.id)
     expect(after[0].dirs).toEqual([d1, d2])
   })
+
+  it("⚠ rescan-after-scaffold for a FORWARD-SLASH dir spelling produces NO duplicate (the canonicalization blocker)", () => {
+    // The MCP create_workspace/add_workspace_dir tools pass the caller's dir string
+    // straight through, and an LLM on Windows naturally emits POSIX slashes. Spell
+    // the SAME dir with forward slashes. Pre-fix the stored seedDir key kept the
+    // forward slashes (canonSeedDir only upper-cased the drive), so discovery's
+    // backslash `resolve()` lookup MISSED it on rescan → a DUPLICATE workspace.
+    const d = join(root, "ws-fwd-slash")
+    mkdirSync(d, { recursive: true })
+    const fwd = d.replace(/\\/g, "/") // forward-slash spelling of the same dir
+    const s = svc()
+    const ws = s.create("FwdSlash", [fwd])
+    s.rename(ws.id, "FwdRenamed") // a user edit that must survive
+    expect(existsSync(join(d, "workspace.json"))).toBe(true)
+
+    // Rescan discovers the scaffolded manifest (glob returns backslash dirs on win32);
+    // the canonicalized seedDir must match it → exactly ONE entry, edits intact.
+    const after = s.rescan([join(root, "ws-fwd-slash")])
+    expect(after).toHaveLength(1)
+    expect(after[0].id).toBe(ws.id)
+    expect(after[0].name).toBe("FwdRenamed")
+  })
+
+  it("⚠ rescan-after-scaffold for a TRAILING-SLASH dir spelling produces NO duplicate", () => {
+    // A trailing separator is another spelling discovery's `resolve()` collapses but
+    // the pre-fix canonSeedDir did not — so the stored key kept the trailing slash
+    // and missed the rescan lookup → duplicate.
+    const d = join(root, "ws-trail-slash")
+    mkdirSync(d, { recursive: true })
+    const trailing = d + "\\" // trailing-separator spelling of the same dir
+    const s = svc()
+    const ws = s.create("TrailSlash", [trailing])
+    s.rename(ws.id, "TrailRenamed")
+    expect(existsSync(join(d, "workspace.json"))).toBe(true)
+
+    const after = s.rescan([join(root, "ws-trail-slash")])
+    expect(after).toHaveLength(1)
+    expect(after[0].id).toBe(ws.id)
+    expect(after[0].name).toBe("TrailRenamed")
+  })
+
+  it("scaffold does NOT bind a seedDir already owned by ANOTHER workspace (no shared key)", () => {
+    // Two workspaces pointed at the SAME dir: the first binds it as its seedDir; the
+    // second must NOT also bind it (else two entries share a seedDir key). The dir is
+    // de-duped on rescan via byListedDir regardless.
+    const d = join(root, "ws-shared-dir")
+    mkdirSync(d, { recursive: true })
+    const s = svc()
+    const a = s.create("Owner", [d])
+    const b = s.create("Second", [d])
+    const internalA = s.get(a.id)!
+    const internalB = s.get(b.id)!
+    expect(internalA.seedDir).toBe(canonSeedDir(d))
+    // The second workspace did NOT claim the already-owned key.
+    expect(internalB.seedDir).not.toBe(canonSeedDir(d))
+    expect(internalB.seedDir).toBeUndefined()
+  })
 })
