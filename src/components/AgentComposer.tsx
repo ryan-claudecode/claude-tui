@@ -38,17 +38,22 @@ export default function AgentComposer({ terminalId, busy = false, onSwitched }: 
   // CAPP-58 — auto-grow the textarea so Shift+Enter newlines GROW the box line-by-
   // line instead of overflowing+scrolling a fixed `rows={1}`. Reset to `auto` first
   // so it can SHRINK back too (e.g. send() clears the text), then measure scrollHeight.
-  // The CSS already caps it (.composer-input min-height 36px / max-height 160px); past
-  // the cap the box scrolls, so we only show the scrollbar once the cap is hit. Runs in
-  // useLayoutEffect on every `text` change (keystrokes, slash-insert, send()'s clear)
-  // so the resize is committed before paint — no visible jump.
+  // The CSS caps it (.composer-input min-height 44px / max-height 180px); past the cap
+  // the box scrolls. Under the global `box-sizing: border-box`, scrollHeight is
+  // content+padding (NO border), so add the vertical border to get the border-box
+  // height that shows every line — otherwise the last line clips ~1 step before the
+  // scrollbar engages. Runs in useLayoutEffect on every `text` change (keystrokes,
+  // slash-insert, send()'s clear) so the resize is committed before paint — no jump.
   useLayoutEffect(() => {
     const ta = taRef.current
     if (!ta) return
     ta.style.height = "auto"
     const max = 180 // keep in sync with .composer-input max-height
-    ta.style.height = `${ta.scrollHeight}px`
-    ta.style.overflowY = ta.scrollHeight > max ? "auto" : "hidden"
+    const cs = getComputedStyle(ta)
+    const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
+    const needed = ta.scrollHeight + border // border-box height to show all content
+    ta.style.height = `${Math.min(needed, max)}px`
+    ta.style.overflowY = needed > max ? "auto" : "hidden"
   }, [text])
 
   const send = useCallback(() => {
