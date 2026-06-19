@@ -390,7 +390,10 @@ body {
   .mission-prompt-overlay,
   .mission-prompt-panel,
   .missions-list-overlay,
-  .missions-list-panel {
+  .missions-list-panel,
+  .workspace-create-overlay,
+  .workspace-create-panel,
+  .workspace-menu {
     animation: none;
   }
 
@@ -643,6 +646,223 @@ body {
 .sidebar-brand .brand-icon {
   color: var(--accent);
   font-size: 17px;
+}
+
+/* ============================================================
+   WS-D — Workspace switcher (pill + dropdown)
+   A compact pill below the brand, above NEEDS YOU. Warm, rounded,
+   soft-shadowed dropdown — never a blocky menu. Tokens only.
+   ============================================================ */
+.workspace-switcher {
+  position: relative;
+  padding: 0 var(--s-2) var(--s-2);
+  -webkit-app-region: no-drag;
+}
+
+.workspace-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  cursor: pointer;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  text-align: left;
+  box-shadow: var(--shadow-1);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    box-shadow var(--fast) var(--ease);
+}
+.workspace-pill:hover {
+  background: var(--bg-3);
+  border-color: var(--border-strong);
+}
+.workspace-pill.open {
+  border-color: var(--accent-glow);
+  background: var(--bg-3);
+  box-shadow: var(--shadow-glow);
+}
+
+.workspace-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+/* "All" mode dot — a hollow ring rather than a solid hue, so it reads as
+   "no single workspace" without a color. */
+.workspace-dot.all {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-3);
+}
+
+.workspace-pill-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-pill-chevron {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-3);
+  transition: transform var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.workspace-pill.open .workspace-pill-chevron {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+
+.workspace-menu {
+  position: absolute;
+  top: calc(100% - 2px);
+  left: var(--s-2);
+  right: var(--s-2);
+  z-index: 1200;
+  padding: var(--s-1);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-3), 0 0 0 1px var(--accent-soft);
+  animation: workspace-menu-in 0.14s var(--ease-out);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+@keyframes workspace-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.workspace-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 7px 9px;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.workspace-menu-item.highlight {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+.workspace-menu-item.selected {
+  color: var(--text-0);
+}
+.workspace-menu-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-check {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.workspace-menu-divider {
+  height: 1px;
+  margin: var(--s-1) 6px;
+  background: var(--border-subtle);
+}
+
+.workspace-menu-new {
+  color: var(--text-2);
+}
+.workspace-menu-new .workspace-new-plus {
+  width: 9px;
+  text-align: center;
+  color: var(--accent);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.workspace-menu-new.highlight,
+.workspace-menu-new:hover {
+  color: var(--text-0);
+}
+
+/* Hover-revealed inline rename + delete affordances on a workspace row. */
+.workspace-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+.workspace-menu-item:hover .workspace-row-actions,
+.workspace-menu-item.highlight .workspace-row-actions {
+  opacity: 1;
+}
+.workspace-row-btn {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--r-sm);
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.workspace-row-btn:hover {
+  color: var(--text-0);
+  background: var(--bg-4);
+}
+.workspace-row-delete:hover {
+  color: var(--red);
+}
+
+.workspace-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-0);
+  background: var(--bg-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  outline: none;
+}
+
+/* Quiet hint shown when a scoped (specific-workspace) section is empty. */
+.sidebar-scoped-empty {
+  padding: var(--s-1) var(--s-4);
+  color: var(--text-4);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.workspace-row-btn:focus-visible,
+.workspace-pill:focus-visible,
+.workspace-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--r-sm);
 }
 
 /* M1 — sidebar list rows settle in with a quick, subtle per-row stagger,
@@ -4798,6 +5018,199 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
   filter: none;
+}
+
+/* ============================================================
+   WS-D — Create-workspace modal (main window)
+   Mirrors the mission-prompt overlay idiom: dimmed backdrop, warm
+   rounded soft-shadowed panel, name input + folder chips + actions.
+   ============================================================ */
+.workspace-create-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-5);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: drop-fade 0.12s var(--ease-out);
+}
+
+.workspace-create-panel {
+  width: 460px;
+  max-width: calc(100vw - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), 0 0 0 1px var(--accent-soft);
+  animation: cmdk-pop 0.16s var(--ease-out);
+}
+
+.workspace-create-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.workspace-create-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-0);
+  letter-spacing: -0.01em;
+}
+.workspace-create-close {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color var(--fast) var(--ease);
+}
+.workspace-create-close:hover { color: var(--text-0); }
+
+.workspace-create-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  font-weight: 650;
+  margin-top: var(--s-2);
+}
+
+.workspace-create-input {
+  width: 100%;
+  padding: var(--s-2);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  outline: none;
+  transition: border-color var(--fast) var(--ease);
+}
+.workspace-create-input:focus { border-color: var(--accent); }
+
+.workspace-create-dirs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 24px;
+  align-items: center;
+}
+.workspace-create-dirs-empty {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-4);
+}
+
+.workspace-dir-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 9px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-glow);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-1);
+  max-width: 100%;
+}
+.workspace-dir-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.workspace-dir-chip-remove {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 3px;
+  border-radius: 50%;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.workspace-dir-chip-remove:hover {
+  color: var(--red);
+  background: var(--bg-3);
+}
+
+.workspace-add-folder-btn {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease),
+    background var(--fast) var(--ease);
+}
+.workspace-add-folder-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-0);
+  background: var(--bg-3);
+}
+
+.workspace-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+.workspace-create-cancel,
+.workspace-create-submit {
+  padding: var(--s-2) var(--s-4);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    filter var(--fast) var(--ease);
+}
+.workspace-create-cancel {
+  background: transparent;
+  color: var(--text-2);
+}
+.workspace-create-cancel:hover { color: var(--text-0); border-color: var(--text-3); }
+.workspace-create-submit {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-0);
+}
+.workspace-create-submit:hover { filter: brightness(1.08); }
+.workspace-create-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.workspace-create-close:focus-visible,
+.workspace-add-folder-btn:focus-visible,
+.workspace-dir-chip-remove:focus-visible,
+.workspace-create-cancel:focus-visible,
+.workspace-create-submit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--r-sm);
 }
 
 /* Missions list overlay — browse all missions */

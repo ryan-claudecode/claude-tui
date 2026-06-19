@@ -40,6 +40,11 @@ export interface WorkSession {
   status: "active" | "stopped"
   summary: string
   terminals: Terminal[]
+  /** WS-C — the workspace this session belongs to (stamped at create() time;
+   *  undefined for untagged/legacy sessions → the "All" bucket). Rides along in
+   *  every worksession:updated / list() snapshot via the service's `...s` spread.
+   *  WS-D filters the sidebar's SESSIONS section on it. */
+  workspaceId?: string
 }
 
 // Normalize an unknown thrown value into a human-readable message for toasts.

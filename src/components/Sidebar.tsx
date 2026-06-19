@@ -4,6 +4,8 @@ import { formatWaitTime } from "../lib/attentionRow"
 import { goalExcerpt, missionProgress, isMissionDismissable } from "../lib/missionRow"
 import type { AttentionEntry } from "../hooks/useAttention"
 import type { MissionSummary } from "../hooks/useMissions"
+import type { WorkspaceSummary } from "../hooks/useWorkspaces"
+import WorkspaceSwitcher from "./WorkspaceSwitcher"
 
 interface TerminalRow { id: string; name: string; lastState: string; activity?: string }
 interface SessionRow { id: string; name: string; status: string; terminals: TerminalRow[] }
@@ -11,7 +13,6 @@ interface SessionRow { id: string; name: string; status: string; terminals: Term
 interface Props {
   sessions: SessionRow[]
   activeSessionId: string | null
-  workspaces: Array<{ name: string }>
   attentionEntries: AttentionEntry[]
   attentionNow: number
   onJumpAttention: (entry: AttentionEntry) => void
@@ -25,7 +26,19 @@ interface Props {
   onKillSession: () => void
   onKillSessionById: (id: string) => void
   onSelectSession: (id: string) => void
-  onSelectWorkspace?: (index: number) => void
+  // WS-D — the workspace switcher pill + dropdown (top of the sidebar). The
+  // sections above (NEEDS YOU / MISSIONS / SESSIONS) are pre-filtered to the
+  // active workspace by App.tsx; `workspaceScoped` tells us a SPECIFIC workspace
+  // is active so a filtered-empty section can show a quiet hint instead of the
+  // bare "(none)" empty state.
+  workspaces: WorkspaceSummary[]
+  activeWorkspace: WorkspaceSummary | null
+  workspaceScoped: boolean
+  onSelectAllWorkspaces: () => void
+  onSelectWorkspace: (id: string) => void
+  onNewWorkspace: () => void
+  onRenameWorkspace: (id: string, name: string) => void
+  onDeleteWorkspace: (id: string) => void
 }
 
 // Resolve a friendly label for an attention entry: the terminal's name when we
@@ -42,10 +55,12 @@ function entryLabel(entry: AttentionEntry, sessions: SessionRow[]): string {
 }
 
 export default function Sidebar({
-  sessions, activeSessionId, workspaces,
+  sessions, activeSessionId,
   attentionEntries, attentionNow, onJumpAttention, onDismissAttention,
   missions, onOpenMission, onDismissMission, onNewMission, onFocusConductor,
-  onNewSession, onKillSession, onKillSessionById, onSelectSession, onSelectWorkspace,
+  onNewSession, onKillSession, onKillSessionById, onSelectSession,
+  workspaces, activeWorkspace, workspaceScoped,
+  onSelectAllWorkspaces, onSelectWorkspace, onNewWorkspace, onRenameWorkspace, onDeleteWorkspace,
 }: Props) {
   return (
     <div className="sidebar">
@@ -53,6 +68,18 @@ export default function Sidebar({
         <span className="brand-icon">◈</span>
         <span>ClaudeTUI</span>
       </div>
+
+      {/* WS-D — workspace switcher: pill + dropdown, pinned below the brand and
+          above NEEDS YOU. Selecting filters the three sections below. */}
+      <WorkspaceSwitcher
+        workspaces={workspaces}
+        active={activeWorkspace}
+        onSelectAll={onSelectAllWorkspaces}
+        onSelectWorkspace={onSelectWorkspace}
+        onNewWorkspace={onNewWorkspace}
+        onRenameWorkspace={onRenameWorkspace}
+        onDeleteWorkspace={onDeleteWorkspace}
+      />
 
       {attentionEntries.length > 0 && (
         <div className="sidebar-section attention-section">
@@ -98,9 +125,13 @@ export default function Sidebar({
           </button>
         </div>
         {missions.length === 0 && (
-          <div className="mission-empty-row" onClick={onNewMission}>
-            No missions — start one
-          </div>
+          workspaceScoped ? (
+            <div className="sidebar-scoped-empty">Nothing in this workspace</div>
+          ) : (
+            <div className="mission-empty-row" onClick={onNewMission}>
+              No missions — start one
+            </div>
+          )
         )}
         {missions.map((m, i) => {
             const { done, total, pct } = missionProgress(m.tasks)
@@ -159,27 +190,14 @@ export default function Sidebar({
         })}
       </div>
 
-      <div className="sidebar-section">
-        <div className="sidebar-header">WORKSPACES</div>
-        {workspaces.length === 0 && (
-          <div className="sidebar-empty">(no workspaces)</div>
-        )}
-        {workspaces.map((ws, i) => (
-          <div
-            key={i}
-            className="sidebar-item"
-            style={{ "--i": i } as CSSProperties}
-            onClick={() => onSelectWorkspace?.(i)}
-          >
-            {ws.name}
-          </div>
-        ))}
-      </div>
-
       <div className="sidebar-section sessions-section">
         <div className="sidebar-header">SESSIONS</div>
         {sessions.length === 0 && (
-          <div className="sidebar-empty">(no sessions)</div>
+          workspaceScoped ? (
+            <div className="sidebar-scoped-empty">Nothing in this workspace</div>
+          ) : (
+            <div className="sidebar-empty">(no sessions)</div>
+          )
         )}
         {sessions.map((s, i) => {
           const { dot, count, activity } = deriveSessionRow(s)

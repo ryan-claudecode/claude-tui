@@ -69,4 +69,13 @@ test("built app boots and renders the empty-state shell", async () => {
   // header and the "+ New session" action are always present.
   await expect(win.locator(".missions-header")).toContainText("MISSIONS")
   await expect(win.locator(".sidebar-action", { hasText: "+ New session" })).toBeVisible()
+
+  // WS-D — the workspace switcher pill renders below the brand and, with a
+  // hermetic (empty) registry + no active workspace, reads "All workspaces".
+  // Opening it surfaces the "+ New workspace" affordance.
+  const pill = win.locator(".workspace-pill")
+  await expect(pill).toContainText("All workspaces")
+  await pill.click()
+  await expect(win.locator(".workspace-menu")).toBeVisible()
+  await expect(win.locator(".workspace-menu-new")).toContainText("New workspace")
 })

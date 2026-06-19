@@ -23,10 +23,14 @@ import ShortcutsHelp from "./components/ShortcutsHelp"
 import HistorySearch from "./components/HistorySearch"
 import MissionPrompt from "./components/MissionPrompt"
 import MissionsList from "./components/MissionsList"
+import WorkspaceCreateModal from "./components/WorkspaceCreateModal"
 import { toast } from "./lib/toast"
 import { useSessions } from "./hooks/useSessions"
 import { useAttention } from "./hooks/useAttention"
 import { useMissions } from "./hooks/useMissions"
+import { useWorkspaces } from "./hooks/useWorkspaces"
+import { filterByWorkspace } from "./lib/workspaceFilter"
+import { filterAttentionByWorkspace } from "./lib/workspaceScope"
 import { useSplitView } from "./hooks/useSplitView"
 import { useOverlays } from "./hooks/useOverlays"
 import { useTheme } from "./hooks/useTheme"
@@ -99,6 +103,8 @@ declare global {
       deleteWorkspace: (id: string) => Promise<boolean>
       setActiveWorkspace: (id: string | null) => Promise<boolean>
       launchWorkspace: (id: string) => Promise<any | null>
+      // WS-D — native folder picker (create-workspace modal). [] on cancel.
+      openDirectoryDialog: () => Promise<string[]>
       onWorkspaceActiveChanged: (callback: (workspace: any | null) => void) => void
       getConfig: () => Promise<any>
       // Split panes (terminal ids)
@@ -193,7 +199,6 @@ export default function App() {
     activeSessionId,
     activeTerminalId,
     setActiveTerminalId,
-    workspaces,
     config,
     activeSession,
     activeTerminals,
@@ -399,6 +404,37 @@ export default function App() {
     visible: visibleMissions,
     dismiss: dismissMission,
   } = useMissions()
+
+  // WS-D — the workspaces surface (switcher + active-workspace scoping). The
+  // active id drives the FILTER & HIDE of the three sidebar sections below.
+  const {
+    workspaces,
+    activeId: activeWorkspaceId,
+    active: activeWorkspace,
+    setActive: setActiveWorkspace,
+    create: createWorkspace_,
+    rename: renameWorkspace_,
+    remove: deleteWorkspace_,
+  } = useWorkspaces()
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false)
+
+  // WS-D — FILTER & HIDE. A specific active workspace scopes each section to its
+  // own items; "All" (activeWorkspaceId null) shows everything (untagged/legacy
+  // items are "All"-only). SESSIONS + MISSIONS carry workspaceId directly;
+  // attention entries resolve theirs from the owning session/mission. Re-derived
+  // reactively whenever the active id or the underlying lists change.
+  const scopedSessions = useMemo(
+    () => filterByWorkspace(sessions, activeWorkspaceId),
+    [sessions, activeWorkspaceId],
+  )
+  const scopedMissions = useMemo(
+    () => filterByWorkspace(visibleMissions, activeWorkspaceId),
+    [visibleMissions, activeWorkspaceId],
+  )
+  const scopedAttention = useMemo(
+    () => filterAttentionByWorkspace(attentionEntries, activeWorkspaceId, sessions, allMissions),
+    [attentionEntries, activeWorkspaceId, sessions, allMissions],
+  )
 
   const {
     panels,
@@ -746,6 +782,17 @@ export default function App() {
         onClose={() => setMissionPromptOpen(false)}
         onSubmit={createMission}
       />
+      <WorkspaceCreateModal
+        open={createWorkspaceOpen}
+        onClose={() => setCreateWorkspaceOpen(false)}
+        onCreate={async (name, dirs) => {
+          // Create, then make the new workspace active (routes through the
+          // active-changed push so the filter + pill flip to it).
+          const ws = await createWorkspace_(name, dirs)
+          if (ws) setActiveWorkspace(ws.id)
+          return ws
+        }}
+      />
       <MissionsList
         open={missionsListOpen}
         missions={allMissions}
@@ -759,14 +806,13 @@ export default function App() {
         onResume={(id) => window.api.resumeMission(id)}
       />
       <Sidebar
-        sessions={sessions}
+        sessions={scopedSessions}
         activeSessionId={activeSessionId}
-        workspaces={workspaces}
-        attentionEntries={attentionEntries}
+        attentionEntries={scopedAttention}
         attentionNow={attentionNow}
         onJumpAttention={jumpToAttention}
         onDismissAttention={dismissAttention}
-        missions={visibleMissions}
+        missions={scopedMissions}
         onOpenMission={(m) => {
           openMission(m).catch(() => {})
           Promise.resolve(window.api.attentionSeenMission(m.id)).catch(() => {})
@@ -778,7 +824,14 @@ export default function App() {
         onKillSession={handleKillSession}
         onKillSessionById={handleKillSessionById}
         onSelectSession={handleSelectSession}
-        onSelectWorkspace={(index) => window.api.activateWorkspace(index)}
+        workspaces={workspaces}
+        activeWorkspace={activeWorkspace}
+        workspaceScoped={activeWorkspaceId != null}
+        onSelectAllWorkspaces={() => setActiveWorkspace(null)}
+        onSelectWorkspace={(id) => setActiveWorkspace(id)}
+        onNewWorkspace={() => setCreateWorkspaceOpen(true)}
+        onRenameWorkspace={(id, name) => renameWorkspace_(id, name)}
+        onDeleteWorkspace={(id) => deleteWorkspace_(id)}
       />
       <div className="main-area">
         <TabBar

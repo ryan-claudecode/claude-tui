@@ -13,6 +13,11 @@ export interface MissionSummary {
   conductorSessionId?: string
   tasks?: Array<{ id: string; status: string }>
   workers?: Array<{ sessionId: string; role?: string }>
+  /** WS-C — the workspace this mission belongs to (stamped at create() time;
+   *  undefined for untagged/legacy missions → the "All" bucket). Rides along in
+   *  every mission:updated snapshot. WS-D filters the sidebar's MISSIONS section
+   *  and resolves attention scope through it. */
+  workspaceId?: string
   createdAt: number
   updatedAt: number
 }

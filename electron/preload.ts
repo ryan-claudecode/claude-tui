@@ -86,6 +86,9 @@ contextBridge.exposeInMainWorld("api", {
   deleteWorkspace: (id: string) => ipcRenderer.invoke("workspace:delete", id),
   setActiveWorkspace: (id: string | null) => ipcRenderer.invoke("workspace:set-active", id),
   launchWorkspace: (id: string) => ipcRenderer.invoke("workspace:launch", id),
+  // WS-D — native folder picker for the create-workspace modal's "+ Add folder".
+  // Resolves to the chosen absolute dir paths (multi-select), or [] on cancel.
+  openDirectoryDialog: (): Promise<string[]> => ipcRenderer.invoke("dialog:open-directory"),
   // WS-B — active-workspace change events from main (payload = public workspace
   // or null). Mirrors onMissionUpdated; WS-D consumes it for the sidebar switcher.
   onWorkspaceActiveChanged: (callback: (workspace: any | null) => void) =>

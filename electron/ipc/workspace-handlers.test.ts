@@ -12,10 +12,18 @@ import { join } from "path"
  * (no spawn) while launch spawns.
  */
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
+// WS-D — the dialog:open-directory handler reaches for dialog.showOpenDialog +
+// BrowserWindow.fromWebContents. We stub both: showOpenDialog returns whatever
+// `dialogResult` is set to per-test; fromWebContents returns a truthy fake parent
+// window (so the parented branch is exercised).
+let dialogResult: { canceled: boolean; filePaths: string[] } = { canceled: false, filePaths: [] }
+const showOpenDialog = vi.fn(async (..._args: unknown[]) => dialogResult)
 vi.mock("electron", () => ({
   ipcMain: {
     handle: (channel: string, fn: (...args: unknown[]) => unknown) => handlers.set(channel, fn),
   },
+  dialog: { showOpenDialog: (...args: unknown[]) => showOpenDialog(...args) },
+  BrowserWindow: { fromWebContents: () => ({ id: "win" }) },
 }))
 
 import { registerWorkspaceHandlers } from "./workspace-handlers"
@@ -118,5 +126,33 @@ describe("WS-B workspace-handlers", () => {
     call("workspace:set-active", id)
     expect(call<boolean>("workspace:set-active", null)).toBe(true)
     expect(call("workspace:get-active")).toBeNull()
+  })
+
+  // WS-D — the native folder picker IPC (the only new main-process surface).
+  describe("dialog:open-directory (WS-D folder picker)", () => {
+    beforeEach(() => {
+      const workspaceService = svc()
+      registerWorkspaceHandlers({ workspaceService })
+      showOpenDialog.mockClear()
+    })
+
+    it("returns the chosen absolute dir paths", async () => {
+      dialogResult = { canceled: false, filePaths: ["C:/a", "C:/b"] }
+      const out = await call<Promise<string[]>>("dialog:open-directory")
+      expect(out).toEqual(["C:/a", "C:/b"])
+    })
+
+    it("returns [] when the dialog is canceled", async () => {
+      dialogResult = { canceled: true, filePaths: [] }
+      expect(await call<Promise<string[]>>("dialog:open-directory")).toEqual([])
+    })
+
+    it("opens with multi-select + openDirectory properties", async () => {
+      dialogResult = { canceled: false, filePaths: [] }
+      await call<Promise<string[]>>("dialog:open-directory")
+      const opts = showOpenDialog.mock.calls[0].at(-1) as unknown as { properties: string[] }
+      expect(opts.properties).toContain("openDirectory")
+      expect(opts.properties).toContain("multiSelections")
+    })
   })
 })

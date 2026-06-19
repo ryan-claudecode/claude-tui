@@ -1,4 +1,4 @@
-import { ipcMain } from "electron"
+import { ipcMain, dialog, BrowserWindow } from "electron"
 import type { WorkspaceService } from "../services/workspaces"
 
 /**
@@ -58,4 +58,23 @@ export function registerWorkspaceHandlers(deps: { workspaceService: WorkspaceSer
 
   // ── Launch (the explicit BOOT verb — spawns editors + sessions, id-addressed) ─
   ipcMain.handle("workspace:launch", (_e, id: string) => workspaceService.launch(id))
+
+  // ── Native folder picker (WS-D) ──────────────────────────────────────────────
+  // The ONE new main-process surface WS-D adds: the create-workspace modal's
+  // "+ Add folder" button opens the OS folder dialog (multi-select) and resolves
+  // to the chosen absolute paths. Returns [] on cancel (showOpenDialog yields
+  // `canceled: true` + an empty `filePaths`), so the renderer treats cancel as a
+  // no-op. Parented to the focused BrowserWindow so it presents as a modal sheet
+  // rather than a detached dialog; falls back to a window-less dialog if none.
+  ipcMain.handle("dialog:open-directory", async (e): Promise<string[]> => {
+    const parent = BrowserWindow.fromWebContents(e.sender) ?? undefined
+    const result = parent
+      ? await dialog.showOpenDialog(parent, {
+          properties: ["openDirectory", "multiSelections", "createDirectory"],
+        })
+      : await dialog.showOpenDialog({
+          properties: ["openDirectory", "multiSelections", "createDirectory"],
+        })
+    return result.canceled ? [] : result.filePaths
+  })
 }
