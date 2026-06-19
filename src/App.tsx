@@ -87,6 +87,19 @@ declare global {
       // Workspaces / config
       getWorkspaces: () => Promise<any[]>
       activateWorkspace: (index: number) => Promise<any>
+      // WS-B — id-based workspace registry ops (PUBLIC projection only). Selection
+      // (setActiveWorkspace) is split from launch (launchWorkspace): set-active
+      // only marks/persists/emits; launch spawns. WS-D wires these into the UI.
+      getWorkspace: (id: string) => Promise<any | null>
+      getActiveWorkspace: () => Promise<any | null>
+      createWorkspace: (name: string, dirs?: string[]) => Promise<any | null>
+      renameWorkspace: (id: string, name: string) => Promise<any | null>
+      addWorkspaceDir: (id: string, dir: string) => Promise<any | null>
+      removeWorkspaceDir: (id: string, dir: string) => Promise<any | null>
+      deleteWorkspace: (id: string) => Promise<boolean>
+      setActiveWorkspace: (id: string | null) => Promise<boolean>
+      launchWorkspace: (id: string) => Promise<any | null>
+      onWorkspaceActiveChanged: (callback: (workspace: any | null) => void) => void
       getConfig: () => Promise<any>
       // Split panes (terminal ids)
       onSplitSet: (callback: (leftId: string, rightId: string) => void) => void

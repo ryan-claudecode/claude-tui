@@ -28,6 +28,7 @@ import { registerPanelHandlers } from "./ipc/panel-handlers"
 import { registerMissionHandlers } from "./ipc/mission-handlers"
 import { registerAppHandlers } from "./ipc/app-handlers"
 import { registerAttentionHandlers } from "./ipc/attention-handlers"
+import { registerWorkspaceHandlers } from "./ipc/workspace-handlers"
 
 export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
@@ -108,6 +109,17 @@ export async function setupIpc(win: BrowserWindow) {
     if (win.isDestroyed()) return
     if (e.type === "updated") win.webContents.send("mission:updated", e.mission)
     else win.webContents.send("mission:removed", e.id)
+  })
+
+  // WS-B — push active-workspace changes to the main renderer (selection is now
+  // separate from launch; the renderer reacts to the active selection instead of
+  // polling). Mirrors the missionService.onEvent push above EXACTLY: the service
+  // stays decoupled from BrowserWindow (no setMainWindow), and this callback
+  // forwards each event over the `workspace:active-changed` channel. Payload is
+  // the new active workspace's PUBLIC projection, or null when cleared.
+  workspaceService.onActiveChanged((e) => {
+    if (win.isDestroyed()) return
+    win.webContents.send("workspace:active-changed", e.active)
   })
 
   sessionService.setMainWindow(win)
@@ -214,6 +226,10 @@ export async function setupIpc(win: BrowserWindow) {
   })
   registerMissionHandlers({ missionService })
   registerAttentionHandlers({ getAttention: () => attentionService })
+  // WS-B — id-based workspace ops (get/create/rename/add-dir/remove-dir/delete/
+  // set-active/get-active/launch). Legacy index-based workspace:list/activate
+  // stay in registerAppHandlers below for the current renderer wiring.
+  registerWorkspaceHandlers({ workspaceService })
   registerAppHandlers({
     config,
     sessionService,

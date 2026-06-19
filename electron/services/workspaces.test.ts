@@ -488,3 +488,173 @@ describe("WorkspaceService legacy activate path (kept working)", () => {
     expect(svc().activate(0)).toBeNull()
   })
 })
+
+// ── WS-B ─────────────────────────────────────────────────────────────────────
+//
+// A counting terminal fake whose `create` invocations are observable, so a test
+// can assert SELECTION (setActive) does NOT spawn while LAUNCH does.
+function countingTerminals(): { terminals: TerminalService; createCalls: () => number } {
+  let n = 0
+  const fake = {
+    create(name?: string, cwd?: string): TerminalInfo {
+      n += 1
+      return { id: `t-${n}`, name: name ?? "s", cwd: cwd ?? ".", state: "active" }
+    },
+  }
+  return { terminals: fake as unknown as TerminalService, createCalls: () => n }
+}
+
+describe("WorkspaceService WS-B active-changed event", () => {
+  it("setActive emits workspace:active-changed with the new active public projection", () => {
+    const s = svc()
+    const ws = s.create("Active", ["/d"])
+    const events: Array<{ active: { id: string; name: string } | null }> = []
+    s.onActiveChanged((e) => events.push(e as any))
+
+    s.setActive(ws.id)
+    expect(events).toHaveLength(1)
+    expect(events[0].active?.id).toBe(ws.id)
+    expect(events[0].active?.name).toBe("Active")
+    // The payload is the PUBLIC projection — no internal seed* fields.
+    expect("seedDir" in (events[0].active as object)).toBe(false)
+  })
+
+  it("setActive(null) emits with a null payload (active cleared)", () => {
+    const s = svc()
+    const ws = s.create("Active")
+    s.setActive(ws.id)
+    const events: Array<{ active: unknown }> = []
+    s.onActiveChanged((e) => events.push(e))
+    s.setActive(null)
+    expect(events).toHaveLength(1)
+    expect(events[0].active).toBeNull()
+  })
+
+  it("a redundant setActive (same id) does NOT re-emit", () => {
+    const s = svc()
+    const ws = s.create("Active")
+    s.setActive(ws.id)
+    const events: unknown[] = []
+    s.onActiveChanged((e) => events.push(e))
+    s.setActive(ws.id) // no-op
+    expect(events).toHaveLength(0)
+  })
+
+  it("setActive with a non-existent id does NOT emit (and returns false)", () => {
+    const s = svc()
+    const events: unknown[] = []
+    s.onActiveChanged((e) => events.push(e))
+    expect(s.setActive("ghost")).toBe(false)
+    expect(events).toHaveLength(0)
+  })
+
+  it("deleting the ACTIVE workspace emits active-changed with null", () => {
+    const s = svc()
+    const ws = s.create("Active")
+    s.setActive(ws.id)
+    const events: Array<{ active: unknown }> = []
+    s.onActiveChanged((e) => events.push(e))
+    s.delete(ws.id)
+    expect(events).toHaveLength(1)
+    expect(events[0].active).toBeNull()
+  })
+
+  it("deleting a NON-active workspace does NOT emit active-changed", () => {
+    const s = svc()
+    const active = s.create("Active")
+    const other = s.create("Other")
+    s.setActive(active.id)
+    const events: unknown[] = []
+    s.onActiveChanged((e) => events.push(e))
+    s.delete(other.id)
+    expect(events).toHaveLength(0)
+  })
+
+  it("onActiveChanged returns an unsubscribe that stops further events", () => {
+    const s = svc()
+    const ws = s.create("A")
+    const events: unknown[] = []
+    const off = s.onActiveChanged((e) => events.push(e))
+    s.setActive(ws.id)
+    expect(events).toHaveLength(1)
+    off()
+    s.setActive(null)
+    expect(events).toHaveLength(1) // no further events after unsubscribe
+  })
+
+  it("getActivePublic returns the public projection (no seed* leak) or null", () => {
+    const s = svc()
+    expect(s.getActivePublic()).toBeNull()
+    const ws = s.create("Pub", ["/x"])
+    s.setActive(ws.id)
+    const pub = s.getActivePublic() as unknown as Record<string, unknown>
+    expect(Object.keys(pub).sort()).toEqual(
+      ["color", "createdAt", "dirs", "id", "name", "updatedAt"].sort(),
+    )
+    expect(pub.id).toBe(ws.id)
+  })
+})
+
+describe("WorkspaceService WS-B selection vs launch split", () => {
+  it("setActive (SELECTION) does NOT spawn any sessions", () => {
+    const { terminals, createCalls } = countingTerminals()
+    const s = new WorkspaceService(terminals, { file, now })
+    const ws = s.create("Manual", ["/d1", "/d2"])
+    s.setActive(ws.id)
+    // Selection is pure: no editors, no sessions spawned.
+    expect(createCalls()).toBe(0)
+    expect(s.getActiveId()).toBe(ws.id)
+  })
+
+  it("launch(id) STILL spawns one session per dir (the boot verb)", () => {
+    const { terminals, createCalls } = countingTerminals()
+    const s = new WorkspaceService(terminals, { file, now })
+    const ws = s.create("Manual", ["/d1", "/d2"])
+    const result = s.launch(ws.id)
+    expect(result?.workspace).toBe("Manual")
+    expect(result?.sessions).toHaveLength(2)
+    expect(createCalls()).toBe(2)
+  })
+
+  it("launch(id) spawns one session per manifest repo for a seeded workspace", () => {
+    mkdirSync(join(root, "ws-launch"), { recursive: true })
+    writeFileSync(
+      join(root, "ws-launch", "workspace.json"),
+      JSON.stringify({
+        name: "Boot",
+        editor: "code",
+        repos: [
+          { name: "api", path: "/repo/api", open_on_boot: false },
+          { name: "web", path: "/repo/web", open_on_boot: false },
+        ],
+      }),
+    )
+    const { terminals, createCalls } = countingTerminals()
+    const s = new WorkspaceService(terminals, { file, now })
+    s.discover([join(root, "ws-*")])
+    const id = s.list()[0].id
+    const result = s.launch(id)
+    expect(result?.workspace).toBe("Boot")
+    expect(result?.sessions).toHaveLength(2)
+    expect(createCalls()).toBe(2)
+  })
+
+  it("launch(id) with an unknown id returns null and spawns nothing", () => {
+    const { terminals, createCalls } = countingTerminals()
+    const s = new WorkspaceService(terminals, { file, now })
+    expect(s.launch("ghost")).toBeNull()
+    expect(createCalls()).toBe(0)
+  })
+
+  it("setActive persists + survives a reload (selection is durable, no spawn)", () => {
+    const { terminals, createCalls } = countingTerminals()
+    const s = new WorkspaceService(terminals, { file, now })
+    const ws = s.create("Persisted", ["/p"])
+    s.setActive(ws.id)
+    expect(createCalls()).toBe(0)
+    // A fresh service reads the same registry file.
+    const reloaded = new WorkspaceService(fakeTerminals(), { file, now })
+    expect(reloaded.getActiveId()).toBe(ws.id)
+    expect(reloaded.getActivePublic()?.name).toBe("Persisted")
+  })
+})

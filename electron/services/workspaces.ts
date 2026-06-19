@@ -53,6 +53,23 @@ export interface PublicWorkspace {
 }
 
 /**
+ * WS-B — the service-level event seam for active-workspace changes. Callback-set
+ * style, mirroring {@link MissionService.onEvent} (the `mission:updated` push):
+ * `ipc.ts` registers a callback that forwards each event to the renderer over the
+ * `workspace:active-changed` IPC channel. Keeping `BrowserWindow` out of this
+ * service (no `setMainWindow`) keeps it testable — a test asserts the event by
+ * subscribing directly, with no Electron window.
+ *
+ * `active` is the PUBLIC projection of the newly-active workspace, or `null` when
+ * the active selection was cleared (or pointed at a deleted workspace). It is
+ * NEVER the internal `Workspace` (with `seed*` fields) — the same no-leak posture
+ * as `listPublic()`.
+ */
+export interface WorkspaceActiveChangedEvent {
+  active: PublicWorkspace | null
+}
+
+/**
  * The on-disk registry payload. `activeWorkspaceId` lives as a TOP-LEVEL field
  * of this one cohesive durable store (NOT a separate file and NOT in the
  * versioned config) so the registry + the active selection load/save atomically
@@ -120,6 +137,8 @@ export class WorkspaceService {
   private workspaces = new Map<string, Workspace>()
   private activeWorkspaceId: string | null = null
   private sessionService: TerminalService
+  /** WS-B — active-changed subscribers (callback-set, like MissionService). */
+  private activeListeners = new Set<(e: WorkspaceActiveChangedEvent) => void>()
 
   constructor(sessionService: TerminalService, opts: { file?: string; now?: () => number } = {}) {
     this.sessionService = sessionService
@@ -186,6 +205,31 @@ export class WorkspaceService {
     return this.workspaces.get(id)
   }
 
+  /** WS-B — public projection of the active workspace (or null), for the
+   *  `getActiveWorkspace()` IPC + the `workspace:active-changed` payload. Never
+   *  leaks the internal `seed*` fields (same posture as `listPublic`). */
+  getActivePublic(): PublicWorkspace | null {
+    const ws = this.getActive()
+    return ws ? toPublic(ws) : null
+  }
+
+  /**
+   * WS-B — subscribe to active-workspace changes. Returns an unsubscribe fn.
+   * Mirrors {@link MissionService.onEvent}: `ipc.ts` registers one callback that
+   * forwards every event to the renderer over `workspace:active-changed`.
+   */
+  onActiveChanged(cb: (e: WorkspaceActiveChangedEvent) => void): () => void {
+    this.activeListeners.add(cb)
+    return () => this.activeListeners.delete(cb)
+  }
+
+  /** Fan one active-changed event out to all subscribers (the public projection
+   *  of the now-active workspace, or null). */
+  private emitActiveChanged(): void {
+    const e: WorkspaceActiveChangedEvent = { active: this.getActivePublic() }
+    for (const cb of this.activeListeners) cb(e)
+  }
+
   create(name: string, dirs: string[] = []): Workspace {
     const t = this.now()
     const ws: Workspace = {
@@ -237,17 +281,34 @@ export class WorkspaceService {
     this.workspaces.delete(id)
     // Clear the active selection if it pointed at the deleted workspace so a
     // stale id can't linger in the persisted store.
-    if (this.activeWorkspaceId === id) this.activeWorkspaceId = null
+    const clearedActive = this.activeWorkspaceId === id
+    if (clearedActive) this.activeWorkspaceId = null
     this.persist()
+    // WS-B — deleting the active workspace IS an active change (it became null),
+    // so notify the renderer just like setActive(null) would. A delete of a
+    // non-active workspace leaves the active selection untouched → no emit.
+    if (clearedActive) this.emitActiveChanged()
     return true
   }
 
-  /** Set (or clear, with null) the active workspace. A non-existent id is
-   *  ignored (returns false) so the active selection always resolves. */
+  /**
+   * Set (or clear, with null) the active workspace. A non-existent id is
+   * ignored (returns false) so the active selection always resolves.
+   *
+   * WS-B — SELECTION-ONLY. This sets the active workspace, persists it, and emits
+   * `workspace:active-changed`. It deliberately does NOT spawn editors or
+   * sessions — selection ≠ launch. The boot/spawn behavior lives in `launch(id)`
+   * (and the legacy index-based `activate(index)`), kept as a SEPARATE explicit
+   * path so a make-active never has the side effect of opening windows.
+   */
   setActive(id: string | null): boolean {
     if (id !== null && !this.workspaces.has(id)) return false
+    // Skip the emit on a genuine no-op so a redundant re-select doesn't churn the
+    // renderer (and never persists a write that changes nothing).
+    if (this.activeWorkspaceId === id) return true
     this.activeWorkspaceId = id
     this.persist()
+    this.emitActiveChanged()
     return true
   }
 
@@ -341,8 +402,18 @@ export class WorkspaceService {
     return p.replace(/^~/, process.env.HOME ?? process.env.USERPROFILE ?? "")
   }
 
-  // ── Legacy boot/launch path (kept working; WS-B will separate make-active
-  //    from launch) ────────────────────────────────────────────────────────────
+  // ── Boot/launch path (SELECTION is separate — see setActive) ────────────────
+  //
+  // WS-B — the BOOT/SPAWN verb, deliberately split from `setActive` (selection).
+  // `setActive(id)` only marks the active workspace + emits; it never opens
+  // editors or spawns sessions. The launch behavior lives here:
+  //   • `activate(index)` — LEGACY index-addressed entry point, retained UNCHANGED
+  //     for the renderer's current `onSelectWorkspace(index)` → `activateWorkspace`
+  //     wiring (the id-based renderer cutover is WS-D). Still spawns, as before.
+  //   • `launch(id)` — the NEW id-addressed boot verb (the registry is
+  //     uuid-addressed). Same spawn behavior, resolved by stable id.
+  // Both delegate to the shared `launchWorkspace(ws)` body, so the index path is
+  // byte-identical to before the split.
 
   /**
    * Boot a workspace by its position in `list()`. Index-addressing is retained
@@ -350,13 +421,33 @@ export class WorkspaceService {
    * `onSelectWorkspace(index)` wiring — the registry itself is uuid-addressed.
    * Opens editors for `open_on_boot` repos and spawns one session per repo (for
    * seeded/imported workspaces), or one session per `dirs[]` entry (for
-   * hand-created workspaces with no manifest repos). WS-B replaces this with an
-   * id-based make-active-vs-launch split.
+   * hand-created workspaces with no manifest repos). This is the LAUNCH verb,
+   * distinct from `setActive` (SELECTION). WS-D moves the renderer to id-based
+   * `setActive` for selection, leaving launch as a separate explicit action.
    */
   activate(index: number): { workspace: string; sessions: TerminalInfo[] } | null {
     const ws = this.list()[index]
     if (!ws) return null
+    return this.launchWorkspace(ws)
+  }
 
+  /**
+   * WS-B — boot a workspace by its STABLE registry id (the uuid-addressed twin of
+   * the legacy `activate(index)`). Spawns editors + sessions exactly like
+   * `activate`; returns null for an unknown id. This is the LAUNCH path, kept
+   * SEPARATE from `setActive(id)` (selection-only) so "make active" and "boot the
+   * workspace" are two distinct, explicit operations.
+   */
+  launch(id: string): { workspace: string; sessions: TerminalInfo[] } | null {
+    const ws = this.workspaces.get(id)
+    if (!ws) return null
+    return this.launchWorkspace(ws)
+  }
+
+  /** Shared spawn body for `activate(index)` and `launch(id)`: open editors for
+   *  `open_on_boot` repos, then create one Claude session per manifest repo (for
+   *  imported workspaces) or per `dirs[]` entry (for hand-created ones). */
+  private launchWorkspace(ws: Workspace): { workspace: string; sessions: TerminalInfo[] } {
     const repos = ws.seedRepos ?? []
     const editorCmd = (ws.seedEditor ?? "code").toLowerCase()
 

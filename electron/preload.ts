@@ -67,6 +67,30 @@ contextBridge.exposeInMainWorld("api", {
   getWorkspaces: () => ipcRenderer.invoke("workspace:list"),
   activateWorkspace: (index: number) => ipcRenderer.invoke("workspace:activate", index),
 
+  // WS-B — id-based workspace registry ops (all return the PUBLIC projection;
+  // never the internal seed* fields). SELECTION (`setActiveWorkspace`) is split
+  // from LAUNCH (`launchWorkspace`): set-active only marks + persists + emits
+  // `workspace:active-changed`; launch spawns editors + sessions. The legacy
+  // index-based `activateWorkspace` above stays for the current renderer wiring
+  // (the id-based selection cutover is WS-D).
+  getWorkspace: (id: string) => ipcRenderer.invoke("workspace:get", id),
+  getActiveWorkspace: () => ipcRenderer.invoke("workspace:get-active"),
+  createWorkspace: (name: string, dirs?: string[]) =>
+    ipcRenderer.invoke("workspace:create", name, dirs),
+  renameWorkspace: (id: string, name: string) =>
+    ipcRenderer.invoke("workspace:rename", id, name),
+  addWorkspaceDir: (id: string, dir: string) =>
+    ipcRenderer.invoke("workspace:add-dir", id, dir),
+  removeWorkspaceDir: (id: string, dir: string) =>
+    ipcRenderer.invoke("workspace:remove-dir", id, dir),
+  deleteWorkspace: (id: string) => ipcRenderer.invoke("workspace:delete", id),
+  setActiveWorkspace: (id: string | null) => ipcRenderer.invoke("workspace:set-active", id),
+  launchWorkspace: (id: string) => ipcRenderer.invoke("workspace:launch", id),
+  // WS-B — active-workspace change events from main (payload = public workspace
+  // or null). Mirrors onMissionUpdated; WS-D consumes it for the sidebar switcher.
+  onWorkspaceActiveChanged: (callback: (workspace: any | null) => void) =>
+    ipcRenderer.on("workspace:active-changed", (_e, workspace) => callback(workspace)),
+
   // Session rename
   renameSession: (id: string, newName: string) => ipcRenderer.invoke("terminal:rename", id, newName),
 
