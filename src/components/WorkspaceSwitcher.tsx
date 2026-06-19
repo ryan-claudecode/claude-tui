@@ -15,6 +15,19 @@ interface Props {
   /** WS-F — re-run on-disk discovery (the ⟳ refresh in the dropdown header). May
    *  be async so the control can spin until it settles. */
   onRescanWorkspaces: () => void | Promise<void>
+  /** WS-G (G2) — add a folder to an EXISTING workspace. Opens the native picker
+   *  and adds each chosen dir (scaffolds workspace.json + toasts, G3). */
+  onAddDir: (id: string, dir: string) => void | Promise<unknown>
+  /** WS-G (G2) — remove a folder from an EXISTING workspace. */
+  onRemoveDir: (id: string, dir: string) => void | Promise<unknown>
+}
+
+// G2 — show just the last path segment as the chip label (the full path is the
+// title) so long absolute paths don't blow out the dropdown width. Mirrors the
+// create-modal's dirLabel.
+function dirLabel(dir: string): string {
+  const parts = dir.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || dir
 }
 
 /**
@@ -55,12 +68,17 @@ export default function WorkspaceSwitcher({
   onRenameWorkspace,
   onDeleteWorkspace,
   onRescanWorkspaces,
+  onAddDir,
+  onRemoveDir,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [highlight, setHighlight] = useState(0)
   // The id of the workspace whose name is being edited inline (or null).
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState("")
+  // WS-G (G2) — the id of the workspace whose inline FOLDERS panel is expanded (or
+  // null). Toggled by the per-row 📁 folders control; only one expands at a time.
+  const [foldersId, setFoldersId] = useState<string | null>(null)
   // WS-F — true while a re-scan is in flight (drives the ⟳ spin + disables it so a
   // double-click can't fire two overlapping scans).
   const [scanning, setScanning] = useState(false)
@@ -90,9 +108,26 @@ export default function WorkspaceSwitcher({
   const close = useCallback(() => {
     setOpen(false)
     setEditingId(null)
+    setFoldersId(null)
     // Return focus to the pill so the keyboard path stays anchored.
     requestAnimationFrame(() => pillRef.current?.focus())
   }, [])
+
+  // WS-G (G2) — open the native folder picker (multi-select) and add each chosen
+  // dir to this workspace. Reuses the SAME WS-B `dialog:open-directory` IPC the
+  // create modal uses. Errors are owned by the parent action (it toasts).
+  const addFolderTo = useCallback(
+    async (id: string) => {
+      try {
+        const chosen = await window.api.openDirectoryDialog()
+        for (const dir of chosen) await onAddDir(id, dir)
+      } catch {
+        // openDirectoryDialog failures are rare (the create modal toasts on its own);
+        // a swallow here keeps the dropdown from throwing on a cancelled/odd dialog.
+      }
+    },
+    [onAddDir],
+  )
 
   // Open the menu with the active workspace (or "All") pre-highlighted.
   const openMenu = useCallback(() => {
@@ -285,68 +320,134 @@ export default function WorkspaceSwitcher({
             const ws = opt.ws
             const selected = active?.id === ws.id
             const editing = editingId === ws.id
+            const foldersOpen = foldersId === ws.id
             return (
-              <div
-                key={ws.id}
-                role="menuitem"
-                className={`workspace-menu-item${highlighted ? " highlight" : ""}${selected ? " selected" : ""}`}
-                onMouseEnter={() => setHighlight(i)}
-                onClick={() => !editing && activateOption(opt)}
-              >
-                <span className="workspace-dot" style={{ background: colorFor(ws, opt.colorIndex) }} />
-                {editing ? (
-                  <input
-                    ref={editInputRef}
-                    className="workspace-rename-input"
-                    value={editValue}
-                    onChange={(e) => setEditValue(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault()
-                        commitRename()
-                      } else if (e.key === "Escape") {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        setEditingId(null)
-                      }
-                    }}
-                    onBlur={commitRename}
-                  />
-                ) : (
-                  <span className="workspace-menu-name">{ws.name}</span>
-                )}
-                {!editing && selected && <span className="workspace-check" aria-hidden="true">✓</span>}
-                {!editing && (
-                  <span className="workspace-row-actions">
-                    <button
-                      type="button"
-                      className="workspace-row-btn"
-                      title="Rename workspace"
-                      aria-label={`Rename workspace ${ws.name}`}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setEditValue(ws.name)
-                        setEditingId(ws.id)
-                      }}
-                    >
-                      ✎
-                    </button>
-                    <button
-                      type="button"
-                      className="workspace-row-btn workspace-row-delete"
-                      title="Delete workspace"
-                      aria-label={`Delete workspace ${ws.name}`}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (window.confirm(`Delete the workspace "${ws.name}"? Its sessions and missions are kept (they fall back to All).`)) {
-                          onDeleteWorkspace(ws.id)
+              <div key={ws.id} className="workspace-menu-row-group">
+                <div
+                  role="menuitem"
+                  className={`workspace-menu-item${highlighted ? " highlight" : ""}${selected ? " selected" : ""}`}
+                  onMouseEnter={() => setHighlight(i)}
+                  onClick={() => !editing && activateOption(opt)}
+                >
+                  <span className="workspace-dot" style={{ background: colorFor(ws, opt.colorIndex) }} />
+                  {editing ? (
+                    <input
+                      ref={editInputRef}
+                      className="workspace-rename-input"
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          commitRename()
+                        } else if (e.key === "Escape") {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setEditingId(null)
                         }
                       }}
+                      onBlur={commitRename}
+                    />
+                  ) : (
+                    <span className="workspace-menu-name">{ws.name}</span>
+                  )}
+                  {!editing && selected && <span className="workspace-check" aria-hidden="true">✓</span>}
+                  {!editing && (
+                    <span className="workspace-row-actions">
+                      {/* WS-G (G2) — toggle the inline folders editor for this
+                          workspace. The dir count is shown as a quiet badge. */}
+                      <button
+                        type="button"
+                        className={`workspace-row-btn${foldersOpen ? " active" : ""}`}
+                        title="Manage folders"
+                        aria-label={`Manage folders for ${ws.name}`}
+                        aria-expanded={foldersOpen}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setFoldersId((cur) => (cur === ws.id ? null : ws.id))
+                        }}
+                      >
+                        <span aria-hidden="true">📁</span>
+                        {ws.dirs.length > 0 && (
+                          <span className="workspace-folder-count">{ws.dirs.length}</span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="workspace-row-btn"
+                        title="Rename workspace"
+                        aria-label={`Rename workspace ${ws.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setEditValue(ws.name)
+                          setEditingId(ws.id)
+                        }}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        className="workspace-row-btn workspace-row-delete"
+                        title="Delete workspace"
+                        aria-label={`Delete workspace ${ws.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (window.confirm(`Delete the workspace "${ws.name}"? Its sessions and missions are kept (they fall back to All).`)) {
+                            onDeleteWorkspace(ws.id)
+                          }
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )}
+                </div>
+
+                {/* WS-G (G2) — the inline FOLDERS editor: removable dir chips + an
+                    "+ Add folder" that opens the native picker. Click-stop so
+                    interacting with it never activates/closes the row. */}
+                {foldersOpen && (
+                  <div
+                    className="workspace-folders-panel"
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseEnter={() => setHighlight(i)}
+                  >
+                    {ws.dirs.length === 0 ? (
+                      <span className="workspace-folders-empty">
+                        No folders yet — add one so sessions open here.
+                      </span>
+                    ) : (
+                      <div className="workspace-folders-chips">
+                        {ws.dirs.map((dir) => (
+                          <span key={dir} className="workspace-dir-chip" title={dir}>
+                            <span className="workspace-dir-chip-label">{dirLabel(dir)}</span>
+                            <button
+                              type="button"
+                              className="workspace-dir-chip-remove"
+                              aria-label={`Remove folder ${dir}`}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void onRemoveDir(ws.id, dir)
+                              }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="workspace-folders-add"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void addFolderTo(ws.id)
+                      }}
                     >
-                      ×
+                      + Add folder
                     </button>
-                  </span>
+                  </div>
                 )}
               </div>
             )

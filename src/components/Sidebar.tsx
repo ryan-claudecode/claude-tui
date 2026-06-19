@@ -42,6 +42,10 @@ interface Props {
   /** WS-F — re-run on-disk discovery (the switcher's ⟳ refresh). May be async so
    *  the switcher can show a spin until it settles. */
   onRescanWorkspaces: () => void | Promise<void>
+  /** WS-G (G2) — add/remove a folder on an existing workspace (from the switcher's
+   *  per-workspace folders editor). */
+  onAddWorkspaceDir: (id: string, dir: string) => void | Promise<unknown>
+  onRemoveWorkspaceDir: (id: string, dir: string) => void | Promise<unknown>
 }
 
 // Resolve a friendly label for an attention entry: the terminal's name when we
@@ -64,7 +68,7 @@ export default function Sidebar({
   onNewSession, onKillSession, onKillSessionById, onSelectSession,
   workspaces, activeWorkspace, workspaceScoped,
   onSelectAllWorkspaces, onSelectWorkspace, onNewWorkspace, onRenameWorkspace, onDeleteWorkspace,
-  onRescanWorkspaces,
+  onRescanWorkspaces, onAddWorkspaceDir, onRemoveWorkspaceDir,
 }: Props) {
   return (
     <div className="sidebar">
@@ -84,6 +88,8 @@ export default function Sidebar({
         onRenameWorkspace={onRenameWorkspace}
         onDeleteWorkspace={onDeleteWorkspace}
         onRescanWorkspaces={onRescanWorkspaces}
+        onAddDir={onAddWorkspaceDir}
+        onRemoveDir={onRemoveWorkspaceDir}
       />
 
       {attentionEntries.length > 0 && (

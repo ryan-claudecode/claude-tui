@@ -136,6 +136,84 @@ describe("SessionService workspace scoping (WS-C)", () => {
   })
 })
 
+describe("SessionService workspace spawn-cwd (WS-G / G1)", () => {
+  it("a NEW session with an active workspace dir spawns its terminal in that dir (xterm)", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000, getActiveWorkspaceDir: () => "/ws/primary" })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("") // renderer passes "" = default
+    // The spawn was given the workspace dir as its cwd.
+    expect(term.spawned[0].cwd).toBe("/ws/primary")
+    expect(svc.get(session.id)!.terminals.find((t) => t.id === terminalId)!.cwd).toBe("/ws/primary")
+  })
+
+  it("a NEW session with an active workspace dir spawns in that dir (structured engine)", () => {
+    // The cwd seam is engine-agnostic: SessionService.spawnInto always calls
+    // terminals.create(name, cwd, sessionId), and create() routes to the headless
+    // path internally when the engine is structured. We assert the cwd flows to the
+    // spawn regardless — the FakeTerminals.create records the cwd it was passed.
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000, getActiveWorkspaceDir: () => "/ws/headless" })
+    svc.attachTerminals(term as any)
+    svc.openSession("")
+    expect(term.spawned[0].cwd).toBe("/ws/headless")
+  })
+
+  it("an EXPLICIT cwd always wins over the active workspace dir", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000, getActiveWorkspaceDir: () => "/ws/primary" })
+    svc.attachTerminals(term as any)
+    svc.openSession("/explicit/path")
+    expect(term.spawned[0].cwd).toBe("/explicit/path")
+  })
+
+  it("NO active workspace dir → the default cwd behavior (undefined → TerminalService default)", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000, getActiveWorkspaceDir: () => null })
+    svc.attachTerminals(term as any)
+    svc.openSession("")
+    expect(term.spawned[0].cwd).toBeUndefined()
+  })
+
+  it("no getActiveWorkspaceDir injected → default cwd (existing call sites unaffected)", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    svc.openSession("")
+    expect(term.spawned[0].cwd).toBeUndefined()
+  })
+
+  it("a terminal added to an EXISTING session INHERITS the session's cwd, NOT the (now-different) active workspace dir", () => {
+    let activeDir: string | null = "/ws/A"
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000, getActiveWorkspaceDir: () => activeDir })
+    svc.attachTerminals(term as any)
+    // New session opens in workspace A.
+    const { session } = svc.openSession("")
+    expect(term.spawned[0].cwd).toBe("/ws/A")
+    // User switches the active workspace to B, then adds a terminal to the A session.
+    activeDir = "/ws/B"
+    svc.addTerminalToSession(session.id, "")
+    // The added terminal inherits A's cwd — it does NOT re-resolve to B.
+    expect(term.spawned[1].cwd).toBe("/ws/A")
+  })
+
+  it("a RESTORE (reopenTerminal) keeps the ref's recorded cwd — never the active workspace dir", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000, getActiveWorkspaceDir: () => "/ws/CHANGED" })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/original/cwd")
+    expect(term.spawned[0].cwd).toBe("/original/cwd")
+    // App-close: the terminal dies but its ref persists with /original/cwd.
+    term.emit({ type: "exit", id: terminalId })
+    const ref = svc.get(session.id)!.terminals[0]
+    svc.reopenTerminal(session.id, ref.id)
+    // The reopen re-passes the RECORDED cwd, even though the active workspace dir changed.
+    const last = term.spawned[term.spawned.length - 1]
+    expect(last.cwd).toBe("/original/cwd")
+  })
+})
+
 describe("SessionService terminals", () => {
   it("addTerminal stores a TerminalRef and persists", () => {
     const svc = new SessionService({ dir, now: () => 1000 })

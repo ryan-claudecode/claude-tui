@@ -422,6 +422,8 @@ export default function App() {
     create: createWorkspace_,
     rename: renameWorkspace_,
     remove: deleteWorkspace_,
+    addDir: addWorkspaceDir_,
+    removeDir: removeWorkspaceDir_,
     rescan: rescanWorkspaces_,
   } = useWorkspaces()
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false)
@@ -858,6 +860,8 @@ export default function App() {
                 : "Workspaces up to date",
             )
         }}
+        onAddWorkspaceDir={(id, dir) => addWorkspaceDir_(id, dir)}
+        onRemoveWorkspaceDir={(id, dir) => removeWorkspaceDir_(id, dir)}
       />
       <div className="main-area">
         <TabBar

@@ -142,6 +142,40 @@ export function useWorkspaces() {
     [refresh],
   )
 
+  // ADD DIR — WS-G (G2). Add a folder to an EXISTING workspace via the WS-B
+  // `addWorkspaceDir` IPC (which also scaffolds a workspace.json + toasts, G3).
+  // Re-reads the list so the new chip appears. Returns the updated workspace (or
+  // null on failure) so the caller can react.
+  const addDir = useCallback(
+    async (id: string, dir: string): Promise<WorkspaceSummary | null> => {
+      try {
+        const ws = (await window.api.addWorkspaceDir(id, dir)) as WorkspaceSummary | null
+        await refresh()
+        return ws
+      } catch (err) {
+        toast("error", `Couldn't add the folder: ${errMsg(err)}`)
+        return null
+      }
+    },
+    [refresh],
+  )
+
+  // REMOVE DIR — WS-G (G2). Drop a folder from an EXISTING workspace via the WS-B
+  // `removeWorkspaceDir` IPC. Re-reads the list so the chip disappears.
+  const removeDir = useCallback(
+    async (id: string, dir: string): Promise<WorkspaceSummary | null> => {
+      try {
+        const ws = (await window.api.removeWorkspaceDir(id, dir)) as WorkspaceSummary | null
+        await refresh()
+        return ws
+      } catch (err) {
+        toast("error", `Couldn't remove the folder: ${errMsg(err)}`)
+        return null
+      }
+    },
+    [refresh],
+  )
+
   // RESCAN — WS-F. Re-run on-disk discovery against the configured scan paths and
   // refresh the list from the RETURNED public list (no second read). Idempotent
   // server-side (seeds new manifests, never duplicates a seeded workspace, never
@@ -161,5 +195,5 @@ export function useWorkspaces() {
 
   const active = activeWorkspace(workspaces, activeId)
 
-  return { workspaces, activeId, active, setActive, create, rename, remove, refresh, rescan }
+  return { workspaces, activeId, active, setActive, create, rename, remove, addDir, removeDir, refresh, rescan }
 }

@@ -718,3 +718,136 @@ describe("WorkspaceService WS-B selection vs launch split", () => {
     expect(reloaded.getActivePublic()?.name).toBe("Persisted")
   })
 })
+
+describe("WorkspaceService WS-G (G1) getActiveWorkspaceDir", () => {
+  it("returns the active workspace's primary dir (dirs[0]) when it exists on disk", () => {
+    const d = join(root, "proj-a")
+    mkdirSync(d, { recursive: true })
+    const s = svc()
+    const ws = s.create("A", [d, join(root, "proj-b")])
+    s.setActive(ws.id)
+    expect(s.getActiveWorkspaceDir()).toBe(d)
+  })
+
+  it("returns null when no workspace is active ('All' mode)", () => {
+    const d = join(root, "proj-a")
+    mkdirSync(d, { recursive: true })
+    const s = svc()
+    s.create("A", [d]) // created but NOT active
+    expect(s.getActiveWorkspaceDir()).toBeNull()
+  })
+
+  it("returns null when the active workspace has no dirs", () => {
+    const s = svc()
+    const ws = s.create("Empty", [])
+    s.setActive(ws.id)
+    expect(s.getActiveWorkspaceDir()).toBeNull()
+  })
+
+  it("returns null when dirs[0] does not exist on disk (stale path → default cwd)", () => {
+    const s = svc()
+    const ws = s.create("Stale", [join(root, "does-not-exist")])
+    s.setActive(ws.id)
+    expect(s.getActiveWorkspaceDir()).toBeNull()
+  })
+})
+
+describe("WorkspaceService WS-G (G3) workspace.json scaffold", () => {
+  function manifestAt(dir: string) {
+    return JSON.parse(readFileSync(join(dir, "workspace.json"), "utf-8"))
+  }
+
+  it("create() scaffolds a valid workspace.json into each provided dir + toasts", () => {
+    const d = join(root, "scaf-a")
+    mkdirSync(d, { recursive: true })
+    const toasts: Array<{ message: string; level: string }> = []
+    const s = new WorkspaceService(fakeTerminals(), {
+      file,
+      now,
+      notify: (message, level) => toasts.push({ message, level }),
+    })
+    s.create("Billing", [d])
+
+    // The manifest exists and matches the discovery schema ({ name, alias?, editor?, repos? }).
+    expect(existsSync(join(d, "workspace.json"))).toBe(true)
+    const m = manifestAt(d)
+    expect(m.name).toBe("Billing")
+    expect(m.editor).toBe("code")
+    expect(Array.isArray(m.repos)).toBe(true)
+    // Toasted the user.
+    expect(toasts.some((t) => t.message.includes("workspace.json") && t.level === "success")).toBe(true)
+  })
+
+  it("addDir() scaffolds a workspace.json into the newly-added dir", () => {
+    const s = svc()
+    const ws = s.create("Svc", []) // dirless to start
+    const d = join(root, "scaf-add")
+    mkdirSync(d, { recursive: true })
+    s.addDir(ws.id, d)
+    expect(existsSync(join(d, "workspace.json"))).toBe(true)
+    expect(manifestAt(d).name).toBe("Svc")
+  })
+
+  it("does NOT clobber a pre-existing workspace.json (skips write, no toast)", () => {
+    const d = join(root, "scaf-existing")
+    mkdirSync(d, { recursive: true })
+    const original = { name: "Hand authored", custom: true }
+    writeFileSync(join(d, "workspace.json"), JSON.stringify(original))
+    const toasts: string[] = []
+    const s = new WorkspaceService(fakeTerminals(), {
+      file,
+      now,
+      notify: (message) => toasts.push(message),
+    })
+    s.create("DifferentName", [d])
+    // The original manifest is untouched.
+    expect(manifestAt(d)).toEqual(original)
+    // No "Created workspace.json" toast for a skipped write.
+    expect(toasts.some((t) => t.includes("Created workspace.json"))).toBe(false)
+  })
+
+  it("scaffolds nothing for a non-existent dir (best-effort, no throw)", () => {
+    const d = join(root, "scaf-missing")
+    const s = svc()
+    expect(() => s.create("Ghost", [d])).not.toThrow()
+    expect(existsSync(join(d, "workspace.json"))).toBe(false)
+  })
+
+  it("⚠ rescan AFTER a scaffold produces NO duplicate + keeps user edits (the trap)", () => {
+    // Create a workspace with a dir → scaffolds workspace.json + binds seedDir.
+    const d = join(root, "ws-scaf-dedup")
+    mkdirSync(d, { recursive: true })
+    const s = svc()
+    const ws = s.create("Mine", [d])
+    s.rename(ws.id, "MyRenamed") // a user edit that must survive
+
+    // The scaffold wrote a manifest into d, which is now reachable by the scan glob.
+    expect(existsSync(join(d, "workspace.json"))).toBe(true)
+
+    // A rescan discovers the scaffolded manifest. Without the seedDir bind it would
+    // mint a DUPLICATE; with it, it reconciles back to THIS entry.
+    const after = s.rescan([join(root, "ws-scaf-dedup")])
+    expect(after).toHaveLength(1)
+    expect(after[0].id).toBe(ws.id)
+    expect(after[0].name).toBe("MyRenamed") // user edit intact
+    expect(after[0].dirs).toEqual([d])
+  })
+
+  it("rescan-after-scaffold is duplicate-free for a MULTI-dir workspace (discover dir-match)", () => {
+    // Two dirs scaffold two manifests, but only the FIRST binds seedDir; the SECOND
+    // must reconcile via discover's belt-and-suspenders listed-dir match (no dup).
+    const d1 = join(root, "ws-multi-a")
+    const d2 = join(root, "ws-multi-b")
+    mkdirSync(d1, { recursive: true })
+    mkdirSync(d2, { recursive: true })
+    const s = svc()
+    const ws = s.create("Multi", [d1, d2])
+    expect(existsSync(join(d1, "workspace.json"))).toBe(true)
+    expect(existsSync(join(d2, "workspace.json"))).toBe(true)
+
+    const after = s.rescan([join(root, "ws-multi-*")])
+    expect(after).toHaveLength(1)
+    expect(after[0].id).toBe(ws.id)
+    expect(after[0].dirs).toEqual([d1, d2])
+  })
+})

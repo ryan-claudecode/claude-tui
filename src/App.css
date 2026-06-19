@@ -400,7 +400,8 @@ body {
   .missions-list-panel,
   .workspace-create-overlay,
   .workspace-create-panel,
-  .workspace-menu {
+  .workspace-menu,
+  .workspace-folders-panel {
     animation: none;
   }
 
@@ -830,6 +831,11 @@ body {
 .workspace-menu-item.highlight .workspace-row-actions {
   opacity: 1;
 }
+/* WS-G (G2) — keep the row's actions (incl. the 📁 toggle) visible while this
+   row's folders panel is expanded, so the toggle doesn't vanish under the mouse. */
+.workspace-menu-row-group:has(.workspace-folders-panel) .workspace-row-actions {
+  opacity: 1;
+}
 .workspace-row-btn {
   background: none;
   border: none;
@@ -860,6 +866,79 @@ body {
   border: 1px solid var(--accent);
   border-radius: var(--r-sm);
   outline: none;
+}
+
+/* WS-G (G2) — per-workspace folders editor (inline, inside the dropdown). The
+   📁 toggle keeps its highlight while its panel is open; a quiet count badge
+   rides beside the glyph. */
+.workspace-row-btn.active {
+  color: var(--accent);
+  background: var(--bg-4);
+}
+.workspace-folder-count {
+  margin-left: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.workspace-row-btn.active .workspace-folder-count {
+  color: var(--accent);
+}
+
+/* The expanding folders panel: a soft, indented well below the row — removable
+   dir chips + an "+ Add folder" action. Warm, rounded, non-blocky. */
+.workspace-folders-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 1px 6px 4px 24px;
+  padding: 8px 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  animation: workspace-folders-in 0.14s var(--ease-out);
+}
+@keyframes workspace-folders-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.workspace-folders-empty {
+  font-size: 12px;
+  color: var(--text-3);
+  font-style: italic;
+}
+.workspace-folders-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.workspace-folders-panel .workspace-dir-chip {
+  font-size: 11.5px;
+}
+.workspace-folders-panel .workspace-dir-chip-label {
+  max-width: 150px;
+}
+.workspace-folders-add {
+  align-self: flex-start;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-glow);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.workspace-folders-add:hover {
+  background: var(--accent-glow);
+  color: var(--text-0);
 }
 
 /* WS-F — dropdown header: a quiet "Workspaces" label + the ⟳ re-scan control.

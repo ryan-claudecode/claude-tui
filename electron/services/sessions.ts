@@ -134,6 +134,19 @@ export interface SessionServiceOpts {
    * untagged (the "All" bucket), so existing call sites/tests are unaffected.
    */
   getActiveWorkspaceId?: () => string | null | undefined
+  /**
+   * WS-G (G1) — the spawn-cwd seam. A getter returning the CURRENTLY-ACTIVE
+   * workspace's primary directory (`dirs[0]`, resolved absolute + verified to exist),
+   * or null when there is no active workspace / it has no dirs / the dir is missing.
+   * When a NEW work session is created with no explicit cwd, its terminal(s) spawn
+   * HERE so `claude` runs as if opened in that directory (sees its files + git).
+   * Same callback-injection posture as `getActiveWorkspaceId` — `ipc.ts` wires it to
+   * `workspaceService.getActiveWorkspaceDir()`. Absent / null → keep the current
+   * default cwd behavior (existing call sites/tests unaffected). A NEW terminal added
+   * to an EXISTING session does NOT consult this — it inherits the session's own cwd
+   * (see {@link SessionService.addTerminalToSession}).
+   */
+  getActiveWorkspaceDir?: () => string | null | undefined
 }
 
 /** Persistence schema version. v1 = today's WorkSession shape verbatim. */
@@ -217,12 +230,16 @@ export class SessionService {
   private idleFlushGraceMs: number
   /** WS-C — active-workspace getter, stamped onto every freshly-minted session. */
   private getActiveWorkspaceId: () => string | null | undefined
+  /** WS-G (G1) — active-workspace-dir getter, used as the spawn cwd for a NEW
+   *  session's terminal when no explicit cwd is given. */
+  private getActiveWorkspaceDir: () => string | null | undefined
 
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
     this.now = opts.now ?? (() => Date.now())
     this.idleFlushGraceMs = opts.idleFlushGraceMs ?? 20000
     this.getActiveWorkspaceId = opts.getActiveWorkspaceId ?? (() => undefined)
+    this.getActiveWorkspaceDir = opts.getActiveWorkspaceDir ?? (() => undefined)
   }
 
   attachTerminals(terminals: TerminalLike): void {
@@ -323,18 +340,39 @@ export class SessionService {
     }, this.idleFlushGraceMs)
   }
 
-  /** Create a session + spawn & register its first terminal. */
+  /**
+   * Create a session + spawn & register its first terminal.
+   *
+   * WS-G (G1) — when NO explicit cwd is given (the renderer passes "" for "use the
+   * default"), and a workspace is active with a resolvable primary directory, the
+   * first terminal spawns in that workspace dir so `claude` runs as if opened there
+   * (sees its files + git). An explicit cwd (e.g. a workspace launch passing a
+   * repo path) always wins; no active workspace / no dir → the default cwd behavior
+   * (TerminalService falls back to process.cwd()).
+   */
   openSession(cwd?: string): { session: WorkSession; terminalId: string } {
     const session = this.create()
-    const terminalId = this.spawnInto(session, cwd)
+    const resolved = cwd && cwd.trim() ? cwd : this.getActiveWorkspaceDir() ?? undefined
+    const terminalId = this.spawnInto(session, resolved)
     return { session, terminalId }
   }
 
-  /** Spawn & register an additional terminal in an existing session. */
+  /**
+   * Spawn & register an additional terminal in an existing session.
+   *
+   * WS-G (G1) — a terminal added to an EXISTING session INHERITS that session's
+   * cwd (its first terminal's cwd), NOT the (possibly different) currently-active
+   * workspace dir. So a session opened in workspace A keeps spawning new terminals
+   * in A even after the user switches the active workspace to B. An explicit cwd
+   * still wins; if the session has no terminal to inherit from, fall back to the
+   * default (TerminalService → process.cwd()).
+   */
   addTerminalToSession(sessionId: string, cwd?: string): { terminalId: string } | undefined {
     const s = this.sessions.get(sessionId)
     if (!s) return undefined
-    const terminalId = this.spawnInto(s, cwd)
+    const inherited = s.terminals.find((t) => !t.isLogin)?.cwd ?? s.terminals[0]?.cwd
+    const resolved = cwd && cwd.trim() ? cwd : inherited
+    const terminalId = this.spawnInto(s, resolved)
     return { terminalId }
   }
 

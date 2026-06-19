@@ -1,9 +1,11 @@
 import { spawn } from "child_process"
-import { join } from "node:path"
+import { join, isAbsolute } from "node:path"
 import { homedir } from "node:os"
+import { existsSync, statSync, writeFileSync } from "node:fs"
 import { discoverWorkspaces, type DiscoveredManifest, type WorkspaceRepo } from "../workspace/discovery"
 import type { TerminalService, TerminalInfo } from "./terminals"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
+import { logWarn } from "../log"
 
 /**
  * The durable workspace MODEL (WS-A). A workspace is a user-named grouping of
@@ -139,12 +141,35 @@ export class WorkspaceService {
   private sessionService: TerminalService
   /** WS-B — active-changed subscribers (callback-set, like MissionService). */
   private activeListeners = new Set<(e: WorkspaceActiveChangedEvent) => void>()
+  /**
+   * WS-G (G3) — a user-visible notification seam (set in ipc.ts to
+   * NotificationService.notify). Used to TOAST when scaffolding a `workspace.json`
+   * manifest into a newly-added directory. Optional: undefined in most unit tests,
+   * where scaffolding still happens (the file is written) but no toast fires.
+   */
+  private notify?: (message: string, level: "info" | "success" | "warning" | "error", title?: string) => void
 
-  constructor(sessionService: TerminalService, opts: { file?: string; now?: () => number } = {}) {
+  constructor(
+    sessionService: TerminalService,
+    opts: {
+      file?: string
+      now?: () => number
+      notify?: (message: string, level: "info" | "success" | "warning" | "error", title?: string) => void
+    } = {},
+  ) {
     this.sessionService = sessionService
     this.file = opts.file ?? join(homedir(), ".claude-tui", "workspaces.json")
     this.now = opts.now ?? (() => Date.now())
+    this.notify = opts.notify
     this.loadAll()
+  }
+
+  /** WS-G (G3) — wire the user-visible notification seam after construction
+   *  (ipc.ts, once NotificationService exists). Mirrors TerminalService.setNotifier. */
+  setNotifier(
+    fn: (message: string, level: "info" | "success" | "warning" | "error", title?: string) => void,
+  ): void {
+    this.notify = fn
   }
 
   private loadAll(): void {
@@ -240,6 +265,10 @@ export class WorkspaceService {
       updatedAt: t,
     }
     this.workspaces.set(ws.id, ws)
+    // WS-G (G3) — scaffold a workspace.json into each provided dir so the workspace
+    // is self-documenting + re-discoverable, binding seedDir so a later rescan maps
+    // the manifest back to THIS entry (no duplicate). Mutates ws.seedDir; persist after.
+    for (const dir of ws.dirs) this.scaffoldManifest(ws, dir)
     this.persist()
     return ws
   }
@@ -259,6 +288,9 @@ export class WorkspaceService {
     if (!ws.dirs.includes(dir)) {
       ws.dirs.push(dir)
       ws.updatedAt = this.now()
+      // WS-G (G3) — scaffold a workspace.json into the newly-added dir (+ bind
+      // seedDir for rescan-dedup). Mutates ws before the persist below.
+      this.scaffoldManifest(ws, dir)
       this.persist()
     }
     return ws
@@ -320,6 +352,33 @@ export class WorkspaceService {
     return this.activeWorkspaceId
   }
 
+  /**
+   * WS-G (G1) — the active workspace's PRIMARY directory (`dirs[0]`), resolved to an
+   * absolute, existing path, or null. This is the spawn cwd seam: when a NEW work
+   * session is created while a workspace is active and has ≥1 dir, its terminal(s)
+   * spawn HERE so `claude` runs as if opened in that directory (sees its files + git).
+   *
+   * Returns null — meaning "keep the current default cwd behavior" — when there is no
+   * active workspace, the active workspace has no dirs, or `dirs[0]` does not resolve
+   * to an existing directory on disk (a stale/typo'd path must never silently spawn an
+   * agent in a non-existent or wrong place; we fall back to the default instead).
+   * `~`-prefixed dirs are expanded; a relative dir is rejected (we only ever spawn in
+   * a known-absolute, verified directory).
+   */
+  getActiveWorkspaceDir(): string | null {
+    const ws = this.getActive()
+    const first = ws?.dirs?.[0]
+    if (!first) return null
+    const expanded = this.expandHome(first)
+    if (!isAbsolute(expanded)) return null
+    try {
+      if (!statSync(expanded).isDirectory()) return null
+    } catch {
+      return null // missing / unreadable → fall back to default cwd
+    }
+    return expanded
+  }
+
   // ── Discovery = seed/import (NOT source of truth) ───────────────────────────
 
   /**
@@ -350,14 +409,27 @@ export class WorkspaceService {
   discover(scanPaths: string[]): void {
     const manifests = discoverWorkspaces(scanPaths)
     const bySeedDir = new Map<string, Workspace>()
+    // WS-G (G3) — belt-and-suspenders rescan-dedup. The PRIMARY de-dup key is
+    // `seedDir` (one per entry). But a hand-created/edited workspace can list SEVERAL
+    // scaffolded dirs while only the FIRST is bound as `seedDir`; a rescan would then
+    // re-discover the OTHER scaffolded manifests, miss them in `bySeedDir`, and mint a
+    // DUPLICATE. So we ALSO index every workspace's listed dirs (canonicalized) and
+    // reconcile a manifest against an existing workspace that already lists that dir.
+    const byListedDir = new Map<string, Workspace>()
     for (const ws of this.workspaces.values()) {
       if (ws.seedDir) bySeedDir.set(canonSeedDir(ws.seedDir), ws)
+      for (const d of ws.dirs) {
+        const k = canonSeedDir(this.expandHome(d))
+        // First writer wins so an explicit seedDir owner is never shadowed.
+        if (!byListedDir.has(k)) byListedDir.set(k, ws)
+      }
     }
 
     let changed = false
     for (const m of manifests) {
       const key = canonSeedDir(m.dir)
-      const existing = bySeedDir.get(key)
+      // Prefer the seedDir owner; fall back to any workspace already listing this dir.
+      const existing = bySeedDir.get(key) ?? byListedDir.get(key)
       if (existing) {
         // Seed-once: leave user-owned name/dirs alone. Only refresh the
         // manifest-owned boot metadata, and only on a REAL delta — so an
@@ -419,6 +491,67 @@ export class WorkspaceService {
 
   private expandHome(p: string): string {
     return p.replace(/^~/, process.env.HOME ?? process.env.USERPROFILE ?? "")
+  }
+
+  // ── Scaffold (WS-G / G3) ────────────────────────────────────────────────────
+
+  /**
+   * WS-G (G3) — write a minimal `workspace.json` manifest into `dir` so the
+   * workspace is self-documenting + re-discoverable, and TOAST the user. The
+   * manifest shape MUST match what {@link discoverWorkspaces} parses
+   * (`{ name, alias?, editor?, repos? }`) so it round-trips through the seed-once
+   * `discover`. We write the minimum valid manifest: the workspace `name` (alias =
+   * "", editor = "code", repos = []), so a future rescan re-imports it cleanly.
+   *
+   * RESCAN-DUPLICATE PREVENTION (the trap): a hand-created workspace has NO seedDir,
+   * so a later rescan would discover the scaffolded manifest, find no entry keyed by
+   * that dir, and mint a DUPLICATE. We prevent it by BINDING this dir to the existing
+   * entry — set `ws.seedDir` to the canonicalized scaffolded dir if the workspace has
+   * none yet — so a rescan maps the manifest back to THIS workspace. (For a multi-dir
+   * workspace only the first scaffold binds `seedDir`; the rest are caught by the
+   * `discover` belt-and-suspenders dir-match. Both layers keep rescans duplicate-free.)
+   *
+   * NO-CLOBBER: if `dir` already has a `workspace.json` we skip the write entirely
+   * (never overwrite a user's/another workspace's manifest) and do NOT toast a
+   * "created" message. We STILL bind `seedDir` so the existing manifest reconciles to
+   * this entry on rescan (no duplicate from a pre-existing manifest either).
+   *
+   * Best-effort + never throws: a bad/relative/missing dir or an unwritable path is
+   * logged + skipped (the workspace is still created/updated — scaffolding is a
+   * convenience, not a hard requirement).
+   */
+  private scaffoldManifest(ws: Workspace, dir: string): void {
+    const target = this.expandHome(dir)
+    if (!isAbsolute(target)) return // only ever scaffold into a known-absolute dir
+    let isDir: boolean
+    try {
+      isDir = existsSync(target) && statSync(target).isDirectory()
+    } catch {
+      return
+    }
+    if (!isDir) return
+
+    // Bind seedDir so a rescan reconciles the manifest back to THIS workspace
+    // (rescan-duplicate prevention). Only bind once — the first scaffolded dir owns it.
+    if (!ws.seedDir) ws.seedDir = canonSeedDir(target)
+
+    const manifestPath = join(target, "workspace.json")
+    // NO-CLOBBER: never overwrite an existing manifest (could be another workspace's
+    // or a user-authored one). The seedDir bind above still makes it reconcile.
+    if (existsSync(manifestPath)) return
+
+    const manifest = {
+      name: ws.name,
+      alias: "",
+      editor: "code",
+      repos: [] as WorkspaceRepo[],
+    }
+    try {
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n")
+      this.notify?.(`Created workspace.json in ${target}`, "success", "Workspace")
+    } catch (err) {
+      logWarn("workspaces", `could not scaffold workspace.json in ${target}: ${err}`)
+    }
   }
 
   // ── Boot/launch path (SELECTION is separate — see setActive) ────────────────

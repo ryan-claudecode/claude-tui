@@ -56,8 +56,11 @@ export const missionService = new MissionService(sessionService, {
 // WS-C — scope work sessions to the active workspace: the durable container is
 // stamped at create() time via this getter (undefined in "All" mode). Same
 // callback-injection posture as missionService above.
+// WS-G (G1) — and resolve the active workspace's primary dir as the spawn cwd for
+// a NEW session's first terminal (null in "All" mode / no dir → default cwd).
 export const workSessionService = new SessionService({
   getActiveWorkspaceId: () => workspaceService.getActiveId(),
+  getActiveWorkspaceDir: () => workspaceService.getActiveWorkspaceDir(),
 })
 
 /**
@@ -178,6 +181,13 @@ export async function setupIpc(win: BrowserWindow) {
   panelService.setCompanion(companionService)
   notificationService.setMainWindow(win)
   uiService.setMainWindow(win)
+
+  // WS-G (G3) — give WorkspaceService a user-visible notification seam so it can
+  // TOAST when it scaffolds a workspace.json into a newly-added directory (at create
+  // or via the G2 add-folder affordance). Wired here, after both singletons exist.
+  workspaceService.setNotifier((message, level, title) =>
+    notificationService.notify(message, level as any, title),
+  )
 
   workspaceService.discover(config.workspaceScanPaths)
   workSessionService.attachTerminals(sessionService)
