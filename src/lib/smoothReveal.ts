@@ -106,3 +106,69 @@ export function nextRevealedLen(
 export function isFullyRevealed(targetLen: number, revealedLen: number): boolean {
   return revealedLen >= targetLen - 1e-6
 }
+
+/**
+ * CAPP-74 — the PURE frame-clock the rAF hook (useSmoothReveal) drives. It owns the
+ * dt-bookkeeping + reveal carry that the hook used to inline, factored out so the
+ * STALL regression is unit-testable WITHOUT a DOM/jsdom (the repo's hook-test idiom,
+ * cf. reconcileSplit in useSplitView). The single responsibility: across a stream
+ * of frames, advance the revealed float toward whatever the CURRENT target is — and
+ * crucially, KEEP the frame clock across target growth, because the bug that
+ * defeated the feature was resetting the clock on every delta (→ dt always 0 →
+ * stuck at the head start until the turn-end snap).
+ *
+ * Lifecycle contract (mirrors the hook):
+ *  - `start(headStart, target)` — called on the inactive→active edge: seed the
+ *    revealed float to the head start (clamped to target) and reset the clock so the
+ *    NEXT frame establishes t0 (dt=0). Resetting the clock happens HERE (activation),
+ *    NOT on every delta.
+ *  - `frame(ts, target, config)` — one rAF tick at timestamp `ts` against the CURRENT
+ *    target. dt is measured from the previous frame's ts (the clock persists across
+ *    deltas that grew `target`); a target that grew since the last frame is just a
+ *    bigger backlog this frame, never a clock reset. Returns the new revealed float.
+ *  - `resetClock()` — drop the stale timestamp (teardown, or re-kicking a dormant
+ *    loop) so a long gap isn't counted as one giant frame on resume; revealed is
+ *    preserved.
+ *  - `done(target)` — caught up to the current target (loop may self-stop).
+ *
+ * This is the seam: feeding it (ts, target) pairs at ~one delta per frame and
+ * asserting `revealed` ADVANCES is exactly the test that fails against the old
+ * "reset the clock every delta" wiring and passes against the ref-decoupled hook.
+ */
+export class RevealClock {
+  /** The revealed length as a float (the hook floors it for the rendered slice). */
+  revealed = 0
+  /** The previous frame's timestamp, or null for a fresh clock (next frame = t0). */
+  private last: number | null = null
+
+  /** Activation edge: seed the head start and reset the clock. */
+  start(headStart: number, target: number): void {
+    this.revealed = Math.min(headStart, target)
+    this.last = null
+  }
+
+  /**
+   * One frame at timestamp `ts` against the CURRENT target. dt is measured from the
+   * previous frame — the clock survives target growth, so brisk per-frame streaming
+   * still produces a real dt and the reveal advances. Returns the new revealed float.
+   */
+  frame(ts: number, target: number, config: RevealConfig = DEFAULT_REVEAL_CONFIG): number {
+    const prev = this.last
+    this.last = ts
+    const dt = prev == null ? 0 : ts - prev
+    if (dt > 0) {
+      this.revealed = nextRevealedLen(target, this.revealed, dt, config)
+    }
+    return this.revealed
+  }
+
+  /** Drop the stale timestamp (teardown / re-kick) without losing progress. */
+  resetClock(): void {
+    this.last = null
+  }
+
+  /** Whether the reveal has drained to the current target (loop can stop). */
+  done(target: number): boolean {
+    return isFullyRevealed(target, this.revealed)
+  }
+}

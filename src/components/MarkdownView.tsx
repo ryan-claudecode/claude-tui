@@ -75,10 +75,14 @@ const MARKDOWN_COMPONENTS = {
  *
  * Memoized on `source`: the structured transcript re-renders on every streamed
  * delta, so without memoization every settled block would re-parse its markdown on
- * each keystroke of the agent's reply. With React.memo only the block whose text
- * actually changed (the growing one) re-parses. react-markdown tolerates partial /
- * unbalanced markdown (e.g. an unclosed ``` fence between deltas) without throwing,
- * so incremental rendering never flickers or crashes.
+ * each keystroke of the agent's reply. With React.memo only the block whose `source`
+ * actually changed re-parses — every SETTLED block stays cached. For the ONE live
+ * streaming block the CAPP-74 smoothing buffer feeds a `source` that grows per rAF
+ * frame (the revealed slice, not just per delta), so that single block re-parses ~per
+ * frame; this is inherent to a markdown typewriter, bounded to the one active block,
+ * and well within react-markdown's budget (no throttle needed). react-markdown also
+ * tolerates partial / unbalanced markdown (e.g. an unclosed ``` fence between frames)
+ * without throwing, so incremental rendering never flickers or crashes.
  */
 function MarkdownViewImpl({ source = "", className }: Props) {
   return (

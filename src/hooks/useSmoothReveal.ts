@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   DEFAULT_REVEAL_CONFIG,
-  isFullyRevealed,
-  nextRevealedLen,
+  RevealClock,
   type RevealConfig,
 } from "../lib/smoothReveal"
 
@@ -12,15 +11,16 @@ import {
  * edge — never a one-frame empty block between the working row hiding and the rAF
  * loop's first tick. Small enough that it doesn't read as a burst.
  */
-const HEAD_START = 3
+export const HEAD_START = 3
 
 /**
  * CAPP-74 — the SMOOTHING-BUFFER hook: runs the requestAnimationFrame drain that
  * turns bursty streamed text into a steady typewriter, and hands AgentView the
  * REVEALED slice of the live assistant block.
  *
- * It owns ONLY the constant-rate drain (the pure pacing lives in
- * src/lib/smoothReveal.ts). The contract:
+ * It owns ONLY the constant-rate drain (the pure pacing + the frame clock live in
+ * src/lib/smoothReveal.ts — `nextRevealedLen` + `RevealClock`, the unit-test seam).
+ * The contract:
  *  - `active` is true ONLY for the live, current-turn TRAILING assistant block
  *    (AgentView passes `busy && this is the streaming-caret block` && !reduced-
  *    motion). While active, `text` is the full received ("target") text; the hook
@@ -32,6 +32,16 @@ const HEAD_START = 3
  *    immediately. So historical/restored transcripts are NEVER replayed as a
  *    typewriter, and a finishing turn drains promptly to its complete text.
  *
+ * Frame-clock lifecycle (the fix for the per-frame STALL): the rAF loop's effect
+ * depends ONLY on `[active]`, NOT on the growing `target`. The target and config are
+ * carried in REFS updated by light effects, so a new delta does NOT restart the rAF
+ * effect and does NOT reset the clock — the frame clock (owned by `RevealClock`)
+ * SURVIVES every delta, so `dt` is real and the reveal keeps advancing under fast
+ * per-frame streaming. (The old code reset the clock on every delta → dt always 0 →
+ * stuck at HEAD_START until the turn-end snap.) The loop self-stops when caught up; a
+ * separate delta-effect RE-KICKS it if a later delta grows the target while it's gone
+ * dormant. The clock is reset ONLY on activation / teardown / re-kick.
+ *
  * Returns the string to render (a prefix while draining, the full text once
  * caught up / inactive).
  */
@@ -41,16 +51,47 @@ export function useSmoothReveal(
   config: RevealConfig = DEFAULT_REVEAL_CONFIG,
 ): string {
   const target = text.length
-  // The revealed length, carried as a FLOAT across frames so a sub-char-per-frame
-  // base rate still accumulates. A ref (mutated by the rAF loop) is the source of
-  // truth; `revealed` state mirrors it so the render reflects each frame's progress.
-  const revealedRef = useRef(0)
+  // The frame clock + revealed float (a FLOAT so a sub-char-per-frame base rate
+  // still accumulates). The rAF loop mutates `clock.revealed`; `setRevealed` mirrors
+  // it into state so the render reflects each frame's progress. Seed the head start at
+  // FIRST-RENDER init (not in a post-paint effect) when already active, so the very
+  // first paint shows the head-start prose + caret — never a one-frame empty block
+  // (the head-start-first-paint fix; the comment's "never empty" claim is now true).
+  const clockRef = useRef<RevealClock | null>(null)
+  if (clockRef.current == null) {
+    clockRef.current = new RevealClock()
+    if (active) clockRef.current.revealed = Math.min(target, HEAD_START)
+  }
   const [, setRevealed] = useState(0)
   const rafRef = useRef<number | null>(null)
-  const lastTsRef = useRef<number | null>(null)
-  // Tracks the previous `active` so we can detect the inactive→active edge and
-  // seed the head start exactly once per activation.
-  const wasActiveRef = useRef(false)
+  // The current target length + config, kept in REFS so a delta growing the target
+  // (or a config change) does NOT restart the rAF effect — which would reset the
+  // frame clock. The rAF loop reads these each tick; light effects keep them fresh.
+  const targetRef = useRef(target)
+  const configRef = useRef(config)
+  configRef.current = config
+
+  // Keep the live target in a ref WITHOUT restarting the rAF loop. This is the
+  // decoupling: the heavy animation effect no longer lists `target` in its deps, so
+  // a delta can grow the target every frame without ever resetting the clock.
+  useEffect(() => {
+    targetRef.current = target
+  }, [target])
+
+  // One shared rAF tick: advance the float reveal by the elapsed dt (via the clock),
+  // paint, and either schedule the next frame or self-stop when caught up.
+  const tick = useCallback((ts: number) => {
+    const clock = clockRef.current!
+    clock.frame(ts, targetRef.current, configRef.current)
+    setRevealed(clock.revealed)
+    if (!clock.done(targetRef.current)) {
+      rafRef.current = requestAnimationFrame(tick)
+    } else {
+      // Caught up: stop. The delta-effect re-kicks the loop if a later delta grows
+      // the target while we're still active.
+      rafRef.current = null
+    }
+  }, [])
 
   // When inactive, snap revealed to the full text synchronously (no animation):
   // historical / settled / rehydrated / reduced-motion all render INSTANTLY and
@@ -62,67 +103,64 @@ export function useSmoothReveal(
         cancelAnimationFrame(rafRef.current)
         rafRef.current = null
       }
-      lastTsRef.current = null
-      wasActiveRef.current = false
-      revealedRef.current = target
+      const clock = clockRef.current!
+      clock.resetClock()
+      clock.revealed = target
       setRevealed(target)
     }
   }, [active, target])
 
+  // The rAF drain loop. Depends ONLY on [active] — NEVER on the growing target — so
+  // a per-frame delta can't tear down and restart it (the stall). The loop runs for
+  // the whole active turn, reading the live `targetRef` each tick; it self-stops
+  // when caught up and is re-kicked by the delta-effect below.
   useEffect(() => {
     if (!active) return
-    // Inactive→active edge: seed a small head start so the first paint isn't empty.
-    if (!wasActiveRef.current) {
-      wasActiveRef.current = true
-      revealedRef.current = Math.min(target, HEAD_START)
-    }
+    const clock = clockRef.current!
     // Guard environments without rAF (SSR / tests rendering to static markup):
     // nothing to animate, so reveal everything.
     if (typeof requestAnimationFrame !== "function") {
-      revealedRef.current = target
-      setRevealed(target)
+      clock.revealed = targetRef.current
+      setRevealed(clock.revealed)
       return
     }
-    // Already caught up to the current target — don't spin a loop until a new
-    // delta grows it (the effect re-runs when `target` changes).
-    if (isFullyRevealed(target, revealedRef.current)) {
-      setRevealed(revealedRef.current)
-      return
-    }
-
-    const tick = (ts: number) => {
-      const last = lastTsRef.current
-      lastTsRef.current = ts
-      // First frame after (re)start: no dt yet, just schedule the next.
-      const dt = last == null ? 0 : ts - last
-      if (dt > 0) {
-        revealedRef.current = nextRevealedLen(target, revealedRef.current, dt, config)
-        setRevealed(revealedRef.current)
-      }
-      if (!isFullyRevealed(target, revealedRef.current)) {
-        rafRef.current = requestAnimationFrame(tick)
-      } else {
-        rafRef.current = null
-        lastTsRef.current = null
-      }
-    }
-
+    // Activation edge: seed a small head start and PAINT it now (setRevealed) so the
+    // FIRST non-empty paint already shows the head-start prose + caret — no leading
+    // empty block while we wait for the first rAF tick (whose dt=0 yields no paint).
+    clock.start(HEAD_START, targetRef.current)
+    setRevealed(clock.revealed)
     rafRef.current = requestAnimationFrame(tick)
     return () => {
       if (rafRef.current != null) {
         cancelAnimationFrame(rafRef.current)
         rafRef.current = null
       }
-      // Drop the stale frame timestamp so a resumed loop computes dt fresh (a long
-      // pause between deltas must not count as one giant frame on resume).
-      lastTsRef.current = null
+      // Drop the stale frame timestamp so a re-activated loop computes dt fresh (a
+      // long pause between turns must not count as one giant frame on resume).
+      clock.resetClock()
     }
-  }, [active, target, config])
+  }, [active, tick])
+
+  // Delta-effect: when a new delta grows the target while we're active but the loop
+  // has gone DORMANT (caught up and self-stopped), re-kick it so the fresh backlog
+  // animates. Because the rAF effect doesn't depend on `target`, nothing else would
+  // restart a dormant loop. A still-running loop (rafRef != null) is left untouched
+  // so its clock keeps ticking; we only resume a stopped one, with a fresh clock so
+  // the dormant gap isn't counted as a single frame.
+  useEffect(() => {
+    if (!active) return
+    if (typeof requestAnimationFrame !== "function") return
+    if (rafRef.current != null) return // loop already running — it reads targetRef
+    const clock = clockRef.current!
+    if (clock.done(targetRef.current)) return // nothing new to animate
+    clock.resetClock()
+    rafRef.current = requestAnimationFrame(tick)
+  }, [target, active, tick])
 
   if (!active) return text
   // No rAF (SSR / static-markup tests): effects never ran to seed/animate the
   // reveal, so render the FULL text rather than a stuck-empty slice.
   if (typeof requestAnimationFrame !== "function") return text
-  const shown = Math.floor(Math.min(revealedRef.current, target))
+  const shown = Math.floor(Math.min(clockRef.current.revealed, targetRef.current))
   return text.slice(0, shown)
 }
