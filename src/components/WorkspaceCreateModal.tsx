@@ -1,37 +1,33 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { useFocusTrap } from "../hooks/useFocusTrap"
-import { validateWorkspaceName, addFormDirs, removeFormDir } from "../lib/workspaceForm"
+import { validateWorkspaceName, dirBasename } from "../lib/workspaceForm"
 import { toast } from "../lib/toast"
 
 interface Props {
   open: boolean
   onClose: () => void
-  /** Create the workspace; resolves to the new workspace id (or null on failure)
-   *  so the caller can set it active. */
-  onCreate: (name: string, dirs: string[]) => Promise<{ id: string } | null>
+  /** Create the workspace; resolves to the new workspace (or null on failure) so
+   *  the caller can set it active. WS-H: a single optional folder. */
+  onCreate: (name: string, dir?: string) => Promise<{ id: string } | null>
   /** Existing workspace names — used ONLY for a soft, non-blocking duplicate-name
    *  hint. Workspaces are id-addressed, so dups are allowed; we just warn. */
   existingNames?: string[]
 }
 
-// Show just the last path segment as the chip label (the full path is the
-// title) so long absolute paths don't blow out the modal width.
-function dirLabel(dir: string): string {
-  const parts = dir.split(/[\\/]/).filter(Boolean)
-  return parts[parts.length - 1] || dir
-}
-
 /**
- * WS-D — the create-workspace modal in the MAIN window (not the companion).
- * Mirrors MissionPrompt's overlay/focus-trap pattern: a name input, a
- * "+ Add folder" button that opens the NATIVE folder dialog (multi-select), the
- * chosen dirs as removable chips, and Create/Cancel. Esc / click-outside cancel;
- * Create is disabled until the name is non-empty. Dirs are optional — a
- * workspace can start empty and gain dirs later.
+ * WS-D/H — the create-workspace modal in the MAIN window (not the companion).
+ * Mirrors MissionPrompt's overlay/focus-trap pattern: a name input, a single
+ * "Choose folder" picker that opens the NATIVE folder dialog (single-select), the
+ * chosen folder shown as its parent-folder NAME (clearable), and Create/Cancel.
+ * Esc / click-outside cancel; Create is disabled until the name is non-empty. The
+ * folder is OPTIONAL — a workspace can start folderless and bind one later.
+ *
+ * NO HOVER-REVEAL: the "Choose folder" / "Change folder" + the clear (×) controls
+ * are always visible while relevant; nothing appears on mouse-hover.
  */
 export default function WorkspaceCreateModal({ open, onClose, onCreate, existingNames = [] }: Props) {
   const [name, setName] = useState("")
-  const [dirs, setDirs] = useState<string[]>([])
+  const [dir, setDir] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -40,16 +36,17 @@ export default function WorkspaceCreateModal({ open, onClose, onCreate, existing
   useEffect(() => {
     if (open) {
       setName("")
-      setDirs([])
+      setDir(null)
       setBusy(false)
       requestAnimationFrame(() => nameRef.current?.focus())
     }
   }, [open])
 
-  const addFolder = useCallback(async () => {
+  // WS-H — single-select native folder picker; take the first chosen path.
+  const chooseFolder = useCallback(async () => {
     try {
       const chosen = await window.api.openDirectoryDialog()
-      if (chosen.length) setDirs((cur) => addFormDirs(cur, chosen))
+      if (chosen.length) setDir(chosen[0])
     } catch (err) {
       toast("error", `Couldn't open the folder picker: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -62,11 +59,11 @@ export default function WorkspaceCreateModal({ open, onClose, onCreate, existing
       return
     }
     setBusy(true)
-    const ws = await onCreate(v.name, dirs)
+    const ws = await onCreate(v.name, dir ?? undefined)
     setBusy(false)
     // onCreate surfaces its own failure toast; only close on success.
     if (ws) onClose()
-  }, [name, dirs, onCreate, onClose])
+  }, [name, dir, onCreate, onClose])
 
   if (!open) return null
 
@@ -123,27 +120,35 @@ export default function WorkspaceCreateModal({ open, onClose, onCreate, existing
           </span>
         )}
 
-        <label className="workspace-create-label">Folders</label>
-        <div className="workspace-create-dirs">
-          {dirs.length === 0 && (
-            <span className="workspace-create-dirs-empty">No folders yet — add one (optional).</span>
-          )}
-          {dirs.map((dir) => (
-            <span key={dir} className="workspace-dir-chip" title={dir}>
-              <span className="workspace-dir-chip-label">{dirLabel(dir)}</span>
-              <button
-                className="workspace-dir-chip-remove"
-                aria-label={`Remove folder ${dir}`}
-                onClick={() => setDirs((cur) => removeFormDir(cur, dir))}
-              >
-                ×
-              </button>
+        <label className="workspace-create-label">Folder</label>
+        {dir ? (
+          // The chosen folder, shown as its parent-folder NAME with a clear (×).
+          // Always-visible controls — no hover reveal.
+          <div className="workspace-create-folder">
+            <span className="workspace-create-folder-name" title={dir}>
+              {dirBasename(dir)}
             </span>
-          ))}
-        </div>
-        <button className="workspace-add-folder-btn" onClick={addFolder} type="button">
-          + Add folder
-        </button>
+            <button
+              type="button"
+              className="workspace-create-folder-change"
+              onClick={chooseFolder}
+            >
+              Change
+            </button>
+            <button
+              type="button"
+              className="workspace-create-folder-clear"
+              aria-label="Clear chosen folder"
+              onClick={() => setDir(null)}
+            >
+              ×
+            </button>
+          </div>
+        ) : (
+          <button className="workspace-add-folder-btn" onClick={chooseFolder} type="button">
+            Choose folder
+          </button>
+        )}
 
         <div className="workspace-create-actions">
           <button className="workspace-create-cancel" onClick={onClose}>

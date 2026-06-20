@@ -8,10 +8,17 @@ import { loadVersioned, saveVersioned, type Migration } from "../persist"
 import { logWarn } from "../log"
 
 /**
- * The durable workspace MODEL (WS-A). A workspace is a user-named grouping of
- * one-or-more directories (manifest-optional), identified by a stable registry
- * uuid. The registry (`~/.claude-tui/workspaces.json`) is the SOURCE OF TRUTH;
- * discovery is demoted to a seed/import path.
+ * The durable workspace MODEL (WS-A; single-folder model as of WS-H).
+ *
+ * WS-H MODEL CHANGE — "it's a workSPACE": a workspace is ONE directory, not a
+ * multi-dir grouping. The field is `dir?: string` (a single OPTIONAL folder)
+ * instead of the old `dirs: string[]`. A workspace can start folderless and bind
+ * a folder later via {@link WorkspaceService.setDir}. Persisted records from
+ * before WS-H (which carried `dirs: []`) are migrated on load (schemaVersion 2):
+ * `dir = record.dir ?? record.dirs?.[0]`, and the legacy `dirs` array is dropped.
+ *
+ * The registry (`~/.claude-tui/workspaces.json`) is the SOURCE OF TRUTH; discovery
+ * is demoted to a seed/import path.
  *
  * The optional `seed*` fields exist only to keep two seams working without a
  * dedicated B/C/D strand:
@@ -19,11 +26,11 @@ import { logWarn } from "../log"
  *    is keyed by. It is the STABLE de-dup key: a re-scan that re-encounters the
  *    same manifest dir updates the existing entry instead of creating a duplicate.
  *    Set either when an entry is imported from a discovered manifest OR when a
- *    hand-created/added dir is scaffolded (WS-G) — in which case it is bound to the
- *    FIRST scaffolded dir NOT already owned as another workspace's `seedDir` (so no
- *    two entries share a seedDir key). Absent only when an entry has no eligible
- *    canonical dir to claim (every key was already taken); such entries still
- *    de-dup on rescan via `discover`'s `byListedDir` dir-match.
+ *    hand-created/set folder is scaffolded (WS-G/H) — bound to the workspace's
+ *    folder when NOT already owned as another workspace's `seedDir` (so no two
+ *    entries share a seedDir key). Absent only when an entry has no eligible
+ *    canonical dir to claim (the key was already taken); such entries still de-dup
+ *    on rescan via `discover`'s `byListedDir` dir-match.
  *  - `seedRepos` / `seedEditor` — the manifest's richer repo metadata, retained so
  *    the legacy `activate()` boot path (open editors + spawn one session per repo)
  *    still works for imported workspaces. Not part of the public model surface.
@@ -31,7 +38,8 @@ import { logWarn } from "../log"
 export interface Workspace {
   id: string
   name: string
-  dirs: string[]
+  /** The workspace's single folder (WS-H), or undefined when none is set yet. */
+  dir?: string
   color?: string
   createdAt: number
   updatedAt: number
@@ -54,7 +62,8 @@ export interface Workspace {
 export interface PublicWorkspace {
   id: string
   name: string
-  dirs: string[]
+  /** The workspace's single folder (WS-H), or undefined when none is set. */
+  dir?: string
   color?: string
   createdAt: number
   updatedAt: number
@@ -89,10 +98,43 @@ interface WorkspaceRegistry {
   activeWorkspaceId: string | null
 }
 
-/** Persistence schema version for workspaces.json. v1 = today's shape verbatim;
- *  starts at its OWN 1 (independent of the missions/sessions stores). */
-const SCHEMA_VERSION = 1
-const MIGRATIONS: Migration[] = []
+/**
+ * Persistence schema version for workspaces.json.
+ *  - v1 — the WS-A..G multi-dir shape (`dirs: string[]` per workspace).
+ *  - v2 (WS-H) — the SINGLE-FOLDER model: each workspace carries `dir?: string`
+ *    instead of `dirs[]`. The v1→v2 migration collapses `dir = dirs?.[0]` and
+ *    drops the `dirs` array, so a user upgrading keeps their workspace's first
+ *    folder as its single folder with NO data loss for the common (0- or 1-dir)
+ *    case. (A pre-WS-H multi-dir workspace keeps only its primary dir — the model
+ *    intentionally has no place for the rest.)
+ */
+const SCHEMA_VERSION = 2
+
+/** v1→v2 (WS-H): collapse the legacy `dirs[]` array to a single `dir?` field.
+ *  `dir = record.dir ?? record.dirs?.[0]` (a hand-edited v1 record could already
+ *  carry a stray `dir`; prefer it), then drop `dirs` so the migrated record is
+ *  clean. Per-workspace, tolerant of malformed rows (non-array `dirs` → no dir). */
+function migrateV1toV2(data: any): any {
+  const workspaces = Array.isArray(data?.workspaces) ? data.workspaces : []
+  return {
+    ...data,
+    workspaces: workspaces.map((ws: any) => {
+      if (!ws || typeof ws !== "object") return ws
+      const dir = ws.dir ?? (Array.isArray(ws.dirs) ? ws.dirs[0] : undefined)
+      const { dirs: _dropped, ...rest } = ws
+      return dir != null ? { ...rest, dir } : { ...rest }
+    }),
+  }
+}
+
+/** `MIGRATIONS[n]` upgrades version n→n+1. Slot 0 (v0→v1) is an identity step
+ *  (envelope-only) handled by `loadVersioned`; slot 1 is the WS-H dirs→dir collapse. */
+const MIGRATIONS: Migration[] = [
+  // v0→v1 (envelope wrap only — no shape change): identity, filled so slot 1 lands.
+  (data) => data,
+  // v1→v2 (WS-H): dirs[] → dir?
+  migrateV1toV2,
+]
 
 /** Strip the internal `seed*` fields from a stored workspace, yielding the
  *  public, registry-owned projection. */
@@ -100,7 +142,7 @@ function toPublic(ws: Workspace): PublicWorkspace {
   return {
     id: ws.id,
     name: ws.name,
-    dirs: ws.dirs,
+    dir: ws.dir,
     color: ws.color,
     createdAt: ws.createdAt,
     updatedAt: ws.updatedAt,
@@ -178,14 +220,27 @@ export class WorkspaceService {
     for (const ws of reg.workspaces) {
       if (!ws || typeof ws.id !== "string") continue
       // Normalize each admitted entry so a persisted/hand-edited record that is
-      // missing fields can't crash a later mutator: `addDir`/`removeDir` assume
-      // `dirs` is an array (`.includes`/`.filter`), and `list()` sorts on the
-      // timestamps. Default the user-facing fields rather than rejecting the row.
+      // missing fields loads as a usable workspace (and `list()` can sort on the
+      // timestamps). Default the user-facing fields rather than rejecting the row.
+      //
+      // WS-H: the single-folder model. `dir` is the canonical field; the v1→v2
+      // migration already collapsed any legacy `dirs[]`. But be tolerant of a
+      // record that reached here still carrying `dirs` (e.g. a hand-edited v2
+      // file, or a forward-compat read): fall back to `dirs?.[0]` and never
+      // retain the array.
       const t = this.now()
+      const legacy = ws as Workspace & { dirs?: unknown }
+      const dir =
+        typeof legacy.dir === "string"
+          ? legacy.dir
+          : Array.isArray(legacy.dirs) && typeof legacy.dirs[0] === "string"
+            ? (legacy.dirs[0] as string)
+            : undefined
+      const { dirs: _dropped, ...rest } = legacy
       this.workspaces.set(ws.id, {
-        ...ws,
+        ...rest,
+        dir,
         name: typeof ws.name === "string" ? ws.name : "",
-        dirs: Array.isArray(ws.dirs) ? ws.dirs : [],
         createdAt: typeof ws.createdAt === "number" ? ws.createdAt : t,
         updatedAt: typeof ws.updatedAt === "number" ? ws.updatedAt : t,
       })
@@ -252,20 +307,23 @@ export class WorkspaceService {
     for (const cb of this.activeListeners) cb(e)
   }
 
-  create(name: string, dirs: string[] = []): Workspace {
+  /** Create a workspace (WS-H single-folder model). `dir` is an optional single
+   *  folder; when given, it is scaffolded (workspace.json + seedDir bind) so a
+   *  later rescan reconciles back to this entry (no duplicate). */
+  create(name: string, dir?: string): Workspace {
     const t = this.now()
     const ws: Workspace = {
       id: this.mintId(),
       name,
-      dirs: [...dirs],
+      dir,
       createdAt: t,
       updatedAt: t,
     }
     this.workspaces.set(ws.id, ws)
-    // WS-G (G3) — scaffold a workspace.json into each provided dir so the workspace
-    // is self-documenting + re-discoverable, binding seedDir so a later rescan maps
-    // the manifest back to THIS entry (no duplicate). Mutates ws.seedDir; persist after.
-    for (const dir of ws.dirs) this.scaffoldManifest(ws, dir)
+    // WS-G (G3) — scaffold a workspace.json into the folder (if any) so the
+    // workspace is self-documenting + re-discoverable, binding seedDir so a later
+    // rescan maps the manifest back to THIS entry. Mutates ws.seedDir; persist after.
+    if (ws.dir) this.scaffoldManifest(ws, ws.dir)
     this.persist()
     return ws
   }
@@ -279,29 +337,28 @@ export class WorkspaceService {
     return ws
   }
 
-  addDir(id: string, dir: string): Workspace | undefined {
+  /**
+   * WS-H — set (or clear, with null) the workspace's single folder. Replaces the
+   * old multi-dir `addDir`/`removeDir` pair: a workspace is ONE folder.
+   *
+   * Setting a folder scaffolds a `workspace.json` into it (+ binds `seedDir` for
+   * rescan-dedup), exactly like the old `addDir` did — so the WS-G scaffold +
+   * canonSeedDir de-dup guarantees still hold. Clearing (null) just drops the
+   * folder; the `seedDir` bind is intentionally LEFT in place so a workspace that
+   * already scaffolded a manifest still reconciles to itself on a later rescan
+   * (no duplicate) — the bind is a stable de-dup key, not a live mirror of `dir`.
+   * A no-op (same folder) does not bump `updatedAt` or persist.
+   */
+  setDir(id: string, dir: string | null): Workspace | undefined {
     const ws = this.workspaces.get(id)
     if (!ws) return undefined
-    if (!ws.dirs.includes(dir)) {
-      ws.dirs.push(dir)
-      ws.updatedAt = this.now()
-      // WS-G (G3) — scaffold a workspace.json into the newly-added dir (+ bind
-      // seedDir for rescan-dedup). Mutates ws before the persist below.
-      this.scaffoldManifest(ws, dir)
-      this.persist()
-    }
-    return ws
-  }
-
-  removeDir(id: string, dir: string): Workspace | undefined {
-    const ws = this.workspaces.get(id)
-    if (!ws) return undefined
-    const next = ws.dirs.filter((d) => d !== dir)
-    if (next.length !== ws.dirs.length) {
-      ws.dirs = next
-      ws.updatedAt = this.now()
-      this.persist()
-    }
+    const next = dir ?? undefined
+    if (ws.dir === next) return ws // no-op
+    ws.dir = next
+    ws.updatedAt = this.now()
+    // Scaffold + bind seedDir on a SET (not a clear). Mutates ws before persist.
+    if (next) this.scaffoldManifest(ws, next)
+    this.persist()
     return ws
   }
 
@@ -350,13 +407,13 @@ export class WorkspaceService {
   }
 
   /**
-   * WS-G (G1) — the active workspace's PRIMARY directory (`dirs[0]`), resolved to an
-   * absolute, existing path, or null. This is the spawn cwd seam: when a NEW work
-   * session is created while a workspace is active and has ≥1 dir, its terminal(s)
+   * WS-G (G1) — the active workspace's folder (WS-H: its single `dir`), resolved to
+   * an absolute, existing path, or null. This is the spawn cwd seam: when a NEW work
+   * session is created while a workspace is active and has a folder, its terminal(s)
    * spawn HERE so `claude` runs as if opened in that directory (sees its files + git).
    *
    * Returns null — meaning "keep the current default cwd behavior" — when there is no
-   * active workspace, the active workspace has no dirs, or `dirs[0]` does not resolve
+   * active workspace, the active workspace has no folder, or `dir` does not resolve
    * to an existing directory on disk (a stale/typo'd path must never silently spawn an
    * agent in a non-existent or wrong place; we fall back to the default instead).
    * `~`-prefixed dirs are expanded; a relative dir is rejected (we only ever spawn in
@@ -364,9 +421,9 @@ export class WorkspaceService {
    */
   getActiveWorkspaceDir(): string | null {
     const ws = this.getActive()
-    const first = ws?.dirs?.[0]
-    if (!first) return null
-    const expanded = this.expandHome(first)
+    const dir = ws?.dir
+    if (!dir) return null
+    const expanded = this.expandHome(dir)
     if (!isAbsolute(expanded)) return null
     try {
       if (!statSync(expanded).isDirectory()) return null
@@ -386,10 +443,10 @@ export class WorkspaceService {
    * is SEED-ONCE for the user-owned fields.
    *
    * SEED-ONCE POLICY (zero data-loss — the registry is the source of truth):
-   *  - `name` + `dirs` are USER-OWNED once an entry exists. Discovery NEVER
-   *    refreshes them, so a user's rename()/addDir()/removeDir() on an imported
-   *    workspace survives every subsequent boot/re-scan. (Pre-fix this branch
-   *    overwrote them from the manifest, silently reverting user edits.)
+   *  - `name` + `dir` are USER-OWNED once an entry exists. Discovery NEVER
+   *    refreshes them, so a user's rename()/setDir() on an imported workspace
+   *    survives every subsequent boot/re-scan. (Pre-fix this branch overwrote them
+   *    from the manifest, silently reverting user edits.)
    *  - `seedRepos` + `seedEditor` are MANIFEST-OWNED boot metadata (they drive
    *    the legacy `activate()` editor-spawn and are NOT user-editable via the
    *    registry API), so they MAY be refreshed — but ONLY when they actually
@@ -406,17 +463,16 @@ export class WorkspaceService {
   discover(scanPaths: string[]): void {
     const manifests = discoverWorkspaces(scanPaths)
     const bySeedDir = new Map<string, Workspace>()
-    // WS-G (G3) — belt-and-suspenders rescan-dedup. The PRIMARY de-dup key is
-    // `seedDir` (one per entry). But a hand-created/edited workspace can list SEVERAL
-    // scaffolded dirs while only the FIRST is bound as `seedDir`; a rescan would then
-    // re-discover the OTHER scaffolded manifests, miss them in `bySeedDir`, and mint a
-    // DUPLICATE. So we ALSO index every workspace's listed dirs (canonicalized) and
-    // reconcile a manifest against an existing workspace that already lists that dir.
+    // WS-G/H rescan-dedup. The PRIMARY de-dup key is `seedDir` (one per entry).
+    // Belt-and-suspenders: also index each workspace's own `dir` (canonicalized) so
+    // a manifest whose dir matches an existing workspace's folder reconciles to it
+    // instead of minting a DUPLICATE (covers an entry that has a folder but, for some
+    // reason, no `seedDir` bound — e.g. a collision skipped the bind).
     const byListedDir = new Map<string, Workspace>()
     for (const ws of this.workspaces.values()) {
       if (ws.seedDir) bySeedDir.set(canonSeedDir(ws.seedDir), ws)
-      for (const d of ws.dirs) {
-        const k = canonSeedDir(this.expandHome(d))
+      if (ws.dir) {
+        const k = canonSeedDir(this.expandHome(ws.dir))
         // First writer wins so an explicit seedDir owner is never shadowed.
         if (!byListedDir.has(k)) byListedDir.set(k, ws)
       }
@@ -425,10 +481,10 @@ export class WorkspaceService {
     let changed = false
     for (const m of manifests) {
       const key = canonSeedDir(m.dir)
-      // Prefer the seedDir owner; fall back to any workspace already listing this dir.
+      // Prefer the seedDir owner; fall back to any workspace whose folder is this dir.
       const existing = bySeedDir.get(key) ?? byListedDir.get(key)
       if (existing) {
-        // Seed-once: leave user-owned name/dirs alone. Only refresh the
+        // Seed-once: leave user-owned name/dir alone. Only refresh the
         // manifest-owned boot metadata, and only on a REAL delta — so an
         // unchanged manifest is a no-op (no persist, no updatedAt bump).
         if (!sameRepos(existing.seedRepos, m.repos) || existing.seedEditor !== m.editor) {
@@ -438,12 +494,13 @@ export class WorkspaceService {
           changed = true
         }
       } else {
-        // New (unseen) manifest → full one-time seed.
+        // New (unseen) manifest → full one-time seed. WS-H: a workspace is ONE
+        // folder, so the seeded `dir` is the manifest's primary dir.
         const t = this.now()
         const ws: Workspace = {
           id: this.mintId(),
           name: m.name,
-          dirs: this.manifestDirs(m),
+          dir: this.manifestDir(m),
           createdAt: t,
           updatedAt: t,
           // Store the canonicalized dir so the de-dup key is stable across
@@ -479,11 +536,12 @@ export class WorkspaceService {
     return this.listPublic()
   }
 
-  /** The directories a manifest contributes to a workspace: its repo paths if it
-   *  declares any, otherwise the manifest dir itself. */
-  private manifestDirs(m: DiscoveredManifest): string[] {
+  /** WS-H — the SINGLE folder a manifest contributes to a workspace: its first
+   *  repo path if it declares any, otherwise the manifest dir itself. (Pre-WS-H
+   *  this returned every repo dir; the single-folder model takes only the primary.) */
+  private manifestDir(m: DiscoveredManifest): string {
     const repoDirs = m.repos.map((r) => this.expandHome(r.path)).filter(Boolean)
-    return repoDirs.length ? repoDirs : [m.dir]
+    return repoDirs.length ? repoDirs[0] : m.dir
   }
 
   private expandHome(p: string): string {
@@ -518,9 +576,9 @@ export class WorkspaceService {
    * none yet AND no OTHER workspace already owns that dir as ITS seedDir — so a rescan
    * maps the manifest back to THIS workspace WITHOUT two entries sharing a seedDir key.
    * (When the bind is skipped because of a collision, the `discover` belt-and-suspenders
-   * dir-match still de-dups via `byListedDir`. For a multi-dir workspace only the first
-   * eligible scaffold binds `seedDir`; the rest ride the dir-match. All layers keep
-   * rescans duplicate-free.)
+   * dir-match still de-dups via `byListedDir`. WS-H: a workspace has a single folder, so
+   * the scaffold binds `seedDir` to it; a folder shared with another workspace rides the
+   * dir-match instead of double-binding. All layers keep rescans duplicate-free.)
    *
    * NO-CLOBBER: if `dir` already has a `workspace.json` we skip the write entirely
    * (never overwrite a user's/another workspace's manifest) and do NOT toast a
@@ -589,7 +647,7 @@ export class WorkspaceService {
    * ONLY here for backward-compat with the renderer's current
    * `onSelectWorkspace(index)` wiring — the registry itself is uuid-addressed.
    * Opens editors for `open_on_boot` repos and spawns one session per repo (for
-   * seeded/imported workspaces), or one session per `dirs[]` entry (for
+   * seeded/imported workspaces), or one session in the workspace's folder (for
    * hand-created workspaces with no manifest repos). This is the LAUNCH verb,
    * distinct from `setActive` (SELECTION). WS-D moves the renderer to id-based
    * `setActive` for selection, leaving launch as a separate explicit action.
@@ -615,7 +673,8 @@ export class WorkspaceService {
 
   /** Shared spawn body for `activate(index)` and `launch(id)`: open editors for
    *  `open_on_boot` repos, then create one Claude session per manifest repo (for
-   *  imported workspaces) or per `dirs[]` entry (for hand-created ones). */
+   *  imported workspaces) or one in the workspace's folder (for hand-created ones,
+   *  WS-H single-folder model). A folderless hand-created workspace spawns nothing. */
   private launchWorkspace(ws: Workspace): { workspace: string; sessions: TerminalInfo[] } {
     const repos = ws.seedRepos ?? []
     const editorCmd = (ws.seedEditor ?? "code").toLowerCase()
@@ -631,18 +690,17 @@ export class WorkspaceService {
       }
     }
 
-    // Create Claude sessions: one per manifest repo if present, else one per dir.
+    // Create Claude sessions: one per manifest repo if present, else one in the
+    // workspace's single folder (if it has one).
     const created: TerminalInfo[] = []
     if (repos.length) {
       for (const repo of repos) {
         const info = this.sessionService.create(repo.name, this.expandHome(repo.path))
         created.push(info)
       }
-    } else {
-      for (const dir of ws.dirs) {
-        const info = this.sessionService.create(ws.name, this.expandHome(dir))
-        created.push(info)
-      }
+    } else if (ws.dir) {
+      const info = this.sessionService.create(ws.name, this.expandHome(ws.dir))
+      created.push(info)
     }
     return { workspace: ws.name, sessions: created }
   }

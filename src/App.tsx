@@ -100,17 +100,19 @@ declare global {
       // a future WS-E (MCP) surface.
       getWorkspace: (id: string) => Promise<any | null>
       getActiveWorkspace: () => Promise<any | null>
-      createWorkspace: (name: string, dirs?: string[]) => Promise<any | null>
+      // WS-H — single-folder model: create takes an optional single dir;
+      // setWorkspaceDir sets/clears the workspace's one folder (was add/remove-dir).
+      createWorkspace: (name: string, dir?: string) => Promise<any | null>
       renameWorkspace: (id: string, name: string) => Promise<any | null>
-      addWorkspaceDir: (id: string, dir: string) => Promise<any | null>
-      removeWorkspaceDir: (id: string, dir: string) => Promise<any | null>
+      setWorkspaceDir: (id: string, dir: string | null) => Promise<any | null>
       deleteWorkspace: (id: string) => Promise<boolean>
       setActiveWorkspace: (id: string | null) => Promise<boolean>
       launchWorkspace: (id: string) => Promise<any | null>
-      // WS-F — on-demand discovery refresh (switcher ⟳). Returns the updated
-      // PUBLIC list (seeds new manifests; never duplicates / reverts user edits).
+      // WS-F — on-demand discovery refresh. Returns the updated PUBLIC list
+      // (seeds new manifests; never duplicates / reverts user edits).
       rescanWorkspaces: () => Promise<any[]>
-      // WS-D — native folder picker (create-workspace modal). [] on cancel.
+      // WS-D/H — native single-folder picker (create modal + active-workspace dir
+      // row). Resolves to 0 or 1 absolute paths; [] on cancel.
       openDirectoryDialog: () => Promise<string[]>
       onWorkspaceActiveChanged: (callback: (workspace: any | null) => void) => void
       getConfig: () => Promise<any>
@@ -412,7 +414,7 @@ export default function App() {
     dismiss: dismissMission,
   } = useMissions()
 
-  // WS-D — the workspaces surface (switcher + active-workspace scoping). The
+  // WS-D/H — the workspaces surface (switcher + active-workspace scoping). The
   // active id drives the FILTER & HIDE of the three sidebar sections below.
   const {
     workspaces,
@@ -422,9 +424,7 @@ export default function App() {
     create: createWorkspace_,
     rename: renameWorkspace_,
     remove: deleteWorkspace_,
-    addDir: addWorkspaceDir_,
-    removeDir: removeWorkspaceDir_,
-    rescan: rescanWorkspaces_,
+    setDir: setWorkspaceDir_,
   } = useWorkspaces()
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false)
 
@@ -800,10 +800,11 @@ export default function App() {
         open={createWorkspaceOpen}
         onClose={() => setCreateWorkspaceOpen(false)}
         existingNames={workspaces.map((w) => w.name)}
-        onCreate={async (name, dirs) => {
+        onCreate={async (name, dir) => {
           // Create, then make the new workspace active (routes through the
-          // active-changed push so the filter + pill flip to it).
-          const ws = await createWorkspace_(name, dirs)
+          // active-changed push so the filter + pill flip to it). WS-H: a single
+          // optional folder.
+          const ws = await createWorkspace_(name, dir)
           if (ws) setActiveWorkspace(ws.id)
           return ws
         }}
@@ -847,21 +848,7 @@ export default function App() {
         onNewWorkspace={() => setCreateWorkspaceOpen(true)}
         onRenameWorkspace={(id, name) => renameWorkspace_(id, name)}
         onDeleteWorkspace={(id) => deleteWorkspace_(id)}
-        onRescanWorkspaces={async () => {
-          // WS-F — on-demand discovery refresh. Surface a quiet result toast so
-          // the action feels acknowledged even when nothing new turned up. The
-          // hook owns the failure toast; null means it already reported.
-          const res = await rescanWorkspaces_()
-          if (res)
-            toast(
-              "success",
-              res.added > 0
-                ? `Found ${res.added} new workspace${res.added === 1 ? "" : "s"}`
-                : "Workspaces up to date",
-            )
-        }}
-        onAddWorkspaceDir={(id, dir) => addWorkspaceDir_(id, dir)}
-        onRemoveWorkspaceDir={(id, dir) => removeWorkspaceDir_(id, dir)}
+        onSetWorkspaceDir={(id, dir) => setWorkspaceDir_(id, dir)}
       />
       <div className="main-area">
         <TabBar

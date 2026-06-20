@@ -28,5 +28,35 @@ A boot-only **launcher**, not a container. `discovery.ts` globs `workspaceScanPa
 | **D** | Selection + creation UX (sidebar workspace switcher; create = name + pick dirs, default to current git-root/cwd + import-`workspace.json`; rename/recolor/delete; warm/non-blocky) | M | yes (B,C) |
 | **E** | MCP surface + instructions (id-based + create/select/scope tools defaulting to the caller's bound `workspaceId`; update `SERVER_INSTRUCTIONS`) | S | yes (A,B) |
 | **F** | Re-scan / live discovery (make discovery a refresh action, not boot-only) | S | **no — independent** |
+| **H** | **UX v2 — single-folder model + workspace-area redesign** (owner dogfood) | M | done |
 
 **On your ratification of decisions 1–3, I dispatch WS-A first**, then B→C→D/E, with F whenever.
+
+## WS-H — UX v2 (single-folder model + workspace-area redesign)
+
+Direct owner dogfood feedback. Two changes, both shipped:
+
+1. **Single-folder model ("it's a workSPACE").** A workspace is now ONE directory, not a
+   multi-dir grouping. `Workspace.dirs: string[]` → `dir?: string` (a single optional folder).
+   - **Service**: `addDir`/`removeDir` → `setDir(id, dir|null)` (set/clear, scaffolds the manifest
+     on set, reusing the WS-G `scaffoldManifest` + canonSeedDir seedDir-bind so re-scan still
+     de-dups). `getActiveWorkspaceDir()` → the active workspace's `dir`. `create(name, dir?)` takes
+     an optional single dir. Discovery seeds the manifest's PRIMARY repo dir (or the manifest dir).
+   - **Persistence migration**: `workspaces.json` bumped to **schemaVersion 2**. The v1→v2 migration
+     collapses `dir = record.dir ?? record.dirs?.[0]` and drops the `dirs` array (no data loss for the
+     common 0/1-dir case; a pre-WS-H multi-dir workspace keeps only its primary). `loadAll` is also
+     tolerant of a stray `dirs` on a v2 row.
+   - **IPC/preload/MCP**: `workspace:set-dir` / `setWorkspaceDir(id, dir|null)` replace add/remove-dir;
+     `listPublic` (and the legacy `workspace:list`) project `dir`; the `set_workspace_dir` MCP tool
+     replaces `add_workspace_dir`/`remove_workspace_dir`; `create_workspace` takes an optional single
+     `dir`; `SERVER_INSTRUCTIONS` updated. The native folder picker is now SINGLE-select.
+
+2. **Workspace-area redesign (sidebar).** A singular **"WORKSPACE"** section header; a **select-only**
+   pill dropdown (top "All", the workspace list — color dot + name, NO per-row affordances —, a divider,
+   "+ New workspace"); and, only when a SPECIFIC workspace is active, **always-visible** controls below
+   the pill: a **folder row** showing the parent-folder NAME (or "No folder selected", clickable →
+   native picker → `setWorkspaceDir` — the only place to set the folder), an **edit (✎)** inline-rename
+   toggle, and a **delete (×)** button (existing `window.confirm`). Larger padding on the pill + folder
+   row. **ZERO hover-reveal** anywhere (the prior in-dropdown hover rename/delete, the folders panel, the
+   📁 toggle, and the multi-dir chips are all gone). Warm Sand & Stone tokens, all 3 themes,
+   reduced-motion safe, non-blocky.

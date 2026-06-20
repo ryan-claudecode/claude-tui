@@ -8,10 +8,10 @@ import { loadConfig } from "../../config"
 /**
  * WS-E — the MCP surface for the durable workspace registry (WS-A/B).
  *
- * A workspace is a user-named, persisted grouping of one-or-more directories,
- * identified by a stable registry uuid. The registry is the SOURCE OF TRUTH;
- * these tools are thin 1:1 wrappers over {@link WorkspaceService} — they add NO
- * registry logic of their own.
+ * A workspace (WS-H single-folder model) is a user-named, persisted spatial frame
+ * backed by a SINGLE optional folder, identified by a stable registry uuid. The
+ * registry is the SOURCE OF TRUTH; these tools are thin 1:1 wrappers over
+ * {@link WorkspaceService} — they add NO registry logic of their own.
  *
  * NO-LEAK POSTURE (matches `workspace-handlers.ts`): every workspace-returning
  * tool returns the PUBLIC projection (`listPublic`/`getActivePublic`/`toPublic`
@@ -98,16 +98,16 @@ export function registerWorkspaceTools(
 
   server.tool(
     "create_workspace",
-    "Create a new ClaudeTUI workspace — a user-named, persisted grouping of one-or-more directories. Returns the created workspace (public projection). This only adds a registry entry; it does NOT make it active or spawn anything (see set_active_workspace / launch_workspace).",
+    "Create a new ClaudeTUI workspace — a user-named, persisted spatial frame backed by a single optional folder. Returns the created workspace (public projection). This only adds a registry entry; it does NOT make it active or spawn anything (see set_active_workspace / launch_workspace).",
     {
-      name: z.string().describe("Display name for the workspace, e.g. 'Frontend' or 'API + Web'"),
-      dirs: z
-        .array(z.string())
+      name: z.string().describe("Display name for the workspace, e.g. 'Frontend' or 'Billing service'"),
+      dir: z
+        .string()
         .optional()
-        .describe("Absolute directory paths to group under this workspace (default: none)"),
+        .describe("Absolute path to the workspace's single folder (default: none — set it later with set_workspace_dir)"),
     },
-    async ({ name, dirs }) => {
-      const ws = workspaces.create(name, dirs ?? [])
+    async ({ name, dir }) => {
+      const ws = workspaces.create(name, dir)
       return json(publicById(ws.id))
     },
   )
@@ -126,27 +126,17 @@ export function registerWorkspaceTools(
   )
 
   server.tool(
-    "add_workspace_dir",
-    "Add a directory to a workspace's `dirs[]` by its registry id (no-op if already present). Returns the updated workspace (public projection), or an error if the id is unknown.",
+    "set_workspace_dir",
+    "Set (or clear) a workspace's single folder by its registry id. A workspace is ONE directory: pass an absolute `dir` to set it (scaffolds a workspace.json there), or null to clear it. Returns the updated workspace (public projection), or an error if the id is unknown.",
     {
       id: z.string().describe("Workspace id from list_workspaces"),
-      dir: z.string().describe("Absolute directory path to add"),
+      dir: z
+        .string()
+        .nullable()
+        .describe("Absolute directory path to set as the workspace's folder, or null to clear it"),
     },
     async ({ id, dir }) => {
-      const ws = workspaces.addDir(id, dir)
-      return ws ? json(publicById(ws.id)) : text(`Workspace not found: ${id}`)
-    },
-  )
-
-  server.tool(
-    "remove_workspace_dir",
-    "Remove a directory from a workspace's `dirs[]` by its registry id (no-op if absent). Returns the updated workspace (public projection), or an error if the id is unknown.",
-    {
-      id: z.string().describe("Workspace id from list_workspaces"),
-      dir: z.string().describe("Absolute directory path to remove"),
-    },
-    async ({ id, dir }) => {
-      const ws = workspaces.removeDir(id, dir)
+      const ws = workspaces.setDir(id, dir)
       return ws ? json(publicById(ws.id)) : text(`Workspace not found: ${id}`)
     },
   )
@@ -184,7 +174,7 @@ export function registerWorkspaceTools(
 
   server.tool(
     "launch_workspace",
-    "Boot a workspace by its registry id: open editors for its open_on_boot repos (imported workspaces) and spawn one Claude session per repo (or per directory for hand-created workspaces). This is the SPAWN verb and is distinct from set_active_workspace, which only marks the workspace active without opening anything. Returns the created sessions, or an error if the id is unknown.",
+    "Boot a workspace by its registry id: open editors for its open_on_boot repos (imported workspaces) and spawn one Claude session per repo (or one in the workspace's folder for hand-created workspaces). This is the SPAWN verb and is distinct from set_active_workspace, which only marks the workspace active without opening anything. Returns the created sessions, or an error if the id is unknown.",
     {
       id: z.string().describe("Workspace id from list_workspaces"),
     },

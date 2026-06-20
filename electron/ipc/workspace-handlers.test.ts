@@ -62,32 +62,35 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-describe("WS-B workspace-handlers", () => {
-  it("create/get/rename/add-dir/remove-dir round-trip and return the PUBLIC projection", () => {
+describe("WS-B/H workspace-handlers", () => {
+  it("create/get/rename/set-dir round-trip and return the PUBLIC projection (single folder)", () => {
     const workspaceService = svc()
     registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
 
-    const created = call<Record<string, unknown>>("workspace:create", "Frontend", ["/a"])
+    const created = call<Record<string, unknown>>("workspace:create", "Frontend", "/a")
     expect(created.name).toBe("Frontend")
-    expect(created.dirs).toEqual(["/a"])
+    expect(created.dir).toBe("/a")
     // PUBLIC projection only — no internal seed* fields leak across IPC.
     expect("seedDir" in created).toBe(false)
+    expect("dirs" in created).toBe(false)
     const id = created.id as string
 
     expect(call<Record<string, unknown>>("workspace:get", id).name).toBe("Frontend")
     expect(call<Record<string, unknown>>("workspace:rename", id, "Renamed").name).toBe("Renamed")
-    expect(call<Record<string, unknown>>("workspace:add-dir", id, "/b").dirs).toEqual(["/a", "/b"])
-    expect(call<Record<string, unknown>>("workspace:remove-dir", id, "/a").dirs).toEqual(["/b"])
+    // WS-H — set-dir sets and clears the single folder.
+    expect(call<Record<string, unknown>>("workspace:set-dir", id, "/b").dir).toBe("/b")
+    expect(call<Record<string, unknown>>("workspace:set-dir", id, null).dir).toBeUndefined()
 
     // Missing-id mutators resolve to null (not a throw).
     expect(call("workspace:get", "ghost")).toBeNull()
     expect(call("workspace:rename", "ghost", "X")).toBeNull()
+    expect(call("workspace:set-dir", "ghost", "/x")).toBeNull()
   })
 
   it("set-active is SELECTION-ONLY (persists + no spawn); get-active reflects it", () => {
     const workspaceService = svc()
     registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
-    const id = call<Record<string, unknown>>("workspace:create", "WS", ["/d1", "/d2"]).id as string
+    const id = call<Record<string, unknown>>("workspace:create", "WS", "/d1").id as string
 
     expect(createCalls).toBe(0)
     expect(call<boolean>("workspace:set-active", id)).toBe(true)
@@ -98,15 +101,15 @@ describe("WS-B workspace-handlers", () => {
     expect(svc().getActiveId()).toBe(id)
   })
 
-  it("launch (the boot verb) STILL spawns one session per dir", () => {
+  it("launch (the boot verb) STILL spawns one session in the folder", () => {
     const workspaceService = svc()
     registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
-    const id = call<Record<string, unknown>>("workspace:create", "WS", ["/d1", "/d2"]).id as string
+    const id = call<Record<string, unknown>>("workspace:create", "WS", "/d1").id as string
 
     const result = call<{ workspace: string; sessions: unknown[] }>("workspace:launch", id)
     expect(result.workspace).toBe("WS")
-    expect(result.sessions).toHaveLength(2)
-    expect(createCalls).toBe(2)
+    expect(result.sessions).toHaveLength(1)
+    expect(createCalls).toBe(1)
   })
 
   it("delete returns a boolean and clears get-active when the active workspace is removed", () => {
@@ -152,18 +155,18 @@ describe("WS-B workspace-handlers", () => {
     })
   })
 
-  // WS-D — the native folder picker IPC (the only new main-process surface).
-  describe("dialog:open-directory (WS-D folder picker)", () => {
+  // WS-D/H — the native folder picker IPC (single-select for the one-folder model).
+  describe("dialog:open-directory (WS-D/H folder picker)", () => {
     beforeEach(() => {
       const workspaceService = svc()
       registerWorkspaceHandlers({ workspaceService, getScanPaths: () => [] })
       showOpenDialog.mockClear()
     })
 
-    it("returns the chosen absolute dir paths", async () => {
-      dialogResult = { canceled: false, filePaths: ["C:/a", "C:/b"] }
+    it("returns the chosen absolute dir path", async () => {
+      dialogResult = { canceled: false, filePaths: ["C:/a"] }
       const out = await call<Promise<string[]>>("dialog:open-directory")
-      expect(out).toEqual(["C:/a", "C:/b"])
+      expect(out).toEqual(["C:/a"])
     })
 
     it("returns [] when the dialog is canceled", async () => {
@@ -171,12 +174,12 @@ describe("WS-B workspace-handlers", () => {
       expect(await call<Promise<string[]>>("dialog:open-directory")).toEqual([])
     })
 
-    it("opens with multi-select + openDirectory properties", async () => {
+    it("opens SINGLE-select with the openDirectory property (no multiSelections)", async () => {
       dialogResult = { canceled: false, filePaths: [] }
       await call<Promise<string[]>>("dialog:open-directory")
       const opts = showOpenDialog.mock.calls[0].at(-1) as unknown as { properties: string[] }
       expect(opts.properties).toContain("openDirectory")
-      expect(opts.properties).toContain("multiSelections")
+      expect(opts.properties).not.toContain("multiSelections")
     })
   })
 })

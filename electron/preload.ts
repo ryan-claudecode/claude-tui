@@ -75,14 +75,14 @@ contextBridge.exposeInMainWorld("api", {
   // (the id-based selection cutover is WS-D).
   getWorkspace: (id: string) => ipcRenderer.invoke("workspace:get", id),
   getActiveWorkspace: () => ipcRenderer.invoke("workspace:get-active"),
-  createWorkspace: (name: string, dirs?: string[]) =>
-    ipcRenderer.invoke("workspace:create", name, dirs),
+  // WS-H — single-folder model: create takes an optional single `dir`; setWorkspaceDir
+  // sets (or clears, with null) the workspace's one folder, replacing add/remove-dir.
+  createWorkspace: (name: string, dir?: string) =>
+    ipcRenderer.invoke("workspace:create", name, dir),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke("workspace:rename", id, name),
-  addWorkspaceDir: (id: string, dir: string) =>
-    ipcRenderer.invoke("workspace:add-dir", id, dir),
-  removeWorkspaceDir: (id: string, dir: string) =>
-    ipcRenderer.invoke("workspace:remove-dir", id, dir),
+  setWorkspaceDir: (id: string, dir: string | null) =>
+    ipcRenderer.invoke("workspace:set-dir", id, dir),
   deleteWorkspace: (id: string) => ipcRenderer.invoke("workspace:delete", id),
   setActiveWorkspace: (id: string | null) => ipcRenderer.invoke("workspace:set-active", id),
   launchWorkspace: (id: string) => ipcRenderer.invoke("workspace:launch", id),
@@ -90,8 +90,9 @@ contextBridge.exposeInMainWorld("api", {
   // switcher's ⟳ refresh). Returns the updated PUBLIC list (seeds new manifests,
   // never duplicates, never reverts user edits).
   rescanWorkspaces: () => ipcRenderer.invoke("workspace:rescan"),
-  // WS-D — native folder picker for the create-workspace modal's "+ Add folder".
-  // Resolves to the chosen absolute dir paths (multi-select), or [] on cancel.
+  // WS-D/H — native folder picker for the create modal's "Choose folder" + the
+  // selected-workspace dir-row. SINGLE-select; resolves to the chosen absolute dir
+  // path(s) (0 or 1 entries), or [] on cancel.
   openDirectoryDialog: (): Promise<string[]> => ipcRenderer.invoke("dialog:open-directory"),
   // WS-B — active-workspace change events from main (payload = public workspace
   // or null). Mirrors onMissionUpdated; WS-D consumes it for the sidebar switcher.

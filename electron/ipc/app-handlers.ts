@@ -30,18 +30,12 @@ export function registerAppHandlers(deps: {
   } = deps
 
   // Workspace IPC. Now backed by the durable registry (WS-A): the renderer
-  // reads `id` + `name` (it only renders the name today); `dirs`/`color` ride
-  // along for WS-D's switcher UX. The index-based `activate` is retained for the
-  // current `onSelectWorkspace(index)` wiring — WS-B replaces it with id-based
-  // make-active-vs-launch.
-  ipcMain.handle("workspace:list", () =>
-    workspaceService.list().map((ws) => ({
-      id: ws.id,
-      name: ws.name,
-      dirs: ws.dirs,
-      color: ws.color,
-    })),
-  )
+  // reads `id` + `name`; WS-H — the workspace's single `dir` (+ `color`) rides
+  // along for the switcher UX. Reuses `listPublic()` so this stays in lockstep
+  // with the no-leak projection (no `seed*` fields, no stale `dirs`). The
+  // index-based `activate` is retained for the legacy `onSelectWorkspace(index)`
+  // wiring — WS-B replaces it with id-based make-active-vs-launch.
+  ipcMain.handle("workspace:list", () => workspaceService.listPublic())
   ipcMain.handle("workspace:activate", (_e, index: number) =>
     workspaceService.activate(index),
   )

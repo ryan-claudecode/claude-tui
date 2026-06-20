@@ -39,24 +39,33 @@ function svc(): WorkspaceService {
   return new WorkspaceService(fakeTerminals(), { file, now })
 }
 
-describe("WorkspaceService create/get/list", () => {
+describe("WorkspaceService create/get/list (WS-H single folder)", () => {
   it("create mints a uuid id + timestamps, persists, and appears in list/get", () => {
     const s = svc()
-    const ws = s.create("Frontend", ["/repo/a", "/repo/b"])
+    const ws = s.create("Frontend", "/repo/a")
     expect(ws.id).toMatch(/^ws-/)
     expect(ws.name).toBe("Frontend")
-    expect(ws.dirs).toEqual(["/repo/a", "/repo/b"])
+    expect(ws.dir).toBe("/repo/a")
     expect(ws.createdAt).toBe(1000)
     expect(ws.updatedAt).toBe(1000)
 
     expect(s.get(ws.id)).toEqual(ws)
     expect(s.list().map((w) => w.id)).toEqual([ws.id])
 
-    // persisted in the versioned envelope at the registry path
+    // persisted in the versioned envelope at the registry path (schemaVersion 2)
     const onDisk = JSON.parse(readFileSync(file, "utf-8"))
-    expect(onDisk.schemaVersion).toBe(1)
+    expect(onDisk.schemaVersion).toBe(2)
     expect(onDisk.data.workspaces[0].name).toBe("Frontend")
+    expect(onDisk.data.workspaces[0].dir).toBe("/repo/a")
+    expect(onDisk.data.workspaces[0].dirs).toBeUndefined()
     expect(onDisk.data.activeWorkspaceId).toBe(null)
+  })
+
+  it("create with no folder leaves dir undefined", () => {
+    const s = svc()
+    const ws = s.create("Folderless")
+    expect(ws.dir).toBeUndefined()
+    expect(svc().get(ws.id)?.dir).toBeUndefined()
   })
 
   it("mints distinct ids for two workspaces", () => {
@@ -69,7 +78,7 @@ describe("WorkspaceService create/get/list", () => {
   })
 })
 
-describe("WorkspaceService mutators", () => {
+describe("WorkspaceService mutators (WS-H setDir)", () => {
   it("rename updates name + bumps updatedAt + persists", () => {
     const s = svc()
     const ws = s.create("Old")
@@ -85,16 +94,24 @@ describe("WorkspaceService mutators", () => {
     expect(svc().rename("nope", "X")).toBeUndefined()
   })
 
-  it("addDir appends (no duplicates) and removeDir removes, both persisting", () => {
+  it("setDir sets the single folder, clears with null, no-ops on same, all persisting", () => {
     const s = svc()
-    const ws = s.create("WS", ["/a"])
-    s.addDir(ws.id, "/b")
-    s.addDir(ws.id, "/b") // duplicate is a no-op
-    expect(s.get(ws.id)?.dirs).toEqual(["/a", "/b"])
-    s.removeDir(ws.id, "/a")
-    expect(s.get(ws.id)?.dirs).toEqual(["/b"])
+    const ws = s.create("WS", "/a")
+    clock = 2000
+    expect(s.setDir(ws.id, "/b")?.dir).toBe("/b")
+    expect(s.get(ws.id)?.updatedAt).toBe(2000)
+    // a no-op (same folder) does NOT bump updatedAt
+    clock = 3000
+    s.setDir(ws.id, "/b")
+    expect(s.get(ws.id)?.updatedAt).toBe(2000)
+    // clear with null
+    expect(s.setDir(ws.id, null)?.dir).toBeUndefined()
     // persisted across a reload
-    expect(svc().get(ws.id)?.dirs).toEqual(["/b"])
+    expect(svc().get(ws.id)?.dir).toBeUndefined()
+  })
+
+  it("setDir a missing id returns undefined", () => {
+    expect(svc().setDir("nope", "/x")).toBeUndefined()
   })
 
   it("delete removes the workspace + clears it from list and disk", () => {
@@ -152,11 +169,71 @@ describe("WorkspaceService active selection", () => {
     writeFileSync(
       file,
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         data: { workspaces: [], activeWorkspaceId: "stale-id" },
       }),
     )
     expect(svc().getActiveId()).toBeNull()
+  })
+})
+
+describe("WorkspaceService persistence migration (v1 dirs[] → v2 dir)", () => {
+  it("migrates a legacy v1 record with dirs[] to dir = dirs[0], dropping dirs", () => {
+    // A pre-WS-H v1 registry (schemaVersion 1, workspaces carry `dirs`).
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        data: {
+          workspaces: [
+            { id: "ws-legacy", name: "Legacy", dirs: ["/primary", "/secondary"], createdAt: 1, updatedAt: 2 },
+          ],
+          activeWorkspaceId: "ws-legacy",
+        },
+      }),
+    )
+    const s = svc()
+    const ws = s.get("ws-legacy")
+    expect(ws?.dir).toBe("/primary") // primary dir becomes the single folder
+    expect((ws as any).dirs).toBeUndefined() // legacy array dropped
+    expect(s.getActiveId()).toBe("ws-legacy")
+
+    // The migration rewrote the file at schemaVersion 2 (read-repair).
+    const onDisk = JSON.parse(readFileSync(file, "utf-8"))
+    expect(onDisk.schemaVersion).toBe(2)
+    expect(onDisk.data.workspaces[0].dir).toBe("/primary")
+    expect(onDisk.data.workspaces[0].dirs).toBeUndefined()
+  })
+
+  it("migrates an empty legacy dirs[] to no folder (dir undefined)", () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        data: {
+          workspaces: [{ id: "ws-empty", name: "Empty", dirs: [], createdAt: 1, updatedAt: 2 }],
+          activeWorkspaceId: null,
+        },
+      }),
+    )
+    const ws = svc().get("ws-empty")
+    expect(ws?.dir).toBeUndefined()
+    expect((ws as any).dirs).toBeUndefined()
+  })
+
+  it("a pre-versioning (envelope-less) v0 file with dirs[] migrates through to v2", () => {
+    // An envelope-less file is read as version 0 and run through every migration.
+    writeFileSync(
+      file,
+      JSON.stringify({
+        workspaces: [{ id: "ws-v0", name: "V0", dirs: ["/v0dir"], createdAt: 1, updatedAt: 2 }],
+        activeWorkspaceId: null,
+      }),
+    )
+    const ws = svc().get("ws-v0")
+    expect(ws?.dir).toBe("/v0dir")
+    expect((ws as any).dirs).toBeUndefined()
+    expect(JSON.parse(readFileSync(file, "utf-8")).schemaVersion).toBe(2)
   })
 })
 
@@ -181,7 +258,8 @@ describe("WorkspaceService discovery seeding", () => {
     expect(s.list()).toHaveLength(1)
     const seeded = s.list()[0]
     expect(seeded.name).toBe("Imported")
-    expect(seeded.dirs).toEqual(["/repo/api"])
+    // WS-H: the seeded folder is the manifest's PRIMARY (first) repo dir.
+    expect(seeded.dir).toBe("/repo/api")
 
     // re-scan the SAME manifest — must update in place, not duplicate
     clock = 5000
@@ -196,14 +274,23 @@ describe("WorkspaceService discovery seeding", () => {
     expect(reloaded.list()).toHaveLength(1)
     expect(reloaded.list()[0].id).toBe(seeded.id)
 
-    // ensure the seed dir was the de-dup key (avoid unused-var lint, assert dir)
     expect(existsSync(join(wsDir, "workspace.json"))).toBe(true)
   })
 
+  it("a multi-repo manifest seeds ONLY its primary repo dir (single-folder model)", () => {
+    seedManifest(join(root, "ws-multi"), {
+      name: "Multi",
+      repos: [
+        { name: "api", path: "/repo/api", open_on_boot: false },
+        { name: "web", path: "/repo/web", open_on_boot: false },
+      ],
+    })
+    const s = svc()
+    s.discover([join(root, "ws-*")])
+    expect(s.list()[0].dir).toBe("/repo/api")
+  })
+
   it("discovery is SEED-ONCE for user fields: a re-scan never reverts a rename", () => {
-    // Seed-once policy (registry is the source of truth): once an entry exists,
-    // discovery must NEVER overwrite the user-owned `name`, even if the manifest
-    // on disk later disagrees. (Pre-fix this clobbered the rename on next boot.)
     const dir = join(root, "ws-renamed")
     seedManifest(dir, { name: "First", repos: [] })
     const pattern = join(root, "ws-*")
@@ -212,45 +299,40 @@ describe("WorkspaceService discovery seeding", () => {
     const id = s.list()[0].id
     expect(s.list()[0].name).toBe("First")
 
-    // User renames the imported workspace via the registry API.
     s.rename(id, "UserName")
 
-    // Re-scan the UNCHANGED manifest (still "First"): the name STAYS "UserName".
     s.discover([pattern])
     expect(s.list()).toHaveLength(1)
     expect(s.list()[0].id).toBe(id)
     expect(s.list()[0].name).toBe("UserName")
 
-    // Even if the manifest is rewritten with a different name, discovery still
-    // does not clobber the user-owned name.
     seedManifest(dir, { name: "Second", repos: [] })
     s.discover([pattern])
     expect(s.list()[0].name).toBe("UserName")
 
-    // Survives a fresh load from disk too.
     expect(svc().get(id)?.name).toBe("UserName")
   })
 
-  it("discovery preserves a user's addDir on a re-scan (dirs are user-owned)", () => {
+  it("discovery preserves a user's setDir on a re-scan (dir is user-owned)", () => {
     const dir = join(root, "ws-dirs")
     seedManifest(dir, { name: "Imported", repos: [{ name: "api", path: "/repo/api", open_on_boot: false }] })
     const pattern = join(root, "ws-*")
     const s = svc()
     s.discover([pattern])
     const id = s.list()[0].id
-    expect(s.get(id)?.dirs).toEqual(["/repo/api"])
+    expect(s.get(id)?.dir).toBe("/repo/api")
 
-    // User adds a dir via the registry API.
-    s.addDir(id, "/extra")
-    expect(s.get(id)?.dirs).toEqual(["/repo/api", "/extra"])
+    // User changes the folder via the registry API.
+    s.setDir(id, "/changed")
+    expect(s.get(id)?.dir).toBe("/changed")
 
-    // Re-scan the unchanged manifest — the extra dir is PRESERVED, not reverted.
+    // Re-scan the unchanged manifest — the user's folder is PRESERVED, not reverted.
     s.discover([pattern])
-    expect(s.get(id)?.dirs).toEqual(["/repo/api", "/extra"])
-    expect(svc().get(id)?.dirs).toEqual(["/repo/api", "/extra"])
+    expect(s.get(id)?.dir).toBe("/changed")
+    expect(svc().get(id)?.dir).toBe("/changed")
   })
 
-  it("a brand-new manifest still seeds fully (name + dirs from the manifest)", () => {
+  it("a brand-new manifest still seeds fully (name + dir from the manifest)", () => {
     seedManifest(join(root, "ws-new"), {
       name: "Fresh",
       repos: [{ name: "web", path: "/repo/web", open_on_boot: false }],
@@ -259,7 +341,7 @@ describe("WorkspaceService discovery seeding", () => {
     s.discover([join(root, "ws-*")])
     expect(s.list()).toHaveLength(1)
     expect(s.list()[0].name).toBe("Fresh")
-    expect(s.list()[0].dirs).toEqual(["/repo/web"])
+    expect(s.list()[0].dir).toBe("/repo/web")
   })
 
   it("a steady-state re-discover (unchanged manifests) does ZERO writes", () => {
@@ -276,8 +358,6 @@ describe("WorkspaceService discovery seeding", () => {
     const updatedAt = s.get(id)!.updatedAt
     const mtimeBefore = statSync(file).mtimeMs
 
-    // A later boot with the identical manifest must not bump updatedAt nor
-    // re-persist the registry file.
     clock = 999999
     s.discover([pattern])
     expect(s.get(id)!.updatedAt).toBe(updatedAt)
@@ -293,11 +373,9 @@ describe("WorkspaceService discovery seeding", () => {
     const id = s.list()[0].id
     const before = s.get(id)!.updatedAt
 
-    // Change the manifest's editor — a manifest-owned field — and re-scan.
     clock = 7000
     seedManifest(dir, { name: "Ed", editor: "vim", repos: [] })
     s.discover([pattern])
-    // updatedAt bumped because a manifest-owned field genuinely changed.
     expect(s.get(id)!.updatedAt).toBe(7000)
     expect(s.get(id)!.updatedAt).not.toBe(before)
   })
@@ -306,24 +384,15 @@ describe("WorkspaceService discovery seeding", () => {
     if (process.platform === "win32") {
       expect(canonSeedDir("c:\\projects\\demo")).toBe("C:\\projects\\demo")
       expect(canonSeedDir("C:\\projects\\demo")).toBe("C:\\projects\\demo")
-      // Same target, two spellings → one canonical key.
       expect(canonSeedDir("c:\\projects\\demo")).toBe(canonSeedDir("C:\\projects\\demo"))
     } else {
-      // POSIX has no drive letter; the canonicalizer is an identity function.
       expect(canonSeedDir("/projects/demo")).toBe("/projects/demo")
     }
   })
 
   it("a re-scan whose seedDir spelling differs only by drive-letter case does NOT duplicate", () => {
-    // The manifest dir `discover()` resolves uses whatever case the real temp
-    // dir has. Hand-write an existing registry entry whose stored seedDir is the
-    // OPPOSITE drive-letter case of that resolved dir, so the only thing letting
-    // the re-scan match it is the canonicalized de-dup key.
     const wsDir = seedManifest(join(root, "ws-case"), { name: "Cased", repos: [] })
     const resolvedDir = resolve(wsDir)
-    // Flip the drive-letter case of the stored seedDir (win32 only — POSIX has
-    // no drive letter, so there the two spellings are identical and this still
-    // exercises the in-place-update path).
     const flipped =
       process.platform === "win32"
         ? resolvedDir.replace(/^([A-Za-z]):/, (_m, d: string) =>
@@ -333,13 +402,13 @@ describe("WorkspaceService discovery seeding", () => {
     writeFileSync(
       file,
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         data: {
           workspaces: [
             {
               id: "ws-pre",
               name: "Cased",
-              dirs: [resolvedDir],
+              dir: resolvedDir,
               createdAt: 1,
               updatedAt: 1,
               seedDir: flipped,
@@ -354,22 +423,20 @@ describe("WorkspaceService discovery seeding", () => {
     const s = svc()
     expect(s.list()).toHaveLength(1)
     s.discover([join(root, "ws-*")])
-    // Still exactly one entry — the differently-cased seedDir matched the
-    // canonical key instead of minting a duplicate.
     expect(s.list()).toHaveLength(1)
     expect(s.list()[0].id).toBe("ws-pre")
   })
 
-  it("a manifest with no repos seeds its own dir as the workspace dir", () => {
+  it("a manifest with no repos seeds its own dir as the workspace folder", () => {
     const dir = seedManifest(join(root, "ws-bare"), { name: "Bare", repos: [] })
     const s = svc()
     s.discover([join(root, "ws-*")])
-    expect(s.list()[0].dirs).toEqual([dir])
+    expect(s.list()[0].dir).toBe(canonSeedDir(dir))
   })
 
   it("hand-created workspaces are untouched by discovery", () => {
     const s = svc()
-    const manual = s.create("Manual", ["/m"])
+    const manual = s.create("Manual", "/m")
     seedManifest(join(root, "ws-x"), { name: "Imported", repos: [] })
     s.discover([join(root, "ws-*")])
     expect(s.list()).toHaveLength(2)
@@ -385,22 +452,20 @@ describe("WorkspaceService discovery seeding", () => {
     const s = svc()
     s.discover([join(root, "ws-*")])
 
-    // The internal model still carries the seed* boot fields...
     const internal = s.list()[0]
     expect(internal.seedDir).toBeDefined()
     expect(internal.seedRepos).toBeDefined()
     expect(internal.seedEditor).toBe("code")
 
-    // ...but the public projection exposes ONLY the registry-owned fields.
     const pub = s.listPublic()[0] as unknown as Record<string, unknown>
     expect(Object.keys(pub).sort()).toEqual(
-      ["color", "createdAt", "dirs", "id", "name", "updatedAt"].sort(),
+      ["color", "createdAt", "dir", "id", "name", "updatedAt"].sort(),
     )
     expect("seedDir" in pub).toBe(false)
     expect("seedRepos" in pub).toBe(false)
     expect("seedEditor" in pub).toBe(false)
     expect(pub.name).toBe("Imported")
-    expect(pub.dirs).toEqual(["/repo/api"])
+    expect(pub.dir).toBe("/repo/api")
   })
 })
 
@@ -415,11 +480,9 @@ describe("WorkspaceService WS-F rescan", () => {
   it("rescan picks up a NEWLY-added manifest (seeds it) and returns the public list", () => {
     const pattern = join(root, "ws-*")
     const s = svc()
-    // First scan: one manifest on disk.
     seedManifest(join(root, "ws-one"), { name: "One", repos: [] })
     expect(s.rescan([pattern])).toHaveLength(1)
 
-    // A NEW manifest appears on disk after boot — a re-scan seeds it live.
     seedManifest(join(root, "ws-two"), { name: "Two", repos: [] })
     const after = s.rescan([pattern])
     expect(after).toHaveLength(2)
@@ -434,16 +497,14 @@ describe("WorkspaceService WS-F rescan", () => {
     s.rescan([pattern])
     const id = s.list()[0].id
 
-    // User renames + adds a dir via the registry API.
     s.rename(id, "UserName")
-    s.addDir(id, "/extra")
+    s.setDir(id, "/extra")
 
-    // Re-scan the SAME (unchanged) manifest — no duplicate, edits preserved.
     const after = s.rescan([pattern])
     expect(after).toHaveLength(1)
     expect(after[0].id).toBe(id)
     expect(after[0].name).toBe("UserName")
-    expect(after[0].dirs).toEqual(["/repo/api", "/extra"])
+    expect(after[0].dir).toBe("/extra")
   })
 
   it("rescan returns the PUBLIC projection (no seed* leak)", () => {
@@ -456,7 +517,7 @@ describe("WorkspaceService WS-F rescan", () => {
     const list = s.rescan([join(root, "ws-*")])
     const pub = list[0] as unknown as Record<string, unknown>
     expect(Object.keys(pub).sort()).toEqual(
-      ["color", "createdAt", "dirs", "id", "name", "updatedAt"].sort(),
+      ["color", "createdAt", "dir", "id", "name", "updatedAt"].sort(),
     )
     expect("seedDir" in pub).toBe(false)
     expect("seedRepos" in pub).toBe(false)
@@ -479,26 +540,43 @@ describe("WorkspaceService load resilience", () => {
       s = svc()
     }).not.toThrow()
     expect(s.list()).toEqual([])
-    // the service is still usable after a corrupt load
     const ws = s.create("Recovered")
     expect(s.get(ws.id)?.name).toBe("Recovered")
   })
 
   it("a legacy/garbled registry shape (workspaces not an array) loads as empty", () => {
-    writeFileSync(file, JSON.stringify({ schemaVersion: 1, data: { workspaces: "oops" } }))
+    writeFileSync(file, JSON.stringify({ schemaVersion: 2, data: { workspaces: "oops" } }))
     const s = svc()
     expect(s.list()).toEqual([])
     expect(s.getActiveId()).toBeNull()
   })
 
-  it("normalizes a partial entry missing `dirs` so addDir/removeDir don't crash", () => {
-    // A persisted/hand-edited entry with a valid id but no `dirs` array must
-    // load as a usable workspace (dirs defaulted to []), not a landmine that
-    // throws on the first mutator.
+  it("tolerates a v2 entry that still carries a stray dirs[] (falls back to dirs[0])", () => {
+    // A hand-edited v2 file that left a `dirs` array on a row: loadAll must coerce
+    // it to the single `dir` (dirs[0]) and never retain the array.
     writeFileSync(
       file,
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
+        data: {
+          workspaces: [{ id: "ws-stray", name: "Stray", dirs: ["/fromdirs"], createdAt: 1, updatedAt: 1 }],
+          activeWorkspaceId: null,
+        },
+      }),
+    )
+    const s = svc()
+    expect(s.get("ws-stray")?.dir).toBe("/fromdirs")
+    expect((s.get("ws-stray") as any).dirs).toBeUndefined()
+    // The mutators are safe on this normalized entry.
+    expect(() => s.setDir("ws-stray", "/new")).not.toThrow()
+    expect(s.get("ws-stray")?.dir).toBe("/new")
+  })
+
+  it("normalizes a partial entry missing dir so setDir doesn't crash", () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 2,
         data: {
           workspaces: [{ id: "ws-partial" }],
           activeWorkspaceId: null,
@@ -506,13 +584,11 @@ describe("WorkspaceService load resilience", () => {
       }),
     )
     const s = svc()
-    expect(s.get("ws-partial")?.dirs).toEqual([])
-    // The first addDir succeeds instead of throwing on `undefined.includes`.
-    expect(() => s.addDir("ws-partial", "/added")).not.toThrow()
-    expect(s.get("ws-partial")?.dirs).toEqual(["/added"])
-    // removeDir is likewise safe.
-    expect(() => s.removeDir("ws-partial", "/added")).not.toThrow()
-    expect(s.get("ws-partial")?.dirs).toEqual([])
+    expect(s.get("ws-partial")?.dir).toBeUndefined()
+    expect(() => s.setDir("ws-partial", "/added")).not.toThrow()
+    expect(s.get("ws-partial")?.dir).toBe("/added")
+    expect(() => s.setDir("ws-partial", null)).not.toThrow()
+    expect(s.get("ws-partial")?.dir).toBeUndefined()
   })
 })
 
@@ -537,11 +613,18 @@ describe("WorkspaceService legacy activate path (kept working)", () => {
     expect(result?.sessions).toHaveLength(2)
   })
 
-  it("activate(index) spawns one session per dir for a hand-created workspace", () => {
+  it("activate(index) spawns one session in the folder for a hand-created workspace", () => {
     const s = svc()
-    s.create("Manual", ["/d1", "/d2"])
+    s.create("Manual", "/d1")
     const result = s.activate(0)
-    expect(result?.sessions).toHaveLength(2)
+    expect(result?.sessions).toHaveLength(1)
+  })
+
+  it("activate(index) for a FOLDERLESS hand-created workspace spawns nothing", () => {
+    const s = svc()
+    s.create("Folderless")
+    const result = s.activate(0)
+    expect(result?.sessions).toHaveLength(0)
   })
 
   it("activate with an out-of-range index returns null", () => {
@@ -550,9 +633,6 @@ describe("WorkspaceService legacy activate path (kept working)", () => {
 })
 
 // ── WS-B ─────────────────────────────────────────────────────────────────────
-//
-// A counting terminal fake whose `create` invocations are observable, so a test
-// can assert SELECTION (setActive) does NOT spawn while LAUNCH does.
 function countingTerminals(): { terminals: TerminalService; createCalls: () => number } {
   let n = 0
   const fake = {
@@ -567,7 +647,7 @@ function countingTerminals(): { terminals: TerminalService; createCalls: () => n
 describe("WorkspaceService WS-B active-changed event", () => {
   it("setActive emits workspace:active-changed with the new active public projection", () => {
     const s = svc()
-    const ws = s.create("Active", ["/d"])
+    const ws = s.create("Active", "/d")
     const events: Array<{ active: { id: string; name: string } | null }> = []
     s.onActiveChanged((e) => events.push(e as any))
 
@@ -575,7 +655,6 @@ describe("WorkspaceService WS-B active-changed event", () => {
     expect(events).toHaveLength(1)
     expect(events[0].active?.id).toBe(ws.id)
     expect(events[0].active?.name).toBe("Active")
-    // The payload is the PUBLIC projection — no internal seed* fields.
     expect("seedDir" in (events[0].active as object)).toBe(false)
   })
 
@@ -596,7 +675,7 @@ describe("WorkspaceService WS-B active-changed event", () => {
     s.setActive(ws.id)
     const events: unknown[] = []
     s.onActiveChanged((e) => events.push(e))
-    s.setActive(ws.id) // no-op
+    s.setActive(ws.id)
     expect(events).toHaveLength(0)
   })
 
@@ -639,17 +718,17 @@ describe("WorkspaceService WS-B active-changed event", () => {
     expect(events).toHaveLength(1)
     off()
     s.setActive(null)
-    expect(events).toHaveLength(1) // no further events after unsubscribe
+    expect(events).toHaveLength(1)
   })
 
   it("getActivePublic returns the public projection (no seed* leak) or null", () => {
     const s = svc()
     expect(s.getActivePublic()).toBeNull()
-    const ws = s.create("Pub", ["/x"])
+    const ws = s.create("Pub", "/x")
     s.setActive(ws.id)
     const pub = s.getActivePublic() as unknown as Record<string, unknown>
     expect(Object.keys(pub).sort()).toEqual(
-      ["color", "createdAt", "dirs", "id", "name", "updatedAt"].sort(),
+      ["color", "createdAt", "dir", "id", "name", "updatedAt"].sort(),
     )
     expect(pub.id).toBe(ws.id)
   })
@@ -659,21 +738,20 @@ describe("WorkspaceService WS-B selection vs launch split", () => {
   it("setActive (SELECTION) does NOT spawn any sessions", () => {
     const { terminals, createCalls } = countingTerminals()
     const s = new WorkspaceService(terminals, { file, now })
-    const ws = s.create("Manual", ["/d1", "/d2"])
+    const ws = s.create("Manual", "/d1")
     s.setActive(ws.id)
-    // Selection is pure: no editors, no sessions spawned.
     expect(createCalls()).toBe(0)
     expect(s.getActiveId()).toBe(ws.id)
   })
 
-  it("launch(id) STILL spawns one session per dir (the boot verb)", () => {
+  it("launch(id) STILL spawns one session in the folder (the boot verb)", () => {
     const { terminals, createCalls } = countingTerminals()
     const s = new WorkspaceService(terminals, { file, now })
-    const ws = s.create("Manual", ["/d1", "/d2"])
+    const ws = s.create("Manual", "/d1")
     const result = s.launch(ws.id)
     expect(result?.workspace).toBe("Manual")
-    expect(result?.sessions).toHaveLength(2)
-    expect(createCalls()).toBe(2)
+    expect(result?.sessions).toHaveLength(1)
+    expect(createCalls()).toBe(1)
   })
 
   it("launch(id) spawns one session per manifest repo for a seeded workspace", () => {
@@ -709,22 +787,21 @@ describe("WorkspaceService WS-B selection vs launch split", () => {
   it("setActive persists + survives a reload (selection is durable, no spawn)", () => {
     const { terminals, createCalls } = countingTerminals()
     const s = new WorkspaceService(terminals, { file, now })
-    const ws = s.create("Persisted", ["/p"])
+    const ws = s.create("Persisted", "/p")
     s.setActive(ws.id)
     expect(createCalls()).toBe(0)
-    // A fresh service reads the same registry file.
     const reloaded = new WorkspaceService(fakeTerminals(), { file, now })
     expect(reloaded.getActiveId()).toBe(ws.id)
     expect(reloaded.getActivePublic()?.name).toBe("Persisted")
   })
 })
 
-describe("WorkspaceService WS-G (G1) getActiveWorkspaceDir", () => {
-  it("returns the active workspace's primary dir (dirs[0]) when it exists on disk", () => {
+describe("WorkspaceService WS-G/H (G1) getActiveWorkspaceDir", () => {
+  it("returns the active workspace's folder (dir) when it exists on disk", () => {
     const d = join(root, "proj-a")
     mkdirSync(d, { recursive: true })
     const s = svc()
-    const ws = s.create("A", [d, join(root, "proj-b")])
+    const ws = s.create("A", d)
     s.setActive(ws.id)
     expect(s.getActiveWorkspaceDir()).toBe(d)
   })
@@ -733,31 +810,31 @@ describe("WorkspaceService WS-G (G1) getActiveWorkspaceDir", () => {
     const d = join(root, "proj-a")
     mkdirSync(d, { recursive: true })
     const s = svc()
-    s.create("A", [d]) // created but NOT active
+    s.create("A", d) // created but NOT active
     expect(s.getActiveWorkspaceDir()).toBeNull()
   })
 
-  it("returns null when the active workspace has no dirs", () => {
+  it("returns null when the active workspace has no folder", () => {
     const s = svc()
-    const ws = s.create("Empty", [])
+    const ws = s.create("Empty")
     s.setActive(ws.id)
     expect(s.getActiveWorkspaceDir()).toBeNull()
   })
 
-  it("returns null when dirs[0] does not exist on disk (stale path → default cwd)", () => {
+  it("returns null when dir does not exist on disk (stale path → default cwd)", () => {
     const s = svc()
-    const ws = s.create("Stale", [join(root, "does-not-exist")])
+    const ws = s.create("Stale", join(root, "does-not-exist"))
     s.setActive(ws.id)
     expect(s.getActiveWorkspaceDir()).toBeNull()
   })
 })
 
-describe("WorkspaceService WS-G (G3) workspace.json scaffold", () => {
+describe("WorkspaceService WS-G/H (G3) workspace.json scaffold", () => {
   function manifestAt(dir: string) {
     return JSON.parse(readFileSync(join(dir, "workspace.json"), "utf-8"))
   }
 
-  it("create() scaffolds a valid workspace.json into each provided dir + toasts", () => {
+  it("create() scaffolds a valid workspace.json into the provided folder + toasts", () => {
     const d = join(root, "scaf-a")
     mkdirSync(d, { recursive: true })
     const toasts: Array<{ message: string; level: string }> = []
@@ -766,24 +843,22 @@ describe("WorkspaceService WS-G (G3) workspace.json scaffold", () => {
       now,
       notify: (message, level) => toasts.push({ message, level }),
     })
-    s.create("Billing", [d])
+    s.create("Billing", d)
 
-    // The manifest exists and matches the discovery schema ({ name, alias?, editor?, repos? }).
     expect(existsSync(join(d, "workspace.json"))).toBe(true)
     const m = manifestAt(d)
     expect(m.name).toBe("Billing")
     expect(m.editor).toBe("code")
     expect(Array.isArray(m.repos)).toBe(true)
-    // Toasted the user.
     expect(toasts.some((t) => t.message.includes("workspace.json") && t.level === "success")).toBe(true)
   })
 
-  it("addDir() scaffolds a workspace.json into the newly-added dir", () => {
+  it("setDir() scaffolds a workspace.json into the newly-set folder", () => {
     const s = svc()
-    const ws = s.create("Svc", []) // dirless to start
-    const d = join(root, "scaf-add")
+    const ws = s.create("Svc") // folderless to start
+    const d = join(root, "scaf-set")
     mkdirSync(d, { recursive: true })
-    s.addDir(ws.id, d)
+    s.setDir(ws.id, d)
     expect(existsSync(join(d, "workspace.json"))).toBe(true)
     expect(manifestAt(d).name).toBe("Svc")
   })
@@ -799,74 +874,43 @@ describe("WorkspaceService WS-G (G3) workspace.json scaffold", () => {
       now,
       notify: (message) => toasts.push(message),
     })
-    s.create("DifferentName", [d])
-    // The original manifest is untouched.
+    s.create("DifferentName", d)
     expect(manifestAt(d)).toEqual(original)
-    // No "Created workspace.json" toast for a skipped write.
     expect(toasts.some((t) => t.includes("Created workspace.json"))).toBe(false)
   })
 
   it("scaffolds nothing for a non-existent dir (best-effort, no throw)", () => {
     const d = join(root, "scaf-missing")
     const s = svc()
-    expect(() => s.create("Ghost", [d])).not.toThrow()
+    expect(() => s.create("Ghost", d)).not.toThrow()
     expect(existsSync(join(d, "workspace.json"))).toBe(false)
   })
 
   it("⚠ rescan AFTER a scaffold produces NO duplicate + keeps user edits (the trap)", () => {
-    // Create a workspace with a dir → scaffolds workspace.json + binds seedDir.
     const d = join(root, "ws-scaf-dedup")
     mkdirSync(d, { recursive: true })
     const s = svc()
-    const ws = s.create("Mine", [d])
+    const ws = s.create("Mine", d)
     s.rename(ws.id, "MyRenamed") // a user edit that must survive
 
-    // The scaffold wrote a manifest into d, which is now reachable by the scan glob.
     expect(existsSync(join(d, "workspace.json"))).toBe(true)
 
-    // A rescan discovers the scaffolded manifest. Without the seedDir bind it would
-    // mint a DUPLICATE; with it, it reconciles back to THIS entry.
     const after = s.rescan([join(root, "ws-scaf-dedup")])
     expect(after).toHaveLength(1)
     expect(after[0].id).toBe(ws.id)
-    expect(after[0].name).toBe("MyRenamed") // user edit intact
-    expect(after[0].dirs).toEqual([d])
-  })
-
-  it("rescan-after-scaffold is duplicate-free for a MULTI-dir workspace (discover dir-match)", () => {
-    // Two dirs scaffold two manifests, but only the FIRST binds seedDir; the SECOND
-    // must reconcile via discover's belt-and-suspenders listed-dir match (no dup).
-    const d1 = join(root, "ws-multi-a")
-    const d2 = join(root, "ws-multi-b")
-    mkdirSync(d1, { recursive: true })
-    mkdirSync(d2, { recursive: true })
-    const s = svc()
-    const ws = s.create("Multi", [d1, d2])
-    expect(existsSync(join(d1, "workspace.json"))).toBe(true)
-    expect(existsSync(join(d2, "workspace.json"))).toBe(true)
-
-    const after = s.rescan([join(root, "ws-multi-*")])
-    expect(after).toHaveLength(1)
-    expect(after[0].id).toBe(ws.id)
-    expect(after[0].dirs).toEqual([d1, d2])
+    expect(after[0].name).toBe("MyRenamed")
+    expect(after[0].dir).toBe(d)
   })
 
   it("⚠ rescan-after-scaffold for a FORWARD-SLASH dir spelling produces NO duplicate (the canonicalization blocker)", () => {
-    // The MCP create_workspace/add_workspace_dir tools pass the caller's dir string
-    // straight through, and an LLM on Windows naturally emits POSIX slashes. Spell
-    // the SAME dir with forward slashes. Pre-fix the stored seedDir key kept the
-    // forward slashes (canonSeedDir only upper-cased the drive), so discovery's
-    // backslash `resolve()` lookup MISSED it on rescan → a DUPLICATE workspace.
     const d = join(root, "ws-fwd-slash")
     mkdirSync(d, { recursive: true })
-    const fwd = d.replace(/\\/g, "/") // forward-slash spelling of the same dir
+    const fwd = d.replace(/\\/g, "/")
     const s = svc()
-    const ws = s.create("FwdSlash", [fwd])
-    s.rename(ws.id, "FwdRenamed") // a user edit that must survive
+    const ws = s.create("FwdSlash", fwd)
+    s.rename(ws.id, "FwdRenamed")
     expect(existsSync(join(d, "workspace.json"))).toBe(true)
 
-    // Rescan discovers the scaffolded manifest (glob returns backslash dirs on win32);
-    // the canonicalized seedDir must match it → exactly ONE entry, edits intact.
     const after = s.rescan([join(root, "ws-fwd-slash")])
     expect(after).toHaveLength(1)
     expect(after[0].id).toBe(ws.id)
@@ -874,14 +918,11 @@ describe("WorkspaceService WS-G (G3) workspace.json scaffold", () => {
   })
 
   it("⚠ rescan-after-scaffold for a TRAILING-SLASH dir spelling produces NO duplicate", () => {
-    // A trailing separator is another spelling discovery's `resolve()` collapses but
-    // the pre-fix canonSeedDir did not — so the stored key kept the trailing slash
-    // and missed the rescan lookup → duplicate.
     const d = join(root, "ws-trail-slash")
     mkdirSync(d, { recursive: true })
-    const trailing = d + "\\" // trailing-separator spelling of the same dir
+    const trailing = d + "\\"
     const s = svc()
-    const ws = s.create("TrailSlash", [trailing])
+    const ws = s.create("TrailSlash", trailing)
     s.rename(ws.id, "TrailRenamed")
     expect(existsSync(join(d, "workspace.json"))).toBe(true)
 
@@ -892,18 +933,14 @@ describe("WorkspaceService WS-G (G3) workspace.json scaffold", () => {
   })
 
   it("scaffold does NOT bind a seedDir already owned by ANOTHER workspace (no shared key)", () => {
-    // Two workspaces pointed at the SAME dir: the first binds it as its seedDir; the
-    // second must NOT also bind it (else two entries share a seedDir key). The dir is
-    // de-duped on rescan via byListedDir regardless.
     const d = join(root, "ws-shared-dir")
     mkdirSync(d, { recursive: true })
     const s = svc()
-    const a = s.create("Owner", [d])
-    const b = s.create("Second", [d])
+    const a = s.create("Owner", d)
+    const b = s.create("Second", d)
     const internalA = s.get(a.id)!
     const internalB = s.get(b.id)!
     expect(internalA.seedDir).toBe(canonSeedDir(d))
-    // The second workspace did NOT claim the already-owned key.
     expect(internalB.seedDir).not.toBe(canonSeedDir(d))
     expect(internalB.seedDir).toBeUndefined()
   })

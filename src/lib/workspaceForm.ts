@@ -1,5 +1,5 @@
 /**
- * WS-D — pure helpers for the create-workspace modal + the useWorkspaces hook's
+ * WS-D/H — pure helpers for the create-workspace modal + the useWorkspaces hook's
  * active-tracking reducer. React-free so both the validation and the
  * active-selection logic are unit-testable in vitest's node env (mirrors the
  * other `src/lib/*` view-model helpers).
@@ -11,9 +11,10 @@ export interface ActiveTrackable {
 }
 
 /**
- * Validate the create-workspace form. The name is the only required field (dirs
- * are optional — a workspace can start empty and gain dirs later via addDir).
- * Trims the name; returns the cleaned value + an error message when invalid.
+ * Validate the create-workspace form. The name is the only required field (the
+ * folder is optional — a workspace can start folderless and bind one later via
+ * set_workspace_dir). Trims the name; returns the cleaned value + an error
+ * message when invalid.
  */
 export function validateWorkspaceName(
   name: string,
@@ -24,27 +25,16 @@ export function validateWorkspaceName(
 }
 
 /**
- * Add a directory to the create-form's dir list, de-duped (an OS folder dialog
- * can return a path already chosen). Returns the SAME array reference when the
- * dir is already present, so a redundant pick is a no-op (no needless re-render).
- * Blank/whitespace paths are ignored.
+ * WS-H — the display label for a workspace's single folder: the PARENT FOLDER
+ * NAME ONLY (the last path segment, e.g. `claude-tui-app` for
+ * `C:\Users\me\projects\claude-tui-app`), so the full absolute path never blows
+ * out the sidebar width. Tolerant of both separator styles and trailing slashes;
+ * falls back to the whole string if it can't split. Empty/undefined → "".
  */
-export function addFormDir(dirs: readonly string[], dir: string): string[] {
-  const d = dir.trim()
-  if (!d || dirs.includes(d)) return dirs as string[]
-  return [...dirs, d]
-}
-
-/** Add MANY directories (the multi-select dialog result), de-duped in order. */
-export function addFormDirs(dirs: readonly string[], incoming: readonly string[]): string[] {
-  let next = dirs as string[]
-  for (const d of incoming) next = addFormDir(next, d)
-  return next
-}
-
-/** Remove a directory chip from the create-form's dir list. */
-export function removeFormDir(dirs: readonly string[], dir: string): string[] {
-  return dirs.filter((d) => d !== dir)
+export function dirBasename(dir: string | null | undefined): string {
+  if (!dir) return ""
+  const parts = dir.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || dir
 }
 
 /**

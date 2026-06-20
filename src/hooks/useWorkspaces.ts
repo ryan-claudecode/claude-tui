@@ -3,12 +3,13 @@ import { toast } from "../lib/toast"
 import { nextActiveId, activeWorkspace } from "../lib/workspaceForm"
 
 /** Renderer-facing shape for a workspace — the PUBLIC projection the WS-B IPC
- *  returns (never the internal `seed*` fields). `dirs`/`color` ride along for the
- *  switcher + create modal. */
+ *  returns (never the internal `seed*` fields). WS-H single-folder model: `dir` is
+ *  the workspace's one optional folder (was `dirs[]`). `color` rides along for the
+ *  switcher dot. */
 export interface WorkspaceSummary {
   id: string
   name: string
-  dirs: string[]
+  dir?: string
   color?: string
   createdAt?: number
   updatedAt?: number
@@ -77,19 +78,19 @@ export function useWorkspaces() {
     })
   }, [])
 
-  // CREATE — name + optional dirs. Returns the new workspace (or null on failure)
-  // so the caller can chain (the modal sets it active). Re-reads the list so the
-  // new row appears; setActive then routes through the active-changed push.
+  // CREATE — name + optional single folder. Returns the new workspace (or null on
+  // failure) so the caller can chain (the modal sets it active). Re-reads the list
+  // so the new row appears; setActive then routes through the active-changed push.
   //
   // The dot COLOR is deliberately NOT persisted here: WS-A/B exposes no setColor
-  // mutator and `createWorkspace(name, dirs)` takes no color, so the auto-color
+  // mutator and `createWorkspace(name, dir)` takes no color, so the auto-color
   // is RENDERER-DERIVED from the workspace's position via `colorFor(ws, index)`
   // (src/lib/workspaceColors.ts). An explicit user recolor is a deferred
   // follow-up — see WS-D scope note 5.
   const create = useCallback(
-    async (name: string, dirs: string[]): Promise<WorkspaceSummary | null> => {
+    async (name: string, dir?: string): Promise<WorkspaceSummary | null> => {
       try {
-        const ws = (await window.api.createWorkspace(name, dirs)) as WorkspaceSummary | null
+        const ws = (await window.api.createWorkspace(name, dir)) as WorkspaceSummary | null
         await refresh()
         return ws
       } catch (err) {
@@ -115,9 +116,9 @@ export function useWorkspaces() {
     [refresh],
   )
 
-  // DELETE — from the dropdown's hover ✕. If it was active, the service emits
-  // active-changed(null) so the active id resets to "All" via the push. Re-reads
-  // the list so the row vanishes.
+  // DELETE — from the selected-workspace delete button. If it was active, the
+  // service emits active-changed(null) so the active id resets to "All" via the
+  // push. Re-reads the list so the row vanishes.
   //
   // OPTIMISTIC CLEAR (MINOR 4): when deleting the CURRENTLY-ACTIVE workspace, drop
   // activeId to null IMMEDIATELY (mirroring setActive's optimism) instead of
@@ -142,34 +143,18 @@ export function useWorkspaces() {
     [refresh],
   )
 
-  // ADD DIR — WS-G (G2). Add a folder to an EXISTING workspace via the WS-B
-  // `addWorkspaceDir` IPC (which also scaffolds a workspace.json + toasts, G3).
-  // Re-reads the list so the new chip appears. Returns the updated workspace (or
-  // null on failure) so the caller can react.
-  const addDir = useCallback(
-    async (id: string, dir: string): Promise<WorkspaceSummary | null> => {
+  // SET DIR — WS-H. Set (or clear, with null) the workspace's single folder via the
+  // `setWorkspaceDir` IPC (a SET also scaffolds a workspace.json + toasts, G3).
+  // Re-reads the list so the dir-row updates. Returns the updated workspace (or null
+  // on failure) so the caller can react.
+  const setDir = useCallback(
+    async (id: string, dir: string | null): Promise<WorkspaceSummary | null> => {
       try {
-        const ws = (await window.api.addWorkspaceDir(id, dir)) as WorkspaceSummary | null
+        const ws = (await window.api.setWorkspaceDir(id, dir)) as WorkspaceSummary | null
         await refresh()
         return ws
       } catch (err) {
-        toast("error", `Couldn't add the folder: ${errMsg(err)}`)
-        return null
-      }
-    },
-    [refresh],
-  )
-
-  // REMOVE DIR — WS-G (G2). Drop a folder from an EXISTING workspace via the WS-B
-  // `removeWorkspaceDir` IPC. Re-reads the list so the chip disappears.
-  const removeDir = useCallback(
-    async (id: string, dir: string): Promise<WorkspaceSummary | null> => {
-      try {
-        const ws = (await window.api.removeWorkspaceDir(id, dir)) as WorkspaceSummary | null
-        await refresh()
-        return ws
-      } catch (err) {
-        toast("error", `Couldn't remove the folder: ${errMsg(err)}`)
+        toast("error", `Couldn't set the folder: ${errMsg(err)}`)
         return null
       }
     },
@@ -195,5 +180,5 @@ export function useWorkspaces() {
 
   const active = activeWorkspace(workspaces, activeId)
 
-  return { workspaces, activeId, active, setActive, create, rename, remove, addDir, removeDir, refresh, rescan }
+  return { workspaces, activeId, active, setActive, create, rename, remove, setDir, refresh, rescan }
 }

@@ -26,11 +26,11 @@ interface Props {
   onKillSession: () => void
   onKillSessionById: (id: string) => void
   onSelectSession: (id: string) => void
-  // WS-D — the workspace switcher pill + dropdown (top of the sidebar). The
-  // sections above (NEEDS YOU / MISSIONS / SESSIONS) are pre-filtered to the
-  // active workspace by App.tsx; `workspaceScoped` tells us a SPECIFIC workspace
-  // is active so a filtered-empty section can show a quiet hint instead of the
-  // bare "(none)" empty state.
+  // WS-D/H — the workspace area (header + pill dropdown + active-workspace
+  // controls, top of the sidebar). The sections above (NEEDS YOU / MISSIONS /
+  // SESSIONS) are pre-filtered to the active workspace by App.tsx; `workspaceScoped`
+  // tells us a SPECIFIC workspace is active so a filtered-empty section can show a
+  // quiet hint instead of the bare "(none)" empty state.
   workspaces: WorkspaceSummary[]
   activeWorkspace: WorkspaceSummary | null
   workspaceScoped: boolean
@@ -39,13 +39,9 @@ interface Props {
   onNewWorkspace: () => void
   onRenameWorkspace: (id: string, name: string) => void
   onDeleteWorkspace: (id: string) => void
-  /** WS-F — re-run on-disk discovery (the switcher's ⟳ refresh). May be async so
-   *  the switcher can show a spin until it settles. */
-  onRescanWorkspaces: () => void | Promise<void>
-  /** WS-G (G2) — add/remove a folder on an existing workspace (from the switcher's
-   *  per-workspace folders editor). */
-  onAddWorkspaceDir: (id: string, dir: string) => void | Promise<unknown>
-  onRemoveWorkspaceDir: (id: string, dir: string) => void | Promise<unknown>
+  /** WS-H — set (or clear, with null) the active workspace's single folder (from
+   *  the switcher's always-visible folder row). */
+  onSetWorkspaceDir: (id: string, dir: string | null) => void | Promise<unknown>
 }
 
 // Resolve a friendly label for an attention entry: the terminal's name when we
@@ -68,7 +64,7 @@ export default function Sidebar({
   onNewSession, onKillSession, onKillSessionById, onSelectSession,
   workspaces, activeWorkspace, workspaceScoped,
   onSelectAllWorkspaces, onSelectWorkspace, onNewWorkspace, onRenameWorkspace, onDeleteWorkspace,
-  onRescanWorkspaces, onAddWorkspaceDir, onRemoveWorkspaceDir,
+  onSetWorkspaceDir,
 }: Props) {
   return (
     <div className="sidebar">
@@ -77,8 +73,10 @@ export default function Sidebar({
         <span>ClaudeTUI</span>
       </div>
 
-      {/* WS-D — workspace switcher: pill + dropdown, pinned below the brand and
-          above NEEDS YOU. Selecting filters the three sections below. */}
+      {/* WS-D/H — workspace area: section header + select-only pill dropdown +
+          always-visible active-workspace controls (folder row / rename / delete),
+          pinned below the brand and above NEEDS YOU. Selecting filters the three
+          sections below. */}
       <WorkspaceSwitcher
         workspaces={workspaces}
         active={activeWorkspace}
@@ -87,9 +85,7 @@ export default function Sidebar({
         onNewWorkspace={onNewWorkspace}
         onRenameWorkspace={onRenameWorkspace}
         onDeleteWorkspace={onDeleteWorkspace}
-        onRescanWorkspaces={onRescanWorkspaces}
-        onAddDir={onAddWorkspaceDir}
-        onRemoveDir={onRemoveWorkspaceDir}
+        onSetWorkspaceDir={onSetWorkspaceDir}
       />
 
       {attentionEntries.length > 0 && (

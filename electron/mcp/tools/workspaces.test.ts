@@ -68,22 +68,23 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-describe("WS-E workspace MCP tools", () => {
-  it("create/get-active/set-active/rename/add-dir/remove-dir/delete round-trip via the service", async () => {
+describe("WS-E/H workspace MCP tools", () => {
+  it("create/get-active/set-active/rename/set-dir/delete round-trip via the service", async () => {
     const workspaceService = svc()
     const h = register(workspaceService)
 
-    // create
-    const created = parse<Record<string, unknown>>(await h.create_workspace({ name: "Frontend", dirs: ["/a"] }))
+    // create (single folder)
+    const created = parse<Record<string, unknown>>(await h.create_workspace({ name: "Frontend", dir: "/a" }))
     expect(created.name).toBe("Frontend")
-    expect(created.dirs).toEqual(["/a"])
+    expect(created.dir).toBe("/a")
+    expect("dirs" in created).toBe(false)
     const id = created.id as string
 
     // rename
     expect(parse(await h.rename_workspace({ id, name: "Renamed" })).name).toBe("Renamed")
-    // add-dir / remove-dir
-    expect(parse(await h.add_workspace_dir({ id, dir: "/b" })).dirs).toEqual(["/a", "/b"])
-    expect(parse(await h.remove_workspace_dir({ id, dir: "/a" })).dirs).toEqual(["/b"])
+    // set-dir (set + clear)
+    expect(parse(await h.set_workspace_dir({ id, dir: "/b" })).dir).toBe("/b")
+    expect(parse(await h.set_workspace_dir({ id, dir: null })).dir).toBeUndefined()
 
     // list reflects the live state
     const list = parse<Array<Record<string, unknown>>>(await h.list_workspaces({}))
@@ -105,10 +106,7 @@ describe("WS-E workspace MCP tools", () => {
     // Seed an entry via discovery so it carries internal seed* fields, then assert
     // none of them cross the MCP surface on any read/mutator.
     const workspaceService = svc()
-    // Directly create + mark as if seeded — simulate a discovered workspace by
-    // hand so the assertion exercises the projection, not discovery internals.
-    const seeded = workspaceService.create("Seeded", ["/x"])
-    // Inject seed* fields onto the stored entry (what discovery would set).
+    const seeded = workspaceService.create("Seeded", "/x")
     const stored = workspaceService.get(seeded.id)!
     ;(stored as any).seedDir = "C:/manifest/dir"
     ;(stored as any).seedRepos = [{ name: "r", path: "/x", open_on_boot: true }]
@@ -123,8 +121,7 @@ describe("WS-E workspace MCP tools", () => {
 
     noSeed(parse<Array<Record<string, unknown>>>(await h.list_workspaces({}))[0])
     noSeed(parse(await h.rename_workspace({ id: seeded.id, name: "X" })))
-    noSeed(parse(await h.add_workspace_dir({ id: seeded.id, dir: "/y" })))
-    noSeed(parse(await h.remove_workspace_dir({ id: seeded.id, dir: "/y" })))
+    noSeed(parse(await h.set_workspace_dir({ id: seeded.id, dir: "/y" })))
     await h.set_active_workspace({ id: seeded.id })
     noSeed(parse(await h.get_active_workspace({})))
   })
@@ -132,7 +129,7 @@ describe("WS-E workspace MCP tools", () => {
   it("set-active is SELECTION-ONLY (no spawn) and accepts null / clears to 'All'", async () => {
     const workspaceService = svc()
     const h = register(workspaceService)
-    const id = (parse(await h.create_workspace({ name: "WS", dirs: ["/d1", "/d2"] })).id as string)
+    const id = (parse(await h.create_workspace({ name: "WS", dir: "/d1" })).id as string)
 
     expect(createCalls).toBe(0)
     await h.set_active_workspace({ id })
@@ -145,15 +142,15 @@ describe("WS-E workspace MCP tools", () => {
     expect(parse(await h.get_active_workspace({}))).toBeNull()
   })
 
-  it("launch_workspace boots (spawns one session per dir) with the fake session driver", async () => {
+  it("launch_workspace boots (spawns one session in the folder) with the fake session driver", async () => {
     const workspaceService = svc()
     const h = register(workspaceService)
-    const id = parse(await h.create_workspace({ name: "WS", dirs: ["/d1", "/d2"] })).id as string
+    const id = parse(await h.create_workspace({ name: "WS", dir: "/d1" })).id as string
 
     const result = parse<{ workspace: string; sessions: unknown[] }>(await h.launch_workspace({ id }))
     expect(result.workspace).toBe("WS")
-    expect(result.sessions).toHaveLength(2)
-    expect(createCalls).toBe(2) // two dirs → two spawned sessions (no real PTYs)
+    expect(result.sessions).toHaveLength(1)
+    expect(createCalls).toBe(1) // one folder → one spawned session (no real PTYs)
   })
 
   it("unknown ids return a graceful error (no crash) across every id-taking tool", async () => {
@@ -161,18 +158,17 @@ describe("WS-E workspace MCP tools", () => {
     const h = register(workspaceService)
 
     expect((await h.rename_workspace({ id: "ghost", name: "X" })).content[0].text).toMatch(/not found/i)
-    expect((await h.add_workspace_dir({ id: "ghost", dir: "/x" })).content[0].text).toMatch(/not found/i)
-    expect((await h.remove_workspace_dir({ id: "ghost", dir: "/x" })).content[0].text).toMatch(/not found/i)
+    expect((await h.set_workspace_dir({ id: "ghost", dir: "/x" })).content[0].text).toMatch(/not found/i)
     expect((await h.delete_workspace({ id: "ghost" })).content[0].text).toMatch(/not found/i)
     expect((await h.set_active_workspace({ id: "ghost" })).content[0].text).toMatch(/not found/i)
     expect((await h.launch_workspace({ id: "ghost" })).content[0].text).toMatch(/not found/i)
   })
 
-  it("create_workspace defaults dirs to [] when omitted", async () => {
+  it("create_workspace leaves dir undefined when omitted", async () => {
     const workspaceService = svc()
     const h = register(workspaceService)
     const created = parse(await h.create_workspace({ name: "Empty" }))
-    expect(created.dirs).toEqual([])
+    expect(created.dir).toBeUndefined()
   })
 
   // WS-F — the on-demand re-scan tool, driven against a temp scan dir.

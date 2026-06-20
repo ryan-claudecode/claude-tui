@@ -376,13 +376,6 @@ body {
     border-top-color: var(--accent);
   }
 
-  /* WS-F — workspace re-scan ⟳: no infinite spin. Keep a still, accent-tinted
-     busy cue (the button already turns accent + is disabled while scanning) so
-     the in-flight state stays visible without motion. */
-  .workspace-rescan-btn.scanning .workspace-rescan-icon {
-    animation: none;
-  }
-
   /* Panel slide-in / slide-up (PanelDrawer) */
   .panel-drawer,
   .panel-drawer-bottom {
@@ -400,8 +393,7 @@ body {
   .missions-list-panel,
   .workspace-create-overlay,
   .workspace-create-panel,
-  .workspace-menu,
-  .workspace-folders-panel {
+  .workspace-menu {
     animation: none;
   }
 
@@ -655,14 +647,29 @@ body {
 }
 
 /* ============================================================
-   WS-D — Workspace switcher (pill + dropdown)
-   A compact pill below the brand, above NEEDS YOU. Warm, rounded,
-   soft-shadowed dropdown — never a blocky menu. Tokens only.
+   WS-D/H — Workspace area (header + select-only pill dropdown +
+   always-visible active-workspace controls)
+   A "WORKSPACE" section header, a select-only pill, a warm rounded
+   soft-shadowed dropdown, and (for a specific active workspace) an
+   explicitly-visible folder row + rename + delete — NO hover-reveal,
+   never a blocky menu. Tokens only.
    ============================================================ */
 .workspace-switcher {
   position: relative;
-  padding: 0 var(--s-2) var(--s-2);
+  padding: 0 var(--s-2) var(--s-3);
   -webkit-app-region: no-drag;
+}
+
+/* WS-H — singular "WORKSPACE" caption above the selector, matching the other
+   sidebar section headers (display font, uppercase, tracked). */
+.workspace-section-header {
+  padding: var(--s-1) var(--s-2) var(--s-2);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
 }
 
 .workspace-pill {
@@ -670,7 +677,9 @@ body {
   align-items: center;
   gap: var(--s-2);
   width: 100%;
-  padding: 7px 10px;
+  /* WS-H — slightly larger padding (one step up) so the selector reads as the
+     anchor of the workspace area. */
+  padding: 9px 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--r);
@@ -726,11 +735,17 @@ body {
   color: var(--accent);
 }
 
+/* WS-H — the selector wraps the pill + its dropdown so the menu anchors below the
+   PILL, not the whole workspace area (which now also holds the active controls). */
+.workspace-selector {
+  position: relative;
+}
+
 .workspace-menu {
   position: absolute;
-  top: calc(100% - 2px);
-  left: var(--s-2);
-  right: var(--s-2);
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
   z-index: 1200;
   padding: var(--s-1);
   background: var(--bg-1);
@@ -817,48 +832,87 @@ body {
   color: var(--text-0);
 }
 
-/* Hover-revealed inline rename + delete affordances on a workspace row. */
-.workspace-row-actions {
+/* ── WS-H — active-workspace controls (ALWAYS visible, NO hover-reveal) ─────────
+   Shown directly under the selector pill for a SPECIFIC active workspace: a
+   clickable folder row (the only place to set the folder) + an explicit rename
+   (✎) and delete (×) pair beside the name. Warm, rounded, non-blocky. */
+.workspace-active-controls {
   display: flex;
-  align-items: center;
-  gap: 1px;
-  margin-left: auto;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity var(--fast) var(--ease);
-}
-.workspace-menu-item:hover .workspace-row-actions,
-.workspace-menu-item.highlight .workspace-row-actions {
-  opacity: 1;
-}
-/* WS-G (G2) — keep the row's actions (incl. the 📁 toggle) visible while this
-   row's folders panel is expanded, so the toggle doesn't vanish under the mouse. */
-.workspace-menu-row-group:has(.workspace-folders-panel) .workspace-row-actions {
-  opacity: 1;
-}
-.workspace-row-btn {
-  background: none;
-  border: none;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  padding: 2px 4px;
-  border-radius: var(--r-sm);
-  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
-}
-.workspace-row-btn:hover {
-  color: var(--text-0);
-  background: var(--bg-4);
-}
-.workspace-row-delete:hover {
-  color: var(--red);
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
 }
 
+/* The folder row — a full-width clickable affordance showing the parent-folder
+   NAME (or "No folder selected"). Slightly larger padding (one step up) to match
+   the pill weight. Clicking opens the native single-folder picker. */
+.workspace-dir-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 8px 11px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  cursor: pointer;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  box-shadow: var(--shadow-1);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
+}
+.workspace-dir-row:hover {
+  background: var(--bg-3);
+  border-color: var(--accent-glow);
+  color: var(--text-0);
+}
+/* Empty (no folder) state — quieter, dashed, italic prompt to choose one. */
+.workspace-dir-row.empty {
+  border-style: dashed;
+  color: var(--text-3);
+  font-style: italic;
+}
+.workspace-dir-row.empty:hover {
+  color: var(--accent);
+}
+.workspace-dir-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.85;
+}
+.workspace-dir-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The name + rename/delete row. The name takes the lead; the ✎ and × are
+   ALWAYS visible (never hover-revealed). */
+.workspace-name-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px;
+}
+.workspace-name-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-2);
+}
 .workspace-rename-input {
   flex: 1;
   min-width: 0;
-  padding: 2px 6px;
+  padding: 4px 7px;
   font: inherit;
   font-size: 13px;
   color: var(--text-0);
@@ -867,134 +921,30 @@ body {
   border-radius: var(--r-sm);
   outline: none;
 }
-
-/* WS-G (G2) — per-workspace folders editor (inline, inside the dropdown). The
-   📁 toggle keeps its highlight while its panel is open; a quiet count badge
-   rides beside the glyph. */
-.workspace-row-btn.active {
-  color: var(--accent);
-  background: var(--bg-4);
-}
-.workspace-folder-count {
-  margin-left: 3px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-3);
-}
-.workspace-row-btn.active .workspace-folder-count {
-  color: var(--accent);
-}
-
-/* The expanding folders panel: a soft, indented well below the row — removable
-   dir chips + an "+ Add folder" action. Warm, rounded, non-blocky. */
-.workspace-folders-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-  margin: 1px 6px 4px 24px;
-  padding: 8px 9px;
-  background: var(--bg-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  animation: workspace-folders-in 0.14s var(--ease-out);
-}
-@keyframes workspace-folders-in {
-  from {
-    opacity: 0;
-    transform: translateY(-3px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-.workspace-folders-empty {
-  font-size: 12px;
-  color: var(--text-3);
-  font-style: italic;
-}
-.workspace-folders-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.workspace-folders-panel .workspace-dir-chip {
-  font-size: 11.5px;
-}
-.workspace-folders-panel .workspace-dir-chip-label {
-  max-width: 150px;
-}
-.workspace-folders-add {
-  align-self: flex-start;
-  padding: 4px 10px;
-  font: inherit;
-  font-size: 11.5px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-glow);
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
-}
-.workspace-folders-add:hover {
-  background: var(--accent-glow);
-  color: var(--text-0);
-}
-
-/* WS-F — dropdown header: a quiet "Workspaces" label + the ⟳ re-scan control.
-   Warm, low-contrast, non-blocky — it reads as a section caption, not a button bar. */
-.workspace-menu-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-2);
-  padding: 4px 9px 5px;
-  margin-bottom: 2px;
-}
-.workspace-menu-head-label {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-4);
-  user-select: none;
-}
-.workspace-rescan-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
+.workspace-edit-btn,
+.workspace-delete-btn {
+  flex-shrink: 0;
   background: none;
   border: none;
-  border-radius: var(--r-sm);
   color: var(--text-3);
   cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
   transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
-.workspace-rescan-btn:hover {
+.workspace-edit-btn:hover,
+.workspace-delete-btn:hover {
+  color: var(--text-0);
+  background: var(--bg-4);
+}
+.workspace-edit-btn.active {
   color: var(--accent);
   background: var(--bg-4);
 }
-.workspace-rescan-btn:disabled {
-  cursor: default;
-  color: var(--accent);
-}
-.workspace-rescan-icon {
-  display: inline-block;
-  font-size: 14px;
-  line-height: 1;
-}
-/* Spin only while a scan is in flight. Single named animation so the
-   prefers-reduced-motion block (below) can neutralize it to a non-spinning glyph. */
-.workspace-rescan-btn.scanning .workspace-rescan-icon {
-  animation: workspace-rescan-spin 0.7s linear infinite;
-}
-@keyframes workspace-rescan-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.workspace-delete-btn:hover {
+  color: var(--red);
 }
 
 /* Quiet hint shown when a scoped (specific-workspace) section is empty. */
@@ -1005,7 +955,9 @@ body {
   font-style: italic;
 }
 
-.workspace-row-btn:focus-visible,
+.workspace-edit-btn:focus-visible,
+.workspace-delete-btn:focus-visible,
+.workspace-dir-row:focus-visible,
 .workspace-pill:focus-visible,
 .workspace-menu-item:focus-visible {
   outline: 2px solid var(--accent);
@@ -5230,59 +5182,67 @@ body {
   color: var(--text-4);
 }
 
-.workspace-create-dirs {
+/* WS-H — the create modal's single chosen folder: its parent-folder NAME with an
+   always-visible Change + clear (×). No multi-dir chips, no hover-reveal. */
+.workspace-create-folder {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-height: 24px;
   align-items: center;
+  gap: var(--s-2);
+  padding: 8px 11px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
 }
-.workspace-create-dirs-empty {
-  font-size: 12px;
-  font-style: italic;
-  color: var(--text-4);
-}
-
-.workspace-dir-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 4px 3px 9px;
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-glow);
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--text-1);
-  max-width: 100%;
-}
-.workspace-dir-chip-label {
+.workspace-create-folder-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 280px;
+  font-size: 13px;
+  color: var(--text-0);
 }
-.workspace-dir-chip-remove {
+.workspace-create-folder-change {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-glow);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.workspace-create-folder-change:hover {
+  background: var(--accent-glow);
+  color: var(--text-0);
+}
+.workspace-create-folder-clear {
+  flex-shrink: 0;
   background: none;
   border: none;
   color: var(--text-3);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
-  padding: 0 3px;
+  padding: 0 4px;
   border-radius: 50%;
   transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
-.workspace-dir-chip-remove:hover {
+.workspace-create-folder-clear:hover {
   color: var(--red);
   background: var(--bg-3);
 }
 
+/* The "Choose folder" button shown when no folder is picked yet. */
 .workspace-add-folder-btn {
   align-self: flex-start;
   margin-top: 2px;
-  padding: 6px 12px;
+  padding: 8px 14px;
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 550;
   color: var(--text-1);
   background: var(--bg-2);
@@ -5335,8 +5295,8 @@ body {
 
 .workspace-create-close:focus-visible,
 .workspace-add-folder-btn:focus-visible,
-.workspace-folders-add:focus-visible,
-.workspace-dir-chip-remove:focus-visible,
+.workspace-create-folder-change:focus-visible,
+.workspace-create-folder-clear:focus-visible,
 .workspace-create-cancel:focus-visible,
 .workspace-create-submit:focus-visible {
   outline: 2px solid var(--accent);

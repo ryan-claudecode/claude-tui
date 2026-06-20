@@ -13,8 +13,12 @@ import type { WorkspaceService } from "../services/workspaces"
  * NO-LEAK POSTURE: every handler that returns a workspace returns the PUBLIC
  * projection (`toPublic` shape via `listPublic`/`getActivePublic`), never the
  * internal `Workspace` with its `seed*` boot/import fields. Mutators (`create`/
- * `rename`/`addDir`/`removeDir`/`get`) re-project through `listPublic()` (keyed by
- * id) so a single source of truth owns the projection.
+ * `rename`/`setDir`/`get`) re-project through `listPublic()` (keyed by id) so a
+ * single source of truth owns the projection.
+ *
+ * WS-H — single-folder model: `workspace:set-dir(id, dir|null)` replaces the old
+ * `workspace:add-dir`/`workspace:remove-dir` pair; `workspace:create` takes an
+ * optional single `dir` (not a `dirs[]` array).
  *
  * SELECTION vs LAUNCH (the WS-B split):
  *   • `workspace:set-active` — SELECTION-ONLY. Marks the active workspace,
@@ -46,20 +50,18 @@ export function registerWorkspaceHandlers(deps: {
   ipcMain.handle("workspace:get-active", () => workspaceService.getActivePublic())
 
   // ── Mutators (all return the PUBLIC projection of the affected workspace) ─────
-  ipcMain.handle("workspace:create", (_e, name: string, dirs?: string[]) => {
-    const ws = workspaceService.create(name, dirs ?? [])
+  ipcMain.handle("workspace:create", (_e, name: string, dir?: string) => {
+    const ws = workspaceService.create(name, dir)
     return publicById(ws.id)
   })
   ipcMain.handle("workspace:rename", (_e, id: string, name: string) => {
     const ws = workspaceService.rename(id, name)
     return ws ? publicById(ws.id) : null
   })
-  ipcMain.handle("workspace:add-dir", (_e, id: string, dir: string) => {
-    const ws = workspaceService.addDir(id, dir)
-    return ws ? publicById(ws.id) : null
-  })
-  ipcMain.handle("workspace:remove-dir", (_e, id: string, dir: string) => {
-    const ws = workspaceService.removeDir(id, dir)
+  // WS-H — set (or clear, with null) the workspace's single folder. Replaces the
+  // old add-dir/remove-dir pair.
+  ipcMain.handle("workspace:set-dir", (_e, id: string, dir: string | null) => {
+    const ws = workspaceService.setDir(id, dir)
     return ws ? publicById(ws.id) : null
   })
   ipcMain.handle("workspace:delete", (_e, id: string) => workspaceService.delete(id))
@@ -76,21 +78,23 @@ export function registerWorkspaceHandlers(deps: {
   // manifests, never duplicates a seeded workspace, never reverts user edits.
   ipcMain.handle("workspace:rescan", () => workspaceService.rescan(getScanPaths()))
 
-  // ── Native folder picker (WS-D) ──────────────────────────────────────────────
-  // The ONE new main-process surface WS-D adds: the create-workspace modal's
-  // "+ Add folder" button opens the OS folder dialog (multi-select) and resolves
-  // to the chosen absolute paths. Returns [] on cancel (showOpenDialog yields
-  // `canceled: true` + an empty `filePaths`), so the renderer treats cancel as a
-  // no-op. Parented to the focused BrowserWindow so it presents as a modal sheet
-  // rather than a detached dialog; falls back to a window-less dialog if none.
+  // ── Native folder picker (WS-D/H) ────────────────────────────────────────────
+  // The create-workspace modal's "Choose folder" and the selected-workspace
+  // dir-row both open the OS folder dialog. WS-H: a workspace is ONE folder, so the
+  // picker is SINGLE-select (no `multiSelections`). It still resolves to a string[]
+  // (0 or 1 entries) for API continuity; callers take the first. Returns [] on
+  // cancel (showOpenDialog yields `canceled: true` + an empty `filePaths`), so the
+  // renderer treats cancel as a no-op. Parented to the focused BrowserWindow so it
+  // presents as a modal sheet rather than a detached dialog; falls back to a
+  // window-less dialog if none.
   ipcMain.handle("dialog:open-directory", async (e): Promise<string[]> => {
     const parent = BrowserWindow.fromWebContents(e.sender) ?? undefined
     const result = parent
       ? await dialog.showOpenDialog(parent, {
-          properties: ["openDirectory", "multiSelections", "createDirectory"],
+          properties: ["openDirectory", "createDirectory"],
         })
       : await dialog.showOpenDialog({
-          properties: ["openDirectory", "multiSelections", "createDirectory"],
+          properties: ["openDirectory", "createDirectory"],
         })
     return result.canceled ? [] : result.filePaths
   })

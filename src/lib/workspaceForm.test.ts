@@ -1,9 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   validateWorkspaceName,
-  addFormDir,
-  addFormDirs,
-  removeFormDir,
+  dirBasename,
   nextActiveId,
   activeWorkspace,
 } from "./workspaceForm"
@@ -19,28 +17,24 @@ describe("validateWorkspaceName", () => {
   })
 })
 
-describe("addFormDir / addFormDirs / removeFormDir", () => {
-  it("adds a trimmed dir", () => {
-    expect(addFormDir([], "  C:/a  ")).toEqual(["C:/a"])
+describe("dirBasename — WS-H single-folder display label", () => {
+  it("returns the last segment of a Windows path", () => {
+    expect(dirBasename("C:\\Users\\me\\projects\\claude-tui-app")).toBe("claude-tui-app")
   })
 
-  it("de-dupes (returns SAME ref when already present)", () => {
-    const dirs = ["C:/a"]
-    expect(addFormDir(dirs, "C:/a")).toBe(dirs)
+  it("returns the last segment of a POSIX path", () => {
+    expect(dirBasename("/home/me/projects/billing")).toBe("billing")
   })
 
-  it("ignores blank paths (returns SAME ref)", () => {
-    const dirs = ["C:/a"]
-    expect(addFormDir(dirs, "   ")).toBe(dirs)
+  it("ignores a trailing separator", () => {
+    expect(dirBasename("C:\\projects\\demo\\")).toBe("demo")
+    expect(dirBasename("/projects/demo/")).toBe("demo")
   })
 
-  it("addFormDirs merges many, de-duped, order preserved", () => {
-    expect(addFormDirs(["C:/a"], ["C:/b", "C:/a", "C:/c"])).toEqual(["C:/a", "C:/b", "C:/c"])
-  })
-
-  it("removeFormDir drops the matching dir only", () => {
-    expect(removeFormDir(["C:/a", "C:/b"], "C:/a")).toEqual(["C:/b"])
-    expect(removeFormDir(["C:/a"], "C:/x")).toEqual(["C:/a"])
+  it("returns '' for empty / null / undefined", () => {
+    expect(dirBasename("")).toBe("")
+    expect(dirBasename(null)).toBe("")
+    expect(dirBasename(undefined)).toBe("")
   })
 })
 
