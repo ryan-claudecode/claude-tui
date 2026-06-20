@@ -478,10 +478,19 @@ export class MissionService {
     if (m.tasks.length > 0 && m.tasks.every((t) => t.status === "done")) {
       m.status = "done"
       this.log(m, "info", "All tasks done — mission complete")
+      // Terminal transition: tear down the Conductor + any lingering worker PTY so
+      // they don't outlive the mission (the Supervisor stops touching it). NOTE: we
+      // only reach here when EVERY task is `done` — an `awaiting-review` (or
+      // `merge-conflict`) task keeps the mission `running` (this branch's guard is
+      // false), so an isolated worker mid-review is never torn down here.
+      this.teardownProcesses(m)
     } else if (m.tasks.length > 0 && m.tasks.every((t) => t.status === "done" || t.status === "failed")) {
       m.status = "blocked"
       this.log(m, "error", "Remaining tasks failed — mission blocked")
       this.notify?.(`Mission blocked: ${m.goal}`, "warning")
+      // Same terminal teardown for `blocked` — only reached when every task is
+      // done|failed (no awaiting-review/in-progress task remains alive).
+      this.teardownProcesses(m)
     }
   }
 
@@ -592,14 +601,32 @@ export class MissionService {
     }
   }
 
+  /**
+   * Kill a mission's live PTYs (Conductor + every worker) and clear those refs,
+   * mirroring `stop()`'s teardown. The shared chokepoint for EVERY terminal
+   * transition (stop / finish / recomputeCompletion → done|blocked / deleteMission)
+   * so a mission that leaves the Supervisor's running/planning set never strands a
+   * `claude.exe` — `tick()`/`reapStalledWorkers` permanently skip non-running
+   * missions, so if we don't kill here the processes linger until app exit.
+   *
+   * Idempotent: `sessions.kill` is a safe no-op on an already-dead/unknown id
+   * (returns false, never throws — verified in CAPP-63), and clearing the refs is
+   * itself idempotent, so re-running this on an already-torn-down mission is fine.
+   * Does NOT touch worktrees (callers invoke `cleanupAllWorktrees` as needed) or
+   * mutate `status` — purely the process teardown.
+   */
+  private teardownProcesses(m: Mission): void {
+    for (const w of m.workers) this.sessions.kill(w.sessionId)
+    if (m.conductorSessionId) this.sessions.kill(m.conductorSessionId)
+    m.workers = []
+    m.conductorSessionId = undefined
+  }
+
   stop(missionId: string): Mission | undefined {
     const m = this.missions.get(missionId)
     if (!m) return undefined
-    for (const w of m.workers) this.sessions.kill(w.sessionId)
-    if (m.conductorSessionId) this.sessions.kill(m.conductorSessionId)
+    this.teardownProcesses(m)
     this.cleanupAllWorktrees(m)
-    m.workers = []
-    m.conductorSessionId = undefined
     m.status = "stopped"
     this.log(m, "info", "Mission stopped by user")
     this.persist(m)
@@ -609,6 +636,10 @@ export class MissionService {
   finish(id: string): Mission | undefined {
     const m = this.missions.get(id)
     if (!m) return undefined
+    // The Conductor's loop ends at finish() — killing it (and any lingering
+    // worker) is correct; a fresh Conductor is never needed for a done mission,
+    // and the Supervisor won't respawn one (tick() skips non-running missions).
+    this.teardownProcesses(m)
     this.cleanupAllWorktrees(m)
     m.status = "done"
     this.log(m, "info", "Mission finished")
@@ -645,9 +676,10 @@ export class MissionService {
     const m = this.missions.get(id)
     if (!m) return false
     if (!TERMINAL_DELETABLE.includes(m.status)) return false
-    // Tear down any still-live PTYs (no-op for an already-stopped mission).
-    for (const w of m.workers) this.sessions.kill(w.sessionId)
-    if (m.conductorSessionId) this.sessions.kill(m.conductorSessionId)
+    // Tear down any still-live PTYs (no-op for an already-stopped/torn-down
+    // mission — see CAPP-64: a done/blocked mission now tears down on transition,
+    // but a row reached before that fix, or any race, is still covered here).
+    this.teardownProcesses(m)
     // Best-effort: any per-task failure is logged inside cleanupAllWorktrees, so a
     // (best-effort) orphaned worktree leaves a trace. DEFERRED FOLLOW-UP: a
     // boot-time orphan-worktree prune-sweep (reapOrphans over the repo, keeping

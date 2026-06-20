@@ -582,6 +582,163 @@ describe("MissionService deleteMission (durable dismiss)", () => {
   })
 })
 
+describe("MissionService terminal-transition teardown (CAPP-64)", () => {
+  it("finish() kills a live conductor + worker and clears the refs (no orphan PTYs)", () => {
+    const killed: string[] = []
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        kill: (id) => { killed.push(id); return true },
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    const workerId = svc.get(m.id)!.workers[0].sessionId
+    svc.get(m.id)!.conductorSessionId = "cond-1"
+
+    killed.length = 0
+    const out = svc.finish(m.id)!
+    expect(out.status).toBe("done")
+    expect(killed.sort()).toEqual(["cond-1", workerId].sort())
+    // Refs cleared so tick()/reaper never touch dead ids.
+    expect(out.conductorSessionId).toBeUndefined()
+    expect(out.workers).toEqual([])
+  })
+
+  it("recomputeCompletion → done (last task resolves) tears down conductor + worker", () => {
+    const killed: string[] = []
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        kill: (id) => { killed.push(id); return true },
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    const workerId = svc.get(m.id)!.workers[0].sessionId
+    svc.get(m.id)!.conductorSessionId = "cond-1"
+
+    killed.length = 0
+    const out = svc.resolve(m.id, taskId, "done", "ok")! // sole task done → mission done
+    expect(out.status).toBe("done")
+    expect(killed).toContain("cond-1")
+    expect(killed).toContain(workerId)
+    expect(out.conductorSessionId).toBeUndefined()
+    expect(out.workers).toEqual([])
+  })
+
+  it("recomputeCompletion → blocked (last task fails) tears down conductor + worker", () => {
+    const killed: string[] = []
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        kill: (id) => { killed.push(id); return true },
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    const workerId = svc.get(m.id)!.workers[0].sessionId
+    svc.get(m.id)!.conductorSessionId = "cond-1"
+
+    killed.length = 0
+    const out = svc.resolve(m.id, taskId, "failed", "broke")! // sole task failed → blocked
+    expect(out.status).toBe("blocked")
+    expect(killed).toContain("cond-1")
+    expect(killed).toContain(workerId)
+    expect(out.conductorSessionId).toBeUndefined()
+    expect(out.workers).toEqual([])
+  })
+
+  it("tick() does NOT respawn a conductor for a mission that just reached a terminal state", () => {
+    let creates = 0
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => { creates++; return { id: `c${creates}`, name: "c", cwd: "/r", state: "active" } },
+        getActivity: () => [], // every session reads as dead
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    svc.get(m.id)!.conductorSessionId = "cond-1"
+    svc.resolve(m.id, taskId, "done") // → done, torn down
+    creates = 0
+    svc.tick() // a done mission is skipped — no respawn
+    expect(creates).toBe(0)
+    expect(svc.get(m.id)!.conductorSessionId).toBeUndefined()
+  })
+
+  it("an awaiting-review task does NOT tear down — conductor + worker stay alive, mission running", () => {
+    const killed: string[] = []
+    const wt = makeFakeWorktree()
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        kill: (id) => { killed.push(id); return true },
+      }),
+      { dir, worktree: wt, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/repo", "hands-off", true) // isolated workers
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    const workerId = svc.get(m.id)!.workers[0].sessionId
+    svc.get(m.id)!.conductorSessionId = "cond-1"
+
+    killed.length = 0
+    const out = svc.resolve(m.id, taskId, "done")! // isolated → awaiting-review, NOT done
+    expect(out.tasks[0].status).toBe("awaiting-review")
+    expect(out.status).toBe("running")
+    // Mid-flight: nothing torn down. Conductor + worker session ref survive.
+    expect(killed).toEqual([])
+    expect(out.conductorSessionId).toBe("cond-1")
+    expect(out.workers.some((w) => w.sessionId === workerId)).toBe(true)
+
+    // …and once the review resolves (approve → clean merge) the mission completes
+    // and THEN tears down (review queue still works end-to-end).
+    expect(svc.reviewQueue().some((r) => r.missionId === m.id && r.taskId === taskId)).toBe(true)
+    const approved = svc.approveTask(m.id, taskId)!
+    expect(approved.status).toBe("done")
+    expect(killed).toContain("cond-1")
+    expect(killed).toContain(workerId)
+    expect(approved.conductorSessionId).toBeUndefined()
+    expect(approved.workers).toEqual([])
+  })
+
+  it("is idempotent on an already-stopped mission (no double-kill crash via deleteMission)", () => {
+    const killed: string[] = []
+    const svc = new MissionService(
+      fakeDriver({
+        create: () => ({ id: "w1", name: "w", cwd: "/r", state: "active" }),
+        kill: (id) => { killed.push(id); return true },
+      }),
+      { dir, seedDelayMs: 0 },
+    )
+    const m = svc.create("g", "/r")
+    svc.plan(m.id, [{ title: "t" }])
+    const taskId = svc.get(m.id)!.tasks[0].id
+    svc.dispatch(m.id, taskId, "go")
+    svc.get(m.id)!.conductorSessionId = "cond-1"
+    svc.stop(m.id) // tears down once
+    killed.length = 0
+    // A second teardown (via deleteMission) on the already-cleared mission must not
+    // throw and must kill nothing new (refs already cleared).
+    expect(svc.deleteMission(m.id)).toBe(true)
+    expect(killed).toEqual([])
+  })
+})
+
 describe("MissionService supervisor — conductor", () => {
   it("spawns a conductor for a running mission that has none", () => {
     const created: Array<{ name?: string; cwd?: string }> = []
