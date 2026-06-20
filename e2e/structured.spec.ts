@@ -134,7 +134,12 @@ async function launchSplit(prefix: string): Promise<{ win: Page; pageErrors: str
     await expect(win.locator(".split-pane")).toHaveCount(2, { timeout: 1_500 })
   }).toPass({ timeout: 20_000 })
 
-  await expect(win.locator(".split-pane .agent-composer textarea")).toHaveCount(2)
+  // CAPP-55 — the two panes exist; their composers mount a frame later. Give the
+  // count assertion a generous timeout (auto-retry) so a slow render under load
+  // doesn't fail the shared setup before the composers paint.
+  await expect(win.locator(".split-pane .agent-composer textarea")).toHaveCount(2, {
+    timeout: 15_000,
+  })
   return { win, pageErrors }
 }
 
@@ -201,9 +206,13 @@ test("structured engine: composer is usable and a streamed reply renders", async
 
   // The agent's reply renders exactly ONCE — the turn-complete `result` event must
   // not re-render the same text it already streamed (the duplicated-output bug).
+  // CAPP-55 — gate on the turn-complete `result` block FIRST (it lands after the
+  // streamed deltas; the "fake agent" wait above can pass mid-stream before it).
+  // Once that's rendered the duplicate-render negatives below are evaluated against
+  // the fully-settled turn, not a transient frame.
+  await expect(win.locator(".agent-result")).toContainText(/turn complete/i, { timeout: 15_000 })
   await expect(win.locator(".agent-assistant")).toHaveCount(1)
   await expect(win.locator(".agent-result-text")).toHaveCount(0)
-  await expect(win.locator(".agent-result")).toContainText(/turn complete/i)
 
   // BO-8 — the reply renders as FORMATTED markdown INLINE (matching the panel),
   // not raw text: a fenced code block, bold, a heading, a list, a table, and a
@@ -275,8 +284,11 @@ test("structured engine: both split panes render a usable composer (not blank xt
   }).toPass({ timeout: 20_000 })
 
   // Before BO-4b, SplitView rendered TerminalPane unconditionally — both structured
-  // panes were blank xterms with NO composer. Now each pane forks per-engine.
-  await expect(win.locator(".split-pane .agent-composer textarea")).toHaveCount(2)
+  // panes were blank xterms with NO composer. Now each pane forks per-engine. The
+  // composer render trails the split engage by a frame; give it auto-retry headroom.
+  await expect(win.locator(".split-pane .agent-composer textarea")).toHaveCount(2, {
+    timeout: 15_000,
+  })
   await expect(win.locator(".split-pane .xterm")).toHaveCount(0)
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
@@ -311,20 +323,40 @@ test("structured engine: slash picker reflects the LIVE init catalog and /config
   await composer.press("Enter")
   await expect(win.locator(".agent-assistant")).toContainText("fake agent", { timeout: 15_000 })
 
-  // Typing "/" opens the autocomplete listing the LIVE catalog (slash commands +
-  // skills from init — NOT a hardcoded set).
-  await composer.fill("/")
+  // CAPP-55 — EXPLICIT readiness wait for the catalog, not an implicit one. The
+  // headless `init` (which carries the picker catalog) arrives ASYNC over its own
+  // IPC, independent of the assistant-text render we just awaited: under machine
+  // contention the catalog can land in the useSlashPicker hook's state a beat AFTER
+  // "fake agent" is visible — and if the live init event raced the hook's mount-time
+  // subscription, only a fresh slash query re-derives `open` from the now-populated
+  // catalog. So drive the open through `toPass`: clear + re-type "/" until the picker
+  // actually renders its catalog-derived options. This re-types (a user-faithful
+  // retry) instead of asserting once against a state that may not exist yet.
   const picker = win.locator(".slash-picker")
-  await expect(picker).toBeVisible({ timeout: 10_000 })
+  await expect(async () => {
+    await composer.fill("")
+    await composer.fill("/")
+    await expect(picker).toBeVisible({ timeout: 2_000 })
+    // Gate on a catalog-DERIVED option, not just the container, so we never proceed
+    // with a half-populated picker (the container can mount a frame before entries).
+    await expect(picker.locator(".slash-picker-item", { hasText: "/clear" })).toBeVisible({
+      timeout: 2_000,
+    })
+  }).toPass({ timeout: 20_000 })
+
+  // The autocomplete lists the LIVE catalog (slash commands + skills from init — NOT
+  // a hardcoded set). These auto-retry, so they settle as the catalog fully lands.
   await expect(picker).toContainText("/clear") // a built-in slash command
   await expect(picker).toContainText("/config") // a native-mapped built-in
   await expect(picker).toContainText("/chrome-live") // a skill from init.skills
 
-  // Filtering narrows to the typed query, and selecting inserts `/name `.
+  // Filtering narrows to the typed query, and selecting inserts `/name `. Wait for
+  // the filtered set to settle to the single /config match (the catalog/render is
+  // async) before clicking, so we never click a stale/again-filtering list.
   await composer.fill("/conf")
-  await expect(picker.locator(".slash-picker-item")).toHaveCount(1)
+  await expect(picker.locator(".slash-picker-item")).toHaveCount(1, { timeout: 10_000 })
   await picker.locator(".slash-picker-item", { hasText: "/config" }).click()
-  await expect(composer).toHaveValue("/config ")
+  await expect(composer).toHaveValue("/config ", { timeout: 10_000 })
 
   // Sending /config is native-mapped → it cycles the theme (the theme/config
   // affordance) instead of being echoed to the agent as a literal user message.
@@ -332,8 +364,15 @@ test("structured engine: slash picker reflects the LIVE init catalog and /config
     document.documentElement.getAttribute("data-theme"),
   )
   await composer.fill("/config")
-  await composer.press("Escape") // dismiss the re-opened picker so Enter sends
-  await expect(picker).toBeHidden()
+  // CAPP-55 — `fill("/config")` re-opens the picker, but the open/render is async:
+  // an Escape pressed before the picker has actually opened is a no-op (the hook's
+  // keydown delegate only consumes Escape while `open` is true), leaving the picker
+  // up so the subsequent Enter would be eaten by the picker (accept an entry) instead
+  // of sending. Poll the dismiss: re-press Escape until the picker is genuinely hidden.
+  await expect(async () => {
+    await composer.press("Escape") // dismiss the re-opened picker so Enter sends
+    await expect(picker).toBeHidden({ timeout: 1_000 })
+  }).toPass({ timeout: 10_000 })
   await composer.press("Enter")
 
   await expect(async () => {
@@ -446,7 +485,9 @@ test("structured engine: a split pane threads per-terminal busy (Stop only on th
 
   // Per-pane busy threading: the Stop button appears on the BUSY pane only.
   await expect(leftPane.locator(".composer-stop")).toBeVisible({ timeout: 15_000 })
-  await expect(win.locator(".split-pane .composer-stop")).toHaveCount(1)
+  // Exactly one Stop across both panes — give it auto-retry headroom so a lagging
+  // right-pane re-render can't transiently read as 0 or 2.
+  await expect(win.locator(".split-pane .composer-stop")).toHaveCount(1, { timeout: 15_000 })
   // The busy pane's Send is disabled with the "Agent is working" hint; the IDLE
   // pane's Send stays enabled (busy is per-terminal, not global).
   await expect(leftPane.locator(".composer-send")).toBeDisabled()
@@ -459,8 +500,12 @@ test("structured engine: a split pane threads per-terminal busy (Stop only on th
   // respawn the new terminal is idle, so its Stop button is gone.
   await leftPane.locator(".composer-stop").click()
   await expect(win.locator(".split-pane .composer-stop")).toHaveCount(0, { timeout: 15_000 })
-  // Both panes are still usable STRUCTURED surfaces — re-pointed, not blanked.
-  await expect(win.locator(".split-pane .agent-composer textarea")).toHaveCount(2)
+  // Both panes are still usable STRUCTURED surfaces — re-pointed, not blanked. The
+  // re-point + composer re-render after the respawn can trail the Stop-button removal,
+  // so let the count auto-retry instead of sampling a single mid-reconcile frame.
+  await expect(win.locator(".split-pane .agent-composer textarea")).toHaveCount(2, {
+    timeout: 15_000,
+  })
   await expect(win.locator(".split-pane .xterm")).toHaveCount(0)
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
@@ -483,8 +528,15 @@ test("structured engine: a split pane re-points to the respawned terminal on mod
   // The slot re-points to the respawned terminal: the pane stays a structured surface
   // (picker present, NOT collapsed to an xterm) and reflects the new model.
   await expect(leftPane.locator(".agent-model-picker-select")).toHaveValue("sonnet", { timeout: 15_000 })
-  await expect(win.locator(".split-pane .agent-model-picker-select")).toHaveCount(2)
-  await expect(win.locator(".split-pane .agent-composer textarea")).toHaveCount(2)
+  // Both panes stay structured surfaces after the re-point; the respawned slot's
+  // picker/composer can paint a frame behind the value change, so let the counts
+  // auto-retry rather than sampling a single mid-reconcile frame.
+  await expect(win.locator(".split-pane .agent-model-picker-select")).toHaveCount(2, {
+    timeout: 15_000,
+  })
+  await expect(win.locator(".split-pane .agent-composer textarea")).toHaveCount(2, {
+    timeout: 15_000,
+  })
   await expect(win.locator(".split-pane .xterm")).toHaveCount(0)
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
