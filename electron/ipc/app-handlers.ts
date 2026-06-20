@@ -53,8 +53,10 @@ export function registerAppHandlers(deps: {
 
   // App testing tools
   ipcMain.handle("app:screenshot", async () => appService.captureScreenshot())
+  // Use listPublic() — get_app_state is an MCP surface, so it must not leak the
+  // internal seed* boot/import fields (same no-leak posture as workspace:list).
   ipcMain.handle("app:state", () =>
-    appService.getAppState(sessionService.list(), workspaceService.list()),
+    appService.getAppState(sessionService.list(), workspaceService.listPublic()),
   )
   ipcMain.handle("app:save-image", (_e, base64: string, filename: string) =>
     appService.saveDroppedImage(base64, filename),

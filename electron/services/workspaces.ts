@@ -331,9 +331,16 @@ export class WorkspaceService {
   rename(id: string, name: string): Workspace | undefined {
     const ws = this.workspaces.get(id)
     if (!ws) return undefined
+    const changed = ws.name !== name
     ws.name = name
     ws.updatedAt = this.now()
     this.persist()
+    // WS-H — when the ACTIVE workspace's name actually changes (e.g. via the
+    // `rename_workspace` MCP tool), emit active-changed so the sidebar's
+    // always-visible name updates immediately. Churn-guarded: only on a real
+    // delta to the active workspace (a no-op rename or a rename of a non-active
+    // workspace emits nothing).
+    if (changed && id === this.activeWorkspaceId) this.emitActiveChanged()
     return ws
   }
 
@@ -359,6 +366,12 @@ export class WorkspaceService {
     // Scaffold + bind seedDir on a SET (not a clear). Mutates ws before persist.
     if (next) this.scaffoldManifest(ws, next)
     this.persist()
+    // WS-H — when the ACTIVE workspace's folder changes (e.g. via the
+    // `set_workspace_dir` MCP tool), emit active-changed so the sidebar's
+    // always-visible folder row updates immediately. Churn-guarded by the no-op
+    // early-return above (we only reach here on a real dir delta); scoped to the
+    // active workspace so a setDir on a non-active workspace emits nothing.
+    if (id === this.activeWorkspaceId) this.emitActiveChanged()
     return ws
   }
 

@@ -734,6 +734,57 @@ describe("WorkspaceService WS-B active-changed event", () => {
   })
 })
 
+describe("WorkspaceService WS-H setDir/rename emit active-changed for the active workspace", () => {
+  it("setDir on the ACTIVE workspace emits active-changed with the new dir (public projection)", () => {
+    const s = svc()
+    const ws = s.create("Active")
+    s.setActive(ws.id)
+    const events: Array<{ active: { id: string; dir?: string } | null }> = []
+    s.onActiveChanged((e) => events.push(e as any))
+    s.setDir(ws.id, root) // a real dir so scaffolding succeeds; emit is unconditional on a real delta
+    expect(events).toHaveLength(1)
+    expect(events[0].active?.id).toBe(ws.id)
+    expect(events[0].active?.dir).toBe(root)
+    expect("seedDir" in (events[0].active as object)).toBe(false)
+  })
+
+  it("rename on the ACTIVE workspace emits active-changed with the new name (public projection)", () => {
+    const s = svc()
+    const ws = s.create("Old")
+    s.setActive(ws.id)
+    const events: Array<{ active: { id: string; name: string } | null }> = []
+    s.onActiveChanged((e) => events.push(e as any))
+    s.rename(ws.id, "New")
+    expect(events).toHaveLength(1)
+    expect(events[0].active?.id).toBe(ws.id)
+    expect(events[0].active?.name).toBe("New")
+    expect("seedDir" in (events[0].active as object)).toBe(false)
+  })
+
+  it("setDir/rename on a NON-active workspace does NOT emit active-changed", () => {
+    const s = svc()
+    const active = s.create("Active")
+    const other = s.create("Other")
+    s.setActive(active.id)
+    const events: unknown[] = []
+    s.onActiveChanged((e) => events.push(e))
+    s.setDir(other.id, root)
+    s.rename(other.id, "Renamed")
+    expect(events).toHaveLength(0)
+  })
+
+  it("a no-op setDir/rename (same value) on the active workspace does NOT emit (churn guard)", () => {
+    const s = svc()
+    const ws = s.create("Same", root)
+    s.setActive(ws.id)
+    const events: unknown[] = []
+    s.onActiveChanged((e) => events.push(e))
+    s.setDir(ws.id, root) // unchanged dir
+    s.rename(ws.id, "Same") // unchanged name
+    expect(events).toHaveLength(0)
+  })
+})
+
 describe("WorkspaceService WS-B selection vs launch split", () => {
   it("setActive (SELECTION) does NOT spawn any sessions", () => {
     const { terminals, createCalls } = countingTerminals()

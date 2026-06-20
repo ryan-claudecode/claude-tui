@@ -136,8 +136,8 @@ export interface SessionServiceOpts {
   getActiveWorkspaceId?: () => string | null | undefined
   /**
    * WS-G (G1) — the spawn-cwd seam. A getter returning the CURRENTLY-ACTIVE
-   * workspace's primary directory (`dirs[0]`, resolved absolute + verified to exist),
-   * or null when there is no active workspace / it has no dirs / the dir is missing.
+   * workspace's single folder (`dir`, resolved absolute + verified to exist),
+   * or null when there is no active workspace / it has no folder / the dir is missing.
    * When a NEW work session is created with no explicit cwd, its terminal(s) spawn
    * HERE so `claude` runs as if opened in that directory (sees its files + git).
    * Same callback-injection posture as `getActiveWorkspaceId` — `ipc.ts` wires it to

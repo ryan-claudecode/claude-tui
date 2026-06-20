@@ -4,7 +4,7 @@ import { join, resolve } from "node:path"
 /**
  * The ONE canonicalizer for a workspace dir used as a de-dup key. It MUST be
  * applied identically everywhere a dir becomes a key — discovery's stored
- * manifest `dir`, the scaffold/create/addDir `seedDir` bind, and `discover`'s
+ * manifest `dir`, the scaffold/create/setDir `seedDir` bind, and `discover`'s
  * `byListedDir`/`bySeedDir` indexes — or the keys disagree and a rescan mints a
  * DUPLICATE workspace. It lives HERE (not in workspaces.ts) so discovery can use
  * it without a circular import; `workspaces.ts` re-exports it.
@@ -12,7 +12,7 @@ import { join, resolve } from "node:path"
  * Two steps, both load-bearing:
  *  1. `path.resolve` — normalizes separators (`/`→`\` on win32) and collapses
  *     `.`/`..`/trailing slashes to ONE spelling. Without this, a forward-slash
- *     dir (`C:/foo`, which the MCP create_workspace/add_workspace_dir tools pass
+ *     dir (`C:/foo`, which the MCP create_workspace/set_workspace_dir tools pass
  *     straight through — an LLM naturally emits POSIX slashes on Windows) or a
  *     trailing-slash dir stored a key that MISSED discovery's backslash lookup
  *     on rescan → duplicate. (`resolve` is idempotent on an already-resolved

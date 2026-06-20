@@ -68,7 +68,7 @@ export function registerWorkspaceTools(
 
   server.tool(
     "list_workspaces",
-    "List ClaudeTUI workspaces from the durable registry. A workspace is a user-named grouping of one-or-more directories (registry-owned, not just whatever was discovered on disk) — entries created by the user or seeded once from a workspace.json manifest.",
+    "List ClaudeTUI workspaces from the durable registry. A workspace is a user-named, persisted spatial frame backed by a single optional folder (registry-owned, not just whatever was discovered on disk) — entries created by the user or seeded once from a workspace.json manifest.",
     {},
     async () => {
       // Public projection only — never leak the internal seed* boot fields.

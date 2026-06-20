@@ -322,9 +322,14 @@ export default function WorkspaceSwitcher({
               className={`workspace-edit-btn${editing ? " active" : ""}`}
               title="Rename workspace"
               aria-label={`Rename workspace ${active!.name}`}
+              // ✎ only OPENS the inline editor — Esc/blur already close it. (A toggle
+              // here re-opens the editor: the input's onBlur=commitRename sets
+              // editing=false BEFORE this click, then the toggle flips it back to true.)
               onClick={() => {
-                setEditValue(active!.name)
-                setEditing((cur) => !cur)
+                if (!editing) {
+                  setEditValue(active!.name)
+                  setEditing(true)
+                }
               }}
             >
               ✎
