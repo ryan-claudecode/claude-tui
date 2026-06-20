@@ -370,6 +370,36 @@ function WorkingRow({ status }: { status: "Thinking" }) {
 }
 
 /**
+ * CAPP-77 — pure derivation of the AssistantBlock className, extracted so the
+ * class-stability invariant is unit-testable WITHOUT a DOM (the test env is
+ * node-only). Two independent flags:
+ *  - `agent-streaming` — set IFF this is the trailing assistant block of an actively
+ *    streaming turn (`streaming`). Drives the WS5 typing caret.
+ *  - `agent-revealing` — set IFF the PER-LINE rise should be live, which is for the
+ *    WHOLE active streaming turn (`reveal`, i.e. `streaming && motion-allowed`), NOT
+ *    the transient per-catch-up "draining" state.
+ *
+ * THE CAPP-77 BUG THIS GUARDS (the flicker): the original wiring set `agent-revealing`
+ * off `draining = active && shown < text.length`. The adaptive drain (CAPP-77) paces
+ * FASTER than prose streams, so BETWEEN tokens the buffer catches up (`shown ===
+ * text.length`) → `draining` flips false → the class is REMOVED → the next token
+ * re-adds it. Toggling a class that carries a CSS `animation` RESTARTS `agent-line-rise`
+ * from keyframe 0, so the live paragraph snapped to opacity 0 / translateY 5px and slid
+ * back on ~every token = a pronounced jitter. Driving the class off the stable
+ * whole-turn `reveal` signal (held continuously while streaming, dropped only at
+ * turn-end) keeps the parent class constant; react-markdown then keeps the SAME DOM
+ * node for the growing trailing block, so `agent-line-rise` on `:last-child` plays
+ * exactly ONCE per block (on its mount as the trailing block) with no restart.
+ */
+export function assistantBlockClass(streaming: boolean, reveal: boolean): string {
+  return (
+    `agent-block agent-assistant` +
+    (streaming ? " agent-streaming" : "") +
+    (reveal ? " agent-revealing" : "")
+  )
+}
+
+/**
  * CAPP-74 — the assistant prose block, fronted by the streaming SMOOTHING BUFFER.
  *
  * Lives in its own component so it can call {@link useSmoothReveal} unconditionally
@@ -384,12 +414,15 @@ function WorkingRow({ status }: { status: "Thinking" }) {
  *
  * The WS5 streaming caret (a CSS `::after` driven by `.agent-streaming`) sits at the
  * end of the rendered (revealed) text, so it tracks the typewriter's leading edge.
- * CAPP-77 — `agent-revealing` now drives a PER-LINE fade + translate-up rise (the
+ * CAPP-77 — `agent-revealing` drives a PER-LINE fade + translate-up rise (the
  * "lines rise into place" feel): the CSS targets only the trailing (`:last-child`)
  * markdown block, so each freshly-revealed block animates ONCE as it appears and
- * already-settled blocks (no longer `:last-child`) stay put. The class drops the
- * moment the buffer catches up, so a settled block never keeps animating; reduced-
- * motion (where the buffer is bypassed) gets no rise.
+ * already-settled blocks (no longer `:last-child`) stay put. The class is held for the
+ * WHOLE active streaming turn (`active`) — NOT toggled on the transient per-catch-up
+ * `draining` state — so the parent class never flips off→on between tokens and the
+ * rise never restarts mid-block (see {@link assistantBlockClass}). It drops the moment
+ * the turn ends (active→false), so the final block settles; reduced-motion (where the
+ * buffer is bypassed and `active` is false) gets no rise.
  */
 function AssistantBlock({
   block,
@@ -402,19 +435,14 @@ function AssistantBlock({
 }) {
   // Buffer ONLY the live streaming block, and only when motion is allowed. Anything
   // else (settled block, historical/rehydrated transcript, reduced-motion) → the
-  // hook short-circuits to the full text on the very first render.
+  // hook short-circuits to the full text on the very first render. `active` is the
+  // STABLE whole-turn signal: it does not depend on the catch-up/`shown` state, so it
+  // also drives `agent-revealing` continuously (no per-token toggle → no rise restart).
   const active = streaming && !prefersReducedMotion()
   const shown = useSmoothReveal(block.text, active)
-  // Still mid-drain → the revealed slice trails the full text. Drives the optional
-  // fade-in token AND keeps the markdown body from briefly showing an empty tail.
-  const draining = active && shown.length < block.text.length
   return (
     <div
-      className={
-        `agent-block agent-assistant` +
-        (streaming ? " agent-streaming" : "") +
-        (draining ? " agent-revealing" : "")
-      }
+      className={assistantBlockClass(streaming, active)}
       onClick={onExpand}
       title="Open in markdown panel"
     >

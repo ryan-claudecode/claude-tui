@@ -1,7 +1,7 @@
 import React from "react"
 import { describe, it, expect } from "vitest"
 import { renderToStaticMarkup } from "react-dom/server"
-import { BlockView } from "./AgentView"
+import { BlockView, assistantBlockClass } from "./AgentView"
 import type {
   AssistantTextBlock,
   ResultBlock,
@@ -145,5 +145,135 @@ describe("AgentView markdown rendering", () => {
     )
     expect(streamingHtml).toContain("fully shown without animation")
     expect(streamingHtml).toContain("agent-streaming")
+  })
+
+  // CAPP-77 (flicker fix) — a streaming block must carry `agent-revealing` in its
+  // RENDERED class. The shipped bug derived it from the transient `draining` (shown <
+  // text) state; under static render the buffer is caught up (shown === text), so the
+  // pre-fix code emitted NO `agent-revealing` even while streaming. The fix drives it
+  // off the stable whole-turn signal, so it is present whenever the block streams (and
+  // motion is allowed — node has no matchMedia → motion allowed). This render-level
+  // assertion FAILS against the pre-fix per-`draining` wiring and PASSES after.
+  it("renders agent-revealing on a streaming block (whole-turn rise driver)", () => {
+    const streamingHtml = renderToStaticMarkup(
+      <BlockView
+        block={{ kind: "assistant", id: "b0", text: "rising line" }}
+        onExpand={() => {}}
+        terminalId="t1"
+        sessionId={null}
+        streaming
+      />,
+    )
+    expect(streamingHtml).toContain("agent-revealing")
+  })
+
+  it("omits agent-revealing on a settled (non-streaming) block", () => {
+    const html = renderToStaticMarkup(
+      <BlockView
+        block={{ kind: "assistant", id: "b0", text: "settled" }}
+        onExpand={() => {}}
+        terminalId="t1"
+        sessionId={null}
+      />,
+    )
+    expect(html).not.toContain("agent-revealing")
+  })
+})
+
+/**
+ * CAPP-77 (flicker fix) — class STABILITY across the catch-up cycle. This is the gap
+ * that let the flicker ship: every prior test was on the pure pacing model, NONE
+ * asserted the rise/animation class is stable as the reveal catches up between deltas.
+ *
+ * The bug: the adaptive drain paces FASTER than prose streams, so BETWEEN tokens the
+ * buffer drains to the target (`shown === text.length`); the shipped wiring set
+ * `.agent-revealing` off that transient "draining" (`active && shown < text`) state, so
+ * the class dropped between tokens and was re-added on the next token. Re-adding a class
+ * that carries a CSS `animation` restarts `agent-line-rise` from keyframe 0 → the live
+ * line snapped back and slid up on ~every token = jitter.
+ *
+ * The fix: drive `.agent-revealing` off the STABLE whole-turn `reveal` signal (the
+ * hook's `active`), held continuously while streaming and dropped only at turn-end.
+ *
+ * We test the extracted pure derivation (`assistantBlockClass`) — the same function the
+ * component renders its className from (no DOM needed; the test env is node-only). We
+ * also model the OLD per-`draining` derivation as a negative control (mirroring the
+ * `driveBuggy` idiom in useSmoothReveal.test) to prove the assertion FAILS pre-fix.
+ */
+describe("AgentView — per-line rise class stability across the catch-up cycle", () => {
+  /** Whether the rendered class carries the rise/animation token. */
+  const hasRevealing = (cls: string) => cls.split(/\s+/).includes("agent-revealing")
+
+  // The pre-fix derivation: `.agent-revealing` was gated on `draining = active && shown
+  // < text.length`. Reproduced here so the catch-up-cycle assertion has a negative
+  // control it demonstrably fails against.
+  function buggyRevealClass(streaming: boolean, active: boolean, shown: number, textLen: number): string {
+    const draining = active && shown < textLen
+    return (
+      `agent-block agent-assistant` +
+      (streaming ? " agent-streaming" : "") +
+      (draining ? " agent-revealing" : "")
+    )
+  }
+
+  // One streaming turn, frame by frame: text grows by a token, the adaptive drain then
+  // CATCHES UP (shown === text) before the next token (the case the floor/match outpaces
+  // the ~60-150 cps prose stream), then a new token grows text again (the re-kick). This
+  // is the catch-up → re-kick cycle that toggled the buggy class.
+  type Frame = { shown: number; textLen: number }
+  const turn: Frame[] = [
+    { shown: 3, textLen: 10 }, // token 1 arrives, mid-drain (head start trailing)
+    { shown: 10, textLen: 10 }, // CAUGHT UP between tokens (shown === text)
+    { shown: 10, textLen: 18 }, // token 2 arrives — re-kick, mid-drain again
+    { shown: 18, textLen: 18 }, // caught up again
+    { shown: 18, textLen: 27 }, // token 3 arrives — re-kick
+    { shown: 27, textLen: 27 }, // caught up again
+  ]
+
+  it("FIXED: agent-revealing stays applied through the whole streaming turn (no toggle)", () => {
+    // Streaming, motion allowed → `reveal` (active) is true for the whole turn,
+    // independent of the catch-up `shown`/`text` state.
+    const classes = turn.map(() => assistantBlockClass(true, true))
+    // Present on EVERY frame — the rise driver never drops between tokens.
+    for (const cls of classes) expect(hasRevealing(cls)).toBe(true)
+    // And it never flips off→on across the catch-up→re-kick cycle (stable transitions).
+    for (let i = 1; i < classes.length; i++) {
+      expect(hasRevealing(classes[i])).toBe(hasRevealing(classes[i - 1]))
+    }
+  })
+
+  it("REGRESSION: the pre-fix per-draining wiring TOGGLES the class between tokens", () => {
+    // Identical catch-up cycle through the OLD derivation: the class is present while
+    // mid-drain (shown < text) but DROPS the instant the buffer catches up, then is
+    // re-added by the next token — the toggle that restarted the rise = the flicker.
+    const buggy = turn.map((f) => buggyRevealClass(true, true, f.shown, f.textLen))
+    // The caught-up frames have NO agent-revealing (class dropped between tokens)...
+    expect(hasRevealing(buggy[1])).toBe(false) // caught up
+    expect(hasRevealing(buggy[2])).toBe(true) // next token re-adds it
+    // ...so the membership is NOT stable across the cycle — at least one off→on flip.
+    const flips = buggy.filter((c, i) => i > 0 && hasRevealing(c) !== hasRevealing(buggy[i - 1])).length
+    expect(flips).toBeGreaterThan(0)
+    // The FIXED derivation has ZERO flips on the identical input — the contrast proof.
+    const fixed = turn.map(() => assistantBlockClass(true, true))
+    const fixedFlips = fixed.filter((c, i) => i > 0 && hasRevealing(c) !== hasRevealing(fixed[i - 1])).length
+    expect(fixedFlips).toBe(0)
+  })
+
+  it("drops agent-revealing at turn end (settled/historical block never animates)", () => {
+    // Turn over → streaming false → reveal false → class dropped → final block settles.
+    expect(hasRevealing(assistantBlockClass(false, false))).toBe(false)
+  })
+
+  it("no agent-revealing under reduced motion even while streaming (reveal=false)", () => {
+    // AssistantBlock computes reveal = streaming && !prefersReducedMotion(); under
+    // reduced motion that is false, so the rise (and the buffer) are bypassed.
+    expect(hasRevealing(assistantBlockClass(true, false))).toBe(false)
+  })
+
+  it("keeps the streaming caret class (agent-streaming) independent of the rise driver", () => {
+    // The WS5 caret driver is separate: present whenever streaming, regardless of reveal.
+    expect(assistantBlockClass(true, true)).toContain("agent-streaming")
+    expect(assistantBlockClass(true, false)).toContain("agent-streaming") // reduced motion: caret yes, rise no
+    expect(assistantBlockClass(false, false)).not.toContain("agent-streaming")
   })
 })

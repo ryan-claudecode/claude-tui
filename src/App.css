@@ -1822,23 +1822,33 @@ body {
 }
 /* CAPP-77 — PER-LINE FADE + TRANSLATE-UP reveal: the "lines rise into place" feel of
    claude.ai / ChatGPT, layered on the adaptive-rate drain (the drain is the actual
-   pacing). While the typewriter buffer is still draining (`.agent-revealing`, set by
-   AssistantBlock), the LAST (newest) top-level element of the markdown body fades in
-   (opacity 0→1) while nudging UP a few px (translateY 5px→0) over ~0.22s ease-out.
+   pacing). For the WHOLE active streaming turn the streaming block carries
+   `.agent-revealing` (set by AssistantBlock off the stable `active` signal), and its
+   LAST (newest) top-level markdown element fades in (opacity 0→1) while nudging UP a
+   few px (translateY 5px→0) over ~0.22s ease-out.
+
+   WHY THE CLASS IS HELD FOR THE WHOLE TURN (the flicker fix): the class MUST NOT be
+   toggled per-token. The adaptive drain paces faster than prose streams, so between
+   tokens the buffer momentarily catches up; an earlier wiring set `.agent-revealing`
+   off that transient "draining" (shown < text) state, so it dropped+re-added on ~every
+   token — and re-adding a class that carries an `animation` RESTARTS `agent-line-rise`
+   from keyframe 0, snapping the live line back to opacity 0 / translateY 5px = jitter.
+   Holding the class continuously while streaming keeps this rule's match STABLE, so the
+   animation fires once per element and never restarts mid-block.
 
    GRANULARITY = per top-level markdown BLOCK (paragraph / list-item container /
    heading / code block — react-markdown's `> *` children), which is robust against
    its re-render-on-growth: React keeps the SAME DOM node for the growing trailing
-   block across rAF frames, so the CSS `animation` plays ONCE when that block first
-   mounts as `:last-child` and does NOT restart per frame.
+   block across rAF frames, so with the parent class held constant the CSS `animation`
+   plays ONCE when that block first mounts as `:last-child` and does NOT restart.
 
    NEW-vs-SETTLED distinction (settled content never re-animates): the rule targets
    ONLY `:last-child` of `.agent-revealing`. As the reveal crosses a block boundary, a
    freshly-revealed block becomes the new `:last-child` and rises; the previous block
    stops matching `:last-child` and instantly settles at its resting opacity/position.
-   When the buffer finishes draining, AssistantBlock drops `.agent-revealing` entirely,
-   so the final block settles too — and a SETTLED / historical / rehydrated block
-   (never `.agent-revealing`) is painted fully with no animation at all. Reduced-motion
+   When the turn ends, AssistantBlock drops `.agent-revealing` entirely, so the final
+   block settles too — and a SETTLED / historical / rehydrated block (never
+   `.agent-revealing`) is painted fully with no animation at all. Reduced-motion
    disables the rise (the buffer itself is also bypassed there). */
 @keyframes agent-line-rise {
   from { opacity: 0; transform: translateY(5px); }
