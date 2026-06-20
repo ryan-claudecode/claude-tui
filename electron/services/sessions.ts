@@ -2,6 +2,10 @@ import { readdirSync, unlinkSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 import { parseActivityLine } from "./terminals"
+import {
+  listFolderConversations as listFolderConversationsRaw,
+  type FolderConversation,
+} from "./folderConversations"
 import type { RenderingEngine } from "../config"
 import { logWarn } from "../log"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
@@ -147,6 +151,15 @@ export interface SessionServiceOpts {
    * (see {@link SessionService.addTerminalToSession}).
    */
   getActiveWorkspaceDir?: () => string | null | undefined
+  /**
+   * CAPP-75 — the Claude Code transcript store root, where every conversation's
+   * `.jsonl` lives under `<root>/<encoded-cwd>/`. Used by {@link SessionService.listFolderConversations}
+   * to enumerate a folder's resumable conversations (including ones started OUTSIDE
+   * the app). Injectable for hermetic tests; production defaults to
+   * `join(homedir(), ".claude", "projects")` — the SAME root TerminalService watches
+   * for convo-id capture, so the two never drift.
+   */
+  ccProjectsRoot?: string
 }
 
 /** Persistence schema version. v1 = today's WorkSession shape verbatim. */
@@ -233,6 +246,8 @@ export class SessionService {
   /** WS-G (G1) — active-workspace-dir getter, used as the spawn cwd for a NEW
    *  session's terminal when no explicit cwd is given. */
   private getActiveWorkspaceDir: () => string | null | undefined
+  /** CAPP-75 — the Claude Code transcript store root for conversation discovery. */
+  private ccProjectsRoot: string
 
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
@@ -240,6 +255,7 @@ export class SessionService {
     this.idleFlushGraceMs = opts.idleFlushGraceMs ?? 20000
     this.getActiveWorkspaceId = opts.getActiveWorkspaceId ?? (() => undefined)
     this.getActiveWorkspaceDir = opts.getActiveWorkspaceDir ?? (() => undefined)
+    this.ccProjectsRoot = opts.ccProjectsRoot ?? join(homedir(), ".claude", "projects")
   }
 
   attachTerminals(terminals: TerminalLike): void {
@@ -374,6 +390,72 @@ export class SessionService {
     const resolved = cwd && cwd.trim() ? cwd : inherited
     const terminalId = this.spawnInto(s, resolved)
     return { terminalId }
+  }
+
+  /**
+   * CAPP-75 — list EVERY Claude Code conversation discoverable for `folder`,
+   * newest first. This includes conversations started OUTSIDE the app (plain
+   * `claude` in a terminal): Claude Code writes every transcript to
+   * `~/.claude/projects/<encoded-cwd>/<id>.jsonl` regardless of how it was started,
+   * so reading that directory enumerates them all. The cwd→dir encoding REUSES the
+   * app's single source of truth ({@link encodeProjectDir} via the
+   * folderConversations module), so it can never drift from the convo-id capture
+   * path. Read-only; a missing project dir → []. Caps to the 50 most recent (logs
+   * if it truncated). Each entry's `id` is the value {@link openConversationInFolder}
+   * passes to `--resume`.
+   */
+  listFolderConversations(folder: string): FolderConversation[] {
+    return listFolderConversationsRaw(this.ccProjectsRoot, folder, (total, kept) => {
+      logWarn(
+        "sessions",
+        `listFolderConversations(${folder}): ${total} transcripts, returning the ${kept} most recent`,
+      )
+    })
+  }
+
+  /**
+   * CAPP-75 — RESTORE: reopen a discovered conversation by spawning a fresh terminal
+   * that runs `claude --resume <conversationId>` with cwd=`folder`, in a new
+   * work-session bound to that folder. Reuses the EXISTING resume spawn path
+   * (TerminalService.create's `resumeConvId` → `resumeArgs` → `--resume`, the same
+   * machinery `reopenTerminal` and the model/effort respawns use), so the restored
+   * terminal is a fully-featured agent terminal (engine per config, identity-bound
+   * MCP config, convo-id re-capture). The created session inherits its name from
+   * the spawn and is workspace-scoped via the normal create() stamping. Returns the
+   * new session + terminal id (the renderer points the active selection at them), or
+   * undefined if terminals aren't attached / inputs are blank.
+   */
+  openConversationInFolder(
+    folder: string,
+    conversationId: string,
+  ): { session: WorkSession; terminalId: string } | undefined {
+    if (!this.terminals) return undefined
+    if (!folder || !folder.trim() || !conversationId || !conversationId.trim()) return undefined
+    const session = this.create()
+    const info = this.terminals.create(undefined, folder, session.id, conversationId)
+    session.terminals.push({
+      id: info.id,
+      name: info.name,
+      cwd: info.cwd,
+      lastState: info.state as TerminalRef["lastState"],
+      engine: info.engine,
+      model: info.model,
+      // The conversation id IS known up front (we are resuming it), so record it on
+      // the ref immediately — the spawn's bindConversation also re-emits a `convo`
+      // event, but stamping it here makes a later reopen/handoff correct even before
+      // that event lands.
+      ccConversationId: conversationId,
+    })
+    session.status = "active"
+    this.logEvent(
+      session,
+      "spawn",
+      `Restored conversation ${conversationId} in ${folder} (terminal "${info.name}")`,
+      info.id,
+    )
+    this.persist(session)
+    this.emit("worksession:updated", this.withEffectiveActivity(session))
+    return { session, terminalId: info.id }
   }
 
   /**

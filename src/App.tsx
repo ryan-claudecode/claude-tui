@@ -24,6 +24,7 @@ import HistorySearch from "./components/HistorySearch"
 import MissionPrompt from "./components/MissionPrompt"
 import MissionsList from "./components/MissionsList"
 import WorkspaceCreateModal from "./components/WorkspaceCreateModal"
+import RestoreConversationModal from "./components/RestoreConversationModal"
 import { toast } from "./lib/toast"
 import { useSessions } from "./hooks/useSessions"
 import { useAttention } from "./hooks/useAttention"
@@ -82,6 +83,16 @@ declare global {
       listWorkSessions: () => Promise<any[]>
       openWorkSession: (cwd?: string) => Promise<{ session: any; terminalId: string }>
       addTerminal: (sessionId: string, cwd?: string) => Promise<{ terminalId: string } | undefined>
+      // CAPP-75 — list/restore a folder's past Claude Code conversations (incl. ones
+      // started outside the app). list is read-only discovery; restore spawns
+      // `claude --resume <id>` in the folder as a new work session.
+      listFolderConversations: (
+        folder: string,
+      ) => Promise<Array<{ id: string; updatedAt: number; preview: string }>>
+      restoreConversation: (
+        folder: string,
+        conversationId: string,
+      ) => Promise<{ session: any; terminalId: string } | undefined>
       reopenTerminal: (sessionId: string, terminalId: string) => Promise<{ terminalId: string } | undefined>
       closeTerminal: (sessionId: string, terminalId: string) => Promise<void>
       killWorkSession: (sessionId: string) => Promise<void>
@@ -212,6 +223,7 @@ export default function App() {
     activeSession,
     activeTerminals,
     handleNewSession,
+    handleRestoreConversation,
     handleNewTerminal,
     handleCloseTerminal,
     handleHandoff,
@@ -427,6 +439,8 @@ export default function App() {
     setDir: setWorkspaceDir_,
   } = useWorkspaces()
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false)
+  // CAPP-75 — the "Restore a conversation" picker (for the active workspace's folder).
+  const [restoreConvoOpen, setRestoreConvoOpen] = useState(false)
 
   // WS-D — FILTER & HIDE. A specific active workspace scopes each section to its
   // own items; "All" (activeWorkspaceId null) shows everything (untagged/legacy
@@ -809,6 +823,12 @@ export default function App() {
           return ws
         }}
       />
+      <RestoreConversationModal
+        open={restoreConvoOpen}
+        onClose={() => setRestoreConvoOpen(false)}
+        folder={activeWorkspace?.dir ?? null}
+        onRestore={handleRestoreConversation}
+      />
       <MissionsList
         open={missionsListOpen}
         missions={allMissions}
@@ -849,6 +869,7 @@ export default function App() {
         onRenameWorkspace={(id, name) => renameWorkspace_(id, name)}
         onDeleteWorkspace={(id) => deleteWorkspace_(id)}
         onSetWorkspaceDir={(id, dir) => setWorkspaceDir_(id, dir)}
+        onRestoreConversation={() => setRestoreConvoOpen(true)}
       />
       <div className="main-area">
         <TabBar

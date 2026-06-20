@@ -16,6 +16,10 @@ interface Props {
   /** WS-H — set (or clear, with null) the active workspace's single folder. The
    *  dir-row click opens the native picker and calls this with the chosen path. */
   onSetWorkspaceDir: (id: string, dir: string | null) => void | Promise<unknown>
+  /** CAPP-75 — open the "Restore a conversation" picker for the active workspace's
+   *  folder. Only relevant when the active workspace HAS a folder (the button is
+   *  hidden otherwise). */
+  onRestoreConversation: () => void
 }
 
 /**
@@ -55,6 +59,7 @@ export default function WorkspaceSwitcher({
   onRenameWorkspace,
   onDeleteWorkspace,
   onSetWorkspaceDir,
+  onRestoreConversation,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [highlight, setHighlight] = useState(0)
@@ -292,6 +297,24 @@ export default function WorkspaceSwitcher({
               {active!.dir ? dirBasename(active!.dir) : "No folder selected"}
             </span>
           </button>
+
+          {/* CAPP-75 — restore a past conversation for this folder. ALWAYS VISIBLE
+              (no hover-reveal) and tied to the active workspace's folder: only shown
+              when a folder is set (nothing to list otherwise). */}
+          {active!.dir && (
+            <button
+              type="button"
+              className="workspace-restore-btn"
+              title="Reopen a past conversation for this folder (including ones started in a terminal)"
+              aria-label="Restore a conversation for this workspace's folder"
+              onClick={onRestoreConversation}
+            >
+              <span className="workspace-restore-icon" aria-hidden="true">
+                ↻
+              </span>
+              <span>Restore a conversation</span>
+            </button>
+          )}
 
           <div className="workspace-name-controls">
             {editing ? (

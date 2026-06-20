@@ -29,6 +29,14 @@ contextBridge.exposeInMainWorld("api", {
   openWorkSession: (cwd?: string) => ipcRenderer.invoke("worksession:open", cwd),
   addTerminal: (sessionId: string, cwd?: string) =>
     ipcRenderer.invoke("worksession:add-terminal", sessionId, cwd),
+  // CAPP-75 — list a folder's resumable Claude Code conversations (including ones
+  // started outside the app), newest first. Read-only discovery.
+  listFolderConversations: (folder: string) =>
+    ipcRenderer.invoke("worksession:list-folder-conversations", folder),
+  // CAPP-75 — restore one of those conversations: spawns `claude --resume <id>` in
+  // the folder as a new work session. Returns { session, terminalId } or undefined.
+  restoreConversation: (folder: string, conversationId: string) =>
+    ipcRenderer.invoke("worksession:restore-conversation", folder, conversationId),
   reopenTerminal: (sessionId: string, terminalId: string) =>
     ipcRenderer.invoke("worksession:reopen-terminal", sessionId, terminalId),
   closeTerminal: (sessionId: string, terminalId: string) =>

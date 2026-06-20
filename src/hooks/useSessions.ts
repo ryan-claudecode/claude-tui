@@ -157,6 +157,32 @@ export function useSessions(
     }
   }, [])
 
+  // CAPP-75 — restore a past Claude Code conversation (by id) for a folder: spawns
+  // `claude --resume <id>` in the folder as a new work session and points the active
+  // selection at it. Returns the result (or null on failure) so the picker can close
+  // only on success. Shares handleNewSession's set-active semantics.
+  const handleRestoreConversation = useCallback(
+    async (
+      folder: string,
+      conversationId: string,
+    ): Promise<{ session: { id: string }; terminalId: string } | null> => {
+      try {
+        const result = await window.api.restoreConversation(folder, conversationId)
+        if (!result) {
+          toast("error", "Couldn't restore that conversation.")
+          return null
+        }
+        setActiveSessionId(result.session.id)
+        setActiveTerminalId(result.terminalId)
+        return result
+      } catch (err) {
+        toast("error", `Couldn't restore the conversation: ${errMsg(err)}`)
+        return null
+      }
+    },
+    [],
+  )
+
   const handleNewTerminal = useCallback(async () => {
     try {
       if (activeSessionId) {
@@ -239,6 +265,7 @@ export function useSessions(
     activeTerminals,
     activeTerminal,
     handleNewSession,
+    handleRestoreConversation,
     handleNewTerminal,
     handleCloseTerminal,
     handleHandoff,

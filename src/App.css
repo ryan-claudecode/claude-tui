@@ -393,6 +393,8 @@ body {
   .missions-list-panel,
   .workspace-create-overlay,
   .workspace-create-panel,
+  .restore-convo-overlay,
+  .restore-convo-panel,
   .workspace-menu {
     animation: none;
   }
@@ -889,6 +891,41 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* CAPP-75 — the "Restore a conversation" button: a quiet, always-visible row
+   beneath the folder row, tied to the active workspace's folder. Shown only when a
+   folder is set. NO hover-reveal — it is always present when relevant. */
+.workspace-restore-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 7px 11px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  cursor: pointer;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
+}
+.workspace-restore-btn:hover {
+  background: var(--bg-2);
+  border-color: var(--border);
+  color: var(--accent);
+}
+.workspace-restore-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.workspace-restore-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
 }
 
 /* The name + rename/delete row. The name takes the lead; the ✎ and × are
@@ -5302,6 +5339,134 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-radius: var(--r-sm);
+}
+
+/* ============================================================
+   CAPP-75 — Restore-a-conversation picker (main window). Reuses the
+   workspace-create overlay/panel posture; a scrollable list of past
+   conversations, each a fully-visible clickable row (preview + relative time).
+   NO hover-reveal. Warm Sand & Stone tokens, all 3 themes.
+   ============================================================ */
+.restore-convo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-5);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: drop-fade 0.12s var(--ease-out);
+}
+.restore-convo-panel {
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  max-height: 72vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), 0 0 0 1px var(--accent-soft);
+  animation: cmdk-pop 0.16s var(--ease-out);
+}
+.restore-convo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.restore-convo-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-0);
+  letter-spacing: -0.01em;
+}
+.restore-convo-close {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color var(--fast) var(--ease);
+}
+.restore-convo-close:hover { color: var(--text-0); }
+.restore-convo-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--r-sm);
+}
+.restore-convo-sub {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-bottom: 2px;
+}
+.restore-convo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  min-height: 60px;
+}
+.restore-convo-empty {
+  padding: var(--s-4);
+  text-align: center;
+  color: var(--text-4);
+  font-size: 12.5px;
+  font-style: italic;
+}
+.restore-convo-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: 9px 11px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
+}
+.restore-convo-item:hover {
+  background: var(--bg-3);
+  border-color: var(--accent-glow);
+  color: var(--text-0);
+}
+.restore-convo-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.restore-convo-item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.restore-convo-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+.restore-convo-preview-empty {
+  color: var(--text-4);
+  font-style: italic;
+}
+.restore-convo-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Missions list overlay — browse all missions */

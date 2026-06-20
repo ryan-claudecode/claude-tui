@@ -50,6 +50,43 @@ export function registerWorkSessionTools(
     },
   )
 
+  // CAPP-75 — discover + restore ANY Claude Code conversation for a folder,
+  // INCLUDING ones started outside the app (plain `claude` in a terminal). Claude
+  // Code writes every conversation's transcript to
+  // ~/.claude/projects/<encoded-cwd>/<id>.jsonl, so listing that dir enumerates
+  // them all and `claude --resume <id>` reopens any.
+  server.tool(
+    "list_folder_conversations",
+    "List every resumable Claude Code conversation for a folder (INCLUDING conversations started outside this app — plain `claude` in a terminal), newest first. Returns [{ id, updatedAt (epoch ms, the transcript's last-write time), preview (first user message, ~80 chars) }]. Pass the folder's absolute path; an empty list means no Claude history for that folder. Use the returned id with restore_conversation.",
+    { folder: z.string().describe("Absolute path of the folder whose conversations to list") },
+    async ({ folder }) => {
+      const convos = workSessions.listFolderConversations(folder)
+      return { content: [{ type: "text" as const, text: JSON.stringify(convos, null, 2) }] }
+    },
+  )
+
+  server.tool(
+    "restore_conversation",
+    "Reopen a Claude Code conversation by id (from list_folder_conversations) — spawns a fresh terminal running `claude --resume <id>` in the folder, as a new work session bound to it. Works for conversations started outside this app too. Returns the new { session, terminalId }, or an error if the folder/id is invalid.",
+    {
+      folder: z.string().describe("Absolute path of the folder the conversation belongs to"),
+      conversation_id: z.string().describe("The conversation id from list_folder_conversations"),
+    },
+    async ({ folder, conversation_id }) => {
+      const result = workSessions.openConversationInFolder(folder, conversation_id)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: result
+              ? JSON.stringify({ session: result.session, terminalId: result.terminalId }, null, 2)
+              : "Could not restore the conversation (invalid folder/id, or terminals not ready).",
+          },
+        ],
+      }
+    },
+  )
+
   server.tool(
     "register_terminal",
     "Register a terminal into a work-session container (so its findings and activity roll up to the session). The first terminal's name seeds the session name while it's still 'Untitled session'.",

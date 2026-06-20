@@ -10,6 +10,18 @@ export function registerWorkSessionHandlers(deps: { workSessionService: SessionS
   ipcMain.handle("worksession:add-terminal", (_e, sessionId: string, cwd?: string) =>
     workSessionService.addTerminalToSession(sessionId, cwd),
   )
+  // CAPP-75 — list every Claude Code conversation discoverable for a folder
+  // (including ones started OUTSIDE the app), newest first. Read-only.
+  ipcMain.handle("worksession:list-folder-conversations", (_e, folder: string) =>
+    workSessionService.listFolderConversations(folder),
+  )
+  // CAPP-75 — restore a discovered conversation: spawn a fresh terminal running
+  // `claude --resume <id>` with cwd=folder in a new work session bound to it.
+  ipcMain.handle(
+    "worksession:restore-conversation",
+    (_e, folder: string, conversationId: string) =>
+      workSessionService.openConversationInFolder(folder, conversationId),
+  )
   ipcMain.handle("worksession:reopen-terminal", (_e, sessionId: string, terminalId: string) =>
     workSessionService.reopenTerminal(sessionId, terminalId),
   )

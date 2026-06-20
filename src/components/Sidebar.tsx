@@ -42,6 +42,9 @@ interface Props {
   /** WS-H — set (or clear, with null) the active workspace's single folder (from
    *  the switcher's always-visible folder row). */
   onSetWorkspaceDir: (id: string, dir: string | null) => void | Promise<unknown>
+  /** CAPP-75 — open the restore-conversation picker for the active workspace's
+   *  folder (from the switcher's always-visible "Restore a conversation" button). */
+  onRestoreConversation: () => void
 }
 
 // Resolve a friendly label for an attention entry: the terminal's name when we
@@ -64,7 +67,7 @@ export default function Sidebar({
   onNewSession, onKillSession, onKillSessionById, onSelectSession,
   workspaces, activeWorkspace, workspaceScoped,
   onSelectAllWorkspaces, onSelectWorkspace, onNewWorkspace, onRenameWorkspace, onDeleteWorkspace,
-  onSetWorkspaceDir,
+  onSetWorkspaceDir, onRestoreConversation,
 }: Props) {
   return (
     <div className="sidebar">
@@ -86,6 +89,7 @@ export default function Sidebar({
         onRenameWorkspace={onRenameWorkspace}
         onDeleteWorkspace={onDeleteWorkspace}
         onSetWorkspaceDir={onSetWorkspaceDir}
+        onRestoreConversation={onRestoreConversation}
       />
 
       {attentionEntries.length > 0 && (

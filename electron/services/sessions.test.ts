@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "fs"
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { SessionService } from "./sessions"
@@ -1508,5 +1508,68 @@ describe("SessionService.startLogin (CAPP-39 gate ②)", () => {
     const reopened = svc.reopenTerminal(s.id, r.terminalId)
     expect(reopened).toBeUndefined()
     expect(term.spawned.length).toBe(spawnsBefore)
+  })
+})
+
+describe("SessionService.listFolderConversations + openConversationInFolder (CAPP-75)", () => {
+  it("lists a folder's conversations via the injected ccProjectsRoot (reusing the encoding)", () => {
+    const root = mkdtempSync(join(tmpdir(), "ctui-sess-cc-"))
+    try {
+      // Write a transcript under <root>/<encoded(folder)>/<id>.jsonl. The encoding
+      // is the SAME one the discovery reuses, so an empty list would mean a mismatch.
+      const folder = "C:\\Users\\ryguy\\projects\\foo"
+      const encoded = folder.replace(/[:/\\]/g, "-")
+      const projDir = join(root, encoded)
+      mkdirSync(projDir, { recursive: true })
+      writeFileSync(
+        join(projDir, "conv-1.jsonl"),
+        JSON.stringify({ type: "user", message: { content: "resume me" } }) + "\n",
+      )
+
+      const svc = new SessionService({ dir, now: () => 1000, ccProjectsRoot: root })
+      const out = svc.listFolderConversations(folder)
+      expect(out).toHaveLength(1)
+      expect(out[0].id).toBe("conv-1")
+      expect(out[0].preview).toBe("resume me")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("returns [] when the folder has no Claude project dir", () => {
+    const svc = new SessionService({ dir, now: () => 1000, ccProjectsRoot: dir })
+    expect(svc.listFolderConversations("C:\\nope\\missing")).toEqual([])
+  })
+
+  it("restore spawns `--resume <id>` with the folder as cwd in a new work session", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+
+    const result = svc.openConversationInFolder("C:\\Users\\ryguy\\projects\\foo", "conv-42")
+    expect(result).toBeDefined()
+    // A fresh work session was created with the restored terminal registered.
+    const session = svc.get(result!.session.id)!
+    expect(session.terminals).toHaveLength(1)
+    expect(session.terminals[0].id).toBe(result!.terminalId)
+    expect(session.terminals[0].ccConversationId).toBe("conv-42")
+
+    // The spawn carried the conversation id (→ --resume) and the folder cwd.
+    const spawn = term.spawned.find((s) => s.id === result!.terminalId)!
+    expect(spawn.resumeConvId).toBe("conv-42")
+    expect(spawn.cwd).toBe("C:\\Users\\ryguy\\projects\\foo")
+    expect(spawn.sessionId).toBe(result!.session.id)
+  })
+
+  it("restore is a no-op for blank folder / id, or when terminals aren't attached", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    // No terminals attached yet.
+    expect(svc.openConversationInFolder("/x", "conv-1")).toBeUndefined()
+
+    const term = new FakeTerminals()
+    svc.attachTerminals(term as any)
+    expect(svc.openConversationInFolder("", "conv-1")).toBeUndefined()
+    expect(svc.openConversationInFolder("/x", "")).toBeUndefined()
+    expect(term.spawned).toHaveLength(0)
   })
 })
