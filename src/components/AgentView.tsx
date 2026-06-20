@@ -13,8 +13,11 @@ import {
   type ResultCost,
   type ModelErrorBlock,
   type NeedsAuthBlock,
+  type AssistantTextBlock,
 } from "../lib/agentTranscript"
 import { nextScrollTop, scrollFollowBehavior } from "../lib/scrollStick"
+import { useSmoothReveal } from "../hooks/useSmoothReveal"
+import { prefersReducedMotion } from "../lib/reducedMotion"
 import AgentModelPicker from "./AgentModelPicker"
 import MarkdownView from "./MarkdownView"
 
@@ -366,6 +369,65 @@ function WorkingRow({ status }: { status: "Thinking" }) {
   )
 }
 
+/**
+ * CAPP-74 — the assistant prose block, fronted by the streaming SMOOTHING BUFFER.
+ *
+ * Lives in its own component so it can call {@link useSmoothReveal} unconditionally
+ * (hooks can't run inside BlockView's `switch`). The hook is `active` ONLY when this
+ * is the LIVE current-turn trailing assistant block (`streaming`) AND the user
+ * hasn't asked for reduced motion — in which case it returns a growing prefix slice
+ * drained at a constant rate (the typewriter), reshaping bursty deltas into steady
+ * output. The instant `streaming` drops (turn end, the block settling behind a tool/
+ * result, a terminal switch / re-mount) or under reduced-motion, it returns the FULL
+ * text immediately — so settled, historical, and BO-12-rehydrated blocks render
+ * complete INSTANTLY, never replayed.
+ *
+ * The WS5 streaming caret (a CSS `::after` driven by `.agent-streaming`) sits at the
+ * end of the rendered (revealed) text, so it tracks the typewriter's leading edge.
+ * `agent-revealing` adds a subtle, reduced-motion-safe fade-in on the freshly
+ * revealed prose while the buffer is still draining; it drops the moment the text is
+ * fully revealed so a settled block doesn't keep animating.
+ */
+function AssistantBlock({
+  block,
+  onExpand,
+  streaming,
+}: {
+  block: AssistantTextBlock
+  onExpand: () => void
+  streaming: boolean
+}) {
+  // Buffer ONLY the live streaming block, and only when motion is allowed. Anything
+  // else (settled block, historical/rehydrated transcript, reduced-motion) → the
+  // hook short-circuits to the full text on the very first render.
+  const active = streaming && !prefersReducedMotion()
+  const shown = useSmoothReveal(block.text, active)
+  // Still mid-drain → the revealed slice trails the full text. Drives the optional
+  // fade-in token AND keeps the markdown body from briefly showing an empty tail.
+  const draining = active && shown.length < block.text.length
+  return (
+    <div
+      className={
+        `agent-block agent-assistant` +
+        (streaming ? " agent-streaming" : "") +
+        (draining ? " agent-revealing" : "")
+      }
+      onClick={onExpand}
+      title="Open in markdown panel"
+    >
+      {/* WS5 — the streaming caret is a CSS `::after` on the LAST block of the
+          markdown body (driven by the `.agent-streaming` class), NOT a sibling span.
+          A sibling rendered AFTER the block-level `.markdown-body` wrapped onto its
+          own line at the left margin below the prose; the pseudo-element flows inline
+          at the END of the final text line, reading as a real typing caret. It self-
+          clears the instant the block stops being the trailing streaming block (the
+          class drops). CAPP-74 — `source` is now the smoothing buffer's REVEALED
+          slice while streaming, so the caret sits at the typewriter's leading edge. */}
+      <MarkdownView source={shown} />
+    </div>
+  )
+}
+
 export function BlockView({
   block,
   onExpand,
@@ -393,22 +455,7 @@ export function BlockView({
         </div>
       )
     case "assistant":
-      return (
-        <div
-          className={`agent-block agent-assistant${streaming ? " agent-streaming" : ""}`}
-          onClick={onExpand}
-          title="Open in markdown panel"
-        >
-          {/* WS5 — the streaming caret is a CSS `::after` on the LAST block of the
-              markdown body (driven by the `.agent-streaming` class), NOT a sibling
-              span. A sibling rendered AFTER the block-level `.markdown-body` wrapped
-              onto its own line at the left margin below the prose; the pseudo-element
-              flows inline at the END of the final text line, reading as a real typing
-              caret. It self-clears the instant the block stops being the trailing
-              streaming block (the class drops). */}
-          <MarkdownView source={block.text} />
-        </div>
-      )
+      return <AssistantBlock block={block} onExpand={onExpand} streaming={streaming} />
     case "thinking":
       return (
         <details className="agent-block agent-thinking">

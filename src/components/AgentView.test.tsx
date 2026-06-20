@@ -118,4 +118,32 @@ describe("AgentView markdown rendering", () => {
     )
     expect(html).not.toContain("agent-streaming")
   })
+
+  // CAPP-74 — the streaming SMOOTHING BUFFER must NEVER hide a settled / historical /
+  // rehydrated block's text: a NON-streaming assistant block renders its FULL prose
+  // immediately (no typewriter replay). Static-markup render (no rAF/effects) is
+  // exactly the "instant full" path the buffer falls back to.
+  it("renders the FULL text of a settled (non-streaming) assistant block — no partial replay", () => {
+    const html = renderAssistant("the complete settled reply text")
+    expect(html).toContain("the complete settled reply text")
+    expect(html).not.toContain("agent-streaming")
+  })
+
+  // CAPP-74 — when there's no rAF (SSR / this static render), even a STREAMING block
+  // shows full text rather than a stuck-empty slice; the buffer only paces when it can
+  // actually animate. So historical/rehydrated transcripts (rendered without a live rAF
+  // drain) are complete instantly.
+  it("renders full text for a streaming block when no rAF is available (instant fallback)", () => {
+    const streamingHtml = renderToStaticMarkup(
+      <BlockView
+        block={{ kind: "assistant", id: "b0", text: "fully shown without animation" }}
+        onExpand={() => {}}
+        terminalId="t1"
+        sessionId={null}
+        streaming
+      />,
+    )
+    expect(streamingHtml).toContain("fully shown without animation")
+    expect(streamingHtml).toContain("agent-streaming")
+  })
 })
