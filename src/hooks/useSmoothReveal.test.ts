@@ -26,8 +26,9 @@ import {
  * the buggy one, pinning exactly the bug that shipped.
  */
 
-// Easy-to-reason config: 100 cps, tolerate ≤0.1s (= 10 chars) of standing backlog.
-const CFG: RevealConfig = { baseRate: 100, maxLagSec: 0.1 }
+// Easy-to-reason config: 100 cps FLOOR, tolerate ≤0.1s (= 10 chars) of standing
+// backlog, CAPP-77 adaptive match 1.2× the tracked incoming rate.
+const CFG: RevealConfig = { baseRate: 100, maxLagSec: 0.1, matchFactor: 1.2 }
 
 /** One streamed delta: at wall-clock `ts` (ms), the full received text is `target` chars. */
 type Delta = { ts: number; target: number }
@@ -110,12 +111,13 @@ describe("useSmoothReveal — RevealClock drain (rAF seam)", () => {
     expect(fixed[fixed.length - 1]).toBeGreaterThan(buggy[buggy.length - 1])
   })
 
-  it("keeps the standing backlog BOUNDED under sustained streaming (catch-up, no runaway)", () => {
-    // Stream at ~250 cps (4 chars/frame) — well above the 100cps base — for a long
-    // turn. WITHOUT catch-up the reveal would fall arbitrarily behind (backlog growing
-    // with every frame, the ≈3.7s blow-out the reviewer measured). The proportional
-    // catch-up holds the standing backlog at a bounded equilibrium that does NOT grow
-    // with stream length, so the visible lag stays small + stable.
+  it("keeps the standing backlog BOUNDED under sustained streaming (adaptive match, no runaway)", () => {
+    // Stream at ~250 cps (4 chars/frame) — well above the 100cps FLOOR — for a long
+    // turn. WITHOUT keeping pace the reveal would fall arbitrarily behind (backlog
+    // growing every frame, the ≈3.7s blow-out the reviewer measured). CAPP-77: the
+    // clock tracks the incoming rate (~250 cps) and paces at matchFactor 1.2× = 300 cps
+    // > the input, so the standing backlog converges toward ZERO and never grows with
+    // stream length. (Catch-up remains as the safety net for big lumps.)
     const deltas: Delta[] = []
     let target = 0
     const FRAMES = 120
@@ -130,11 +132,52 @@ describe("useSmoothReveal — RevealClock drain (rAF seam)", () => {
     const mid = backlogAt(Math.floor(FRAMES / 2))
     const end = backlogAt(FRAMES - 1)
     expect(end).toBeLessThanOrEqual(mid + 1)
-    // And the standing lag is small in absolute terms — a fraction of a second of
-    // text, NOT the multi-second backlog of the unbuffered/no-catch-up failure. The
-    // equilibrium for a 2.5× over-rate input sits near baseRate*maxLagSec*(rate ratio).
+    // And the standing lag is small in absolute terms. With CAPP-77's adaptive match
+    // pacing ABOVE the input rate, the visible lag is now well under a fifth of a
+    // second of text — far tighter than the catch-up-only equilibrium.
     const lagSeconds = end / CFG.baseRate
-    expect(lagSeconds).toBeLessThan(0.5)
+    expect(lagSeconds).toBeLessThan(0.2)
+  })
+
+  it("CAPP-77: a FAST stream is MATCHED — reveal finishes ~when the stream stops (no backlog)", () => {
+    // A brisk 500 cps stream (8 chars/frame) for a fixed number of frames, then the
+    // input STOPS. The adaptive clock tracks ~500 cps and paces at 1.2× = 600 cps, so
+    // it keeps pace throughout and is essentially caught up by the final delta — the
+    // typewriter converges to done WITH the stream, not seconds behind it.
+    const deltas: Delta[] = []
+    let target = 0
+    const FRAMES = 80
+    for (let i = 0; i < FRAMES; i++) {
+      target += 8
+      deltas.push({ ts: 16 * (i + 1), target })
+    }
+    const fixed = driveFixed(deltas)
+    const finalTarget = deltas[FRAMES - 1].target
+    const finalRevealed = fixed[FRAMES - 1]
+    // The backlog at the last streamed frame is at most one frame of input — the reveal
+    // is keeping PACE (reveal velocity ≥ output velocity), not building a visible queue.
+    expect(finalTarget - finalRevealed).toBeLessThanOrEqual(8 + 1e-6)
+  })
+
+  it("CAPP-77: a SLOW stream still types at the FLOOR (never crawls below the incoming rate)", () => {
+    // A trickle stream of ~30 cps (~0.48 chars/frame) — under the 100 cps floor — but
+    // the reveal trails a target that is already well ahead (a small initial dump the
+    // trickle keeps topping up). The reveal must type out at the FLOOR (100 cps), NOT
+    // slow to the 30 cps trickle (readability floor). Backlog stays under the cap so
+    // catch-up never engages — proving the FLOOR, not catch-up, is what paces it.
+    const clock = new RevealClock()
+    let target = 9 // a small lead < the 10-char cap so catch-up stays inert
+    clock.start(HEAD_START, target)
+    clock.frame(0, target, CFG) // t0
+    for (let i = 1; i <= 30; i++) {
+      target += 0.48 // ~30 cps incoming, keeping a small lead each frame
+      clock.frame(16 * i, target, CFG)
+    }
+    // ~30 frames * 16ms at the 100 cps floor ≈ 48 chars of reveal capacity — far more
+    // than the ~14 chars the 30 cps trickle delivered, so the reveal is pinned to the
+    // (small) target every frame, i.e. it kept FULL pace at the floor, never crawling.
+    expect(clock.inRate()).toBeLessThan(CFG.baseRate) // confirms the input was sub-floor
+    expect(isFullyRevealed(target, clock.revealed)).toBe(true) // floor outran the trickle
   })
 
   it("a delta AFTER a caught-up pause still animates (dormant loop re-kicks)", () => {

@@ -1,12 +1,20 @@
 /**
- * CAPP-74 — the PURE pacing model for the streamed-text SMOOTHING BUFFER.
+ * CAPP-74 / CAPP-77 — the PURE pacing model for the streamed-text SMOOTHING BUFFER.
  *
  * Problem: streamed Claude tokens arrive in irregular bursts; painting each
  * delta the instant it lands shows that burstiness (text lurches forward in
  * lumps). Fix (what claude.ai / ChatGPT do): don't paint on arrival — keep a
- * REVEALED length that advances at a CONSTANT rate via requestAnimationFrame
- * toward the full received ("target") text, reshaping the lumpy INPUT into a
- * steady typewriter OUTPUT.
+ * REVEALED length that advances via requestAnimationFrame toward the full
+ * received ("target") text, reshaping the lumpy INPUT into a steady typewriter
+ * OUTPUT.
+ *
+ * CAPP-77 makes the drain rate ADAPTIVE so the reveal keeps PACE with generation:
+ * the buffer tracks recent incoming throughput (chars/sec, EWMA) and drains at
+ * `max(floor, matchFactor × inRate)` — a hair faster than the stream, so the
+ * visible backlog stays small + bounded near zero and the typewriter finishes
+ * ~when the stream finishes. The fixed base rate is now a FLOOR (slow streams
+ * still type out at a readable speed); a fast stream is matched, never lagged.
+ * The original backlog-scaled catch-up survives as a SAFETY NET for big lumps.
  *
  * This module is the unit-test seam (cf. src/lib/scrollStick.ts → AgentView
  * scroll, src/lib/agentTranscript.ts → the reducer): a side-effect-free, DOM-
@@ -18,14 +26,14 @@
  * actual slice length it renders.
  */
 
-/** Tunables for the constant-rate drain. All times in ms, rates in chars/sec. */
+/** Tunables for the adaptive-rate drain. All times in ms, rates in chars/sec. */
 export interface RevealConfig {
   /**
-   * Steady typewriter speed, chars/sec. ~Few-hundred cps reads as a smooth,
-   * readable type-out that comfortably keeps up with normal token streaming
-   * (a delta burst is absorbed into the buffer and drained at this rate). Tuned
-   * by eye: fast enough not to feel laggy on a brisk turn, slow enough that the
-   * burstiness is visibly smoothed.
+   * The FLOOR typewriter speed, chars/sec. On a slow / bursty stream the reveal
+   * never crawls below this — it's the minimum readable type-out, and it absorbs
+   * normal token bursts. CAPP-77: this is now a FLOOR, not the steady rate — a
+   * fast stream pushes the effective rate ABOVE it (see the adaptive term in
+   * {@link nextRevealedLen}) so a brisk turn is never lagged behind its own output.
    */
   baseRate: number
   /**
@@ -33,41 +41,62 @@ export interface RevealConfig {
    * If the target races ahead of the reveal by more than `baseRate * maxLagSec`
    * characters (a big burst, or a turn that dumped a lot at once), the effective
    * rate scales UP with the backlog so the visible lag stays bounded to roughly
-   * this many seconds — we never fall arbitrarily behind the real output.
+   * this many seconds — we never fall arbitrarily behind the real output. This is
+   * the SAFETY NET that complements the adaptive throughput match.
    */
   maxLagSec: number
-}
-
-/** Sensible defaults: a brisk-but-smooth ~320 cps, never lagging > ~0.35s. */
-export const DEFAULT_REVEAL_CONFIG: RevealConfig = {
-  baseRate: 320,
-  maxLagSec: 0.35,
+  /**
+   * CAPP-77 — the adaptive match factor. The effective steady rate is at least
+   * `matchFactor × recentInRate` (the tracked incoming chars/sec), so the reveal
+   * paces slightly FASTER than generation and the visible backlog converges toward
+   * zero instead of standing at `maxLagSec`. ~1.1 keeps a hair of lead (evens out
+   * within-burst choppiness) while finishing ~when the stream finishes. Should be
+   * ≥ 1 for the reveal to keep pace.
+   */
+  matchFactor: number
 }
 
 /**
- * Advance the revealed length toward the target by ONE frame's worth of reveal,
- * with backlog-scaled catch-up. PURE: given the same inputs it always returns
- * the same next revealed length.
+ * Sensible defaults: floor ~320 cps, never lagging > ~0.35s, and pacing 1.12× the
+ * live incoming throughput so a fast stream is matched (not lagged) and the reveal
+ * converges to done as the stream ends. The floor governs slow streams; the
+ * adaptive term governs fast ones; the backlog cap is the safety net for lumps.
+ */
+export const DEFAULT_REVEAL_CONFIG: RevealConfig = {
+  baseRate: 320,
+  maxLagSec: 0.35,
+  matchFactor: 1.12,
+}
+
+/**
+ * Advance the revealed length toward the target by ONE frame's worth of reveal.
+ * PURE: given the same inputs it always returns the same next revealed length.
  *
- * Rules:
- *  - Already caught up (revealed >= target) → return target (clamped; never
- *    over-reveal, and never go backwards even if target somehow shrank).
- *  - No time elapsed (dt <= 0) → no progress (a zero-length frame reveals nothing,
- *    even when behind — catch-up is a function of TIME, not of being merely called).
- *  - Base progress this frame = `baseRate * dt/1000` characters.
- *  - CATCH-UP: while the backlog exceeds the tolerated cap `baseRate * maxLagSec`,
- *    the effective rate scales UP IN PROPORTION to how far behind we are
- *    (`baseRate * backlog/maxBacklog`), so progress = `effectiveRate * dt/1000`.
- *    Bigger burst → faster drain → the visible lag is pulled back toward
- *    ~`maxLagSec` of text within a few frames (a smooth proportional catch-up, NOT
- *    a jarring instant snap). Below the cap the multiplier is 1, i.e. the steady
- *    base rate governs.
+ * CAPP-77 — the per-frame effective rate is the MAX of three terms, then capped by
+ * the catch-up safety net, so the reveal both keeps pace with a fast stream AND
+ * never crawls on a slow one:
+ *  1. the FLOOR `config.baseRate` (readable minimum);
+ *  2. the ADAPTIVE match `config.matchFactor × inRate` (pace a hair above the
+ *     tracked incoming throughput → backlog converges toward zero, finishes with
+ *     the stream);
+ *  3. the backlog-scaled CATCH-UP `baseRate × backlog/maxBacklog` (SAFETY NET: if a
+ *     big lump pushed the backlog past `baseRate × maxLagSec`, drain proportionally
+ *     faster so the visible lag stays bounded — a smooth catch-up, not a snap).
+ * The effective rate = max(1, 2, 3); progress this frame = effectiveRate × dt/1000.
+ *
+ * Rules / clamps:
+ *  - Already caught up (revealed >= target) → return target (never over-reveal, and
+ *    never go backwards even if the target shrank under us — a transcript reset).
+ *  - No time elapsed (dt <= 0) → no progress (catch-up is a function of TIME, not of
+ *    merely being called; also guards divide-by-zero / NaN).
  *  - The result is clamped to `target` so we never overshoot the received text.
  *
  * @param targetLen   full received text length (grows as deltas arrive)
  * @param revealedLen currently-revealed length (a FLOAT carried by the caller)
  * @param dtMs        ms elapsed since the previous frame
  * @param config      pacing tunables (defaults to {@link DEFAULT_REVEAL_CONFIG})
+ * @param inRate      recent incoming throughput estimate (chars/sec); 0/omitted →
+ *                    the adaptive term is inert and the floor + catch-up govern
  * @returns the next revealed length (float, in [revealedLen, targetLen])
  */
 export function nextRevealedLen(
@@ -75,6 +104,7 @@ export function nextRevealedLen(
   revealedLen: number,
   dtMs: number,
   config: RevealConfig = DEFAULT_REVEAL_CONFIG,
+  inRate = 0,
 ): number {
   // Already at (or past) the target — clamp and hold. `Math.min` also guards the
   // degenerate case where the target shrank under us (e.g. a transcript reset):
@@ -86,15 +116,69 @@ export function nextRevealedLen(
   const backlog = targetLen - revealedLen
   // The standing backlog we tolerate before scaling the rate up (chars).
   const maxBacklog = config.baseRate * config.maxLagSec
-  // Catch-up MULTIPLIER: 1 while within the cap; grows with the backlog beyond it,
-  // so a big burst drains proportionally faster and the visible lag stays bounded.
+  // (1) FLOOR — the readable minimum, also what governs a slow stream.
+  const floorRate = config.baseRate
+  // (2) ADAPTIVE — pace a hair above the tracked incoming throughput so the
+  // backlog converges toward zero and the reveal finishes ~with the stream.
+  const matchRate = inRate > 0 ? config.matchFactor * inRate : 0
+  // (3) CATCH-UP SAFETY NET — only kicks in above the tolerated backlog cap; below
+  // it the multiplier is 1, so it never drags the rate BELOW the floor/adaptive max.
   const speedup = maxBacklog > 0 ? Math.max(1, backlog / maxBacklog) : 1
-  const effectiveRate = config.baseRate * speedup
+  const catchUpRate = config.baseRate * speedup
+  // Whichever term demands the most reveal this frame wins.
+  const effectiveRate = Math.max(floorRate, matchRate, catchUpRate)
   const progress = (effectiveRate * dtMs) / 1000
 
   const next = revealedLen + progress
   // Never overshoot the received text.
   return next > targetLen ? targetLen : next
+}
+
+/**
+ * CAPP-77 — a tiny PURE rolling estimator of the incoming throughput (chars/sec)
+ * that the adaptive drain paces against. The buffer feeds it (Δchars, Δms) each
+ * frame the target grew; it returns an EWMA-smoothed rate, so a single fat delta
+ * doesn't spike the reveal and a quiet frame doesn't crater it — the estimate
+ * tracks the SUSTAINED stream rate and decays back to ~0 once the stream stops
+ * (so the reveal converges to done rather than racing ahead on a stale estimate).
+ *
+ * Kept as a class (not free fn) so the EWMA state is encapsulated + reusable by
+ * RevealClock, and DOM-free so it's unit-testable on its own.
+ */
+export class ThroughputTracker {
+  /** Smoothing factor in (0,1]: higher = more responsive, lower = steadier. */
+  private readonly alpha: number
+  /** The current EWMA rate estimate (chars/sec), or null until the first sample. */
+  private ewma: number | null = null
+
+  /** @param alpha EWMA weight on the newest sample (default 0.3 — steady but live). */
+  constructor(alpha = 0.3) {
+    this.alpha = alpha
+  }
+
+  /**
+   * Record one frame's worth of incoming text and return the updated rate estimate.
+   * `addedChars` is how much the target grew since the last sample (≥0; a quiet
+   * frame is 0 chars, which decays the estimate toward 0); `dtMs` is the elapsed
+   * time. A non-positive dt is ignored (no sample) so a zero-length frame can't
+   * produce a divide-by-zero / infinite rate.
+   */
+  sample(addedChars: number, dtMs: number): number {
+    if (dtMs <= 0) return this.rate()
+    const instant = (Math.max(0, addedChars) * 1000) / dtMs
+    this.ewma = this.ewma == null ? instant : this.alpha * instant + (1 - this.alpha) * this.ewma
+    return this.ewma
+  }
+
+  /** The current rate estimate (chars/sec); 0 before the first sample. */
+  rate(): number {
+    return this.ewma ?? 0
+  }
+
+  /** Forget the estimate (activation / re-kick) so a new turn starts clean. */
+  reset(): void {
+    this.ewma = null
+  }
 }
 
 /**
@@ -140,31 +224,53 @@ export class RevealClock {
   revealed = 0
   /** The previous frame's timestamp, or null for a fresh clock (next frame = t0). */
   private last: number | null = null
+  /** The target length at the previous frame, to measure per-frame incoming growth. */
+  private prevTarget = 0
+  /** CAPP-77 — the rolling incoming-throughput estimate the adaptive drain paces to. */
+  private readonly throughput = new ThroughputTracker()
 
-  /** Activation edge: seed the head start and reset the clock. */
+  /** Activation edge: seed the head start, reset the clock + throughput estimate. */
   start(headStart: number, target: number): void {
     this.revealed = Math.min(headStart, target)
     this.last = null
+    this.prevTarget = target
+    this.throughput.reset()
   }
 
   /**
    * One frame at timestamp `ts` against the CURRENT target. dt is measured from the
    * previous frame — the clock survives target growth, so brisk per-frame streaming
-   * still produces a real dt and the reveal advances. Returns the new revealed float.
+   * still produces a real dt and the reveal advances. CAPP-77: the per-frame target
+   * growth feeds the throughput tracker, whose estimate is handed to the adaptive
+   * drain so the reveal paces to the live stream rate. Returns the new revealed float.
    */
   frame(ts: number, target: number, config: RevealConfig = DEFAULT_REVEAL_CONFIG): number {
     const prev = this.last
     this.last = ts
     const dt = prev == null ? 0 : ts - prev
     if (dt > 0) {
-      this.revealed = nextRevealedLen(target, this.revealed, dt, config)
+      // Measure how much the received text grew this frame, smooth it into the
+      // incoming-rate estimate, then drain at max(floor, matchFactor×inRate, catch-up).
+      const added = Math.max(0, target - this.prevTarget)
+      const inRate = this.throughput.sample(added, dt)
+      this.revealed = nextRevealedLen(target, this.revealed, dt, config, inRate)
     }
+    this.prevTarget = target
     return this.revealed
   }
 
-  /** Drop the stale timestamp (teardown / re-kick) without losing progress. */
+  /**
+   * Drop the stale timestamp (teardown / re-kick) without losing progress. The
+   * throughput estimate is preserved so a re-kicked dormant loop keeps pacing to the
+   * stream it was already tracking; `start()` is where a fresh turn clears it.
+   */
   resetClock(): void {
     this.last = null
+  }
+
+  /** The current incoming-throughput estimate (chars/sec) — exposed for tests/diag. */
+  inRate(): number {
+    return this.throughput.rate()
   }
 
   /** Whether the reveal has drained to the current target (loop can stop). */

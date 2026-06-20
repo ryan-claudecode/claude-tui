@@ -1820,26 +1820,39 @@ body {
   /* Settle the caret in with the surrounding prose, then breathe. */
   animation: agent-caret-blink 1.1s var(--ease) infinite;
 }
-/* CAPP-74 — SMOOTHING BUFFER fade: the OPTIONAL subtle polish layered on the
-   constant-rate drain (the drain is the actual fix). While the typewriter buffer is
-   still draining (`.agent-revealing`, set by AssistantBlock), the LAST revealed
-   element of the markdown body fades its leading edge in softly so the steadily
-   appended characters don't hard-pop. It's a one-shot, low-amplitude opacity ease on
-   the warm accent-paced prose; it drops the instant the buffer catches up (the class
-   is removed) so a settled block never keeps animating. Reduced-motion disables it. */
-@keyframes agent-reveal-fade {
-  from { opacity: 0.55; }
-  to   { opacity: 1; }
+/* CAPP-77 — PER-LINE FADE + TRANSLATE-UP reveal: the "lines rise into place" feel of
+   claude.ai / ChatGPT, layered on the adaptive-rate drain (the drain is the actual
+   pacing). While the typewriter buffer is still draining (`.agent-revealing`, set by
+   AssistantBlock), the LAST (newest) top-level element of the markdown body fades in
+   (opacity 0→1) while nudging UP a few px (translateY 5px→0) over ~0.22s ease-out.
+
+   GRANULARITY = per top-level markdown BLOCK (paragraph / list-item container /
+   heading / code block — react-markdown's `> *` children), which is robust against
+   its re-render-on-growth: React keeps the SAME DOM node for the growing trailing
+   block across rAF frames, so the CSS `animation` plays ONCE when that block first
+   mounts as `:last-child` and does NOT restart per frame.
+
+   NEW-vs-SETTLED distinction (settled content never re-animates): the rule targets
+   ONLY `:last-child` of `.agent-revealing`. As the reveal crosses a block boundary, a
+   freshly-revealed block becomes the new `:last-child` and rises; the previous block
+   stops matching `:last-child` and instantly settles at its resting opacity/position.
+   When the buffer finishes draining, AssistantBlock drops `.agent-revealing` entirely,
+   so the final block settles too — and a SETTLED / historical / rehydrated block
+   (never `.agent-revealing`) is painted fully with no animation at all. Reduced-motion
+   disables the rise (the buffer itself is also bypassed there). */
+@keyframes agent-line-rise {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 .agent-revealing .markdown-body > *:last-child {
-  animation: agent-reveal-fade 0.18s var(--ease-out);
+  animation: agent-line-rise 0.22s var(--ease-out) both;
 }
 @media (prefers-reduced-motion: reduce) {
   /* Instant fade for block entrances — no upward transform. */
   .agent-block { animation: drop-fade 0.01ms var(--ease-out) both; }
   /* A steady (non-blinking) caret still marks the streaming position. */
   .agent-streaming .markdown-body > *:last-child::after { animation: none; opacity: 0.85; }
-  /* No reveal fade under reduced motion — the buffer itself is also bypassed there
+  /* No per-line rise under reduced motion — the buffer itself is also bypassed there
      (AssistantBlock paints instantly), so this is belt-and-suspenders. */
   .agent-revealing .markdown-body > *:last-child { animation: none; }
 }

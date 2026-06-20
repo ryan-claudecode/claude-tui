@@ -18,14 +18,18 @@ export const HEAD_START = 3
  * turns bursty streamed text into a steady typewriter, and hands AgentView the
  * REVEALED slice of the live assistant block.
  *
- * It owns ONLY the constant-rate drain (the pure pacing + the frame clock live in
+ * It owns ONLY the rAF drain (the pure pacing + the frame clock live in
  * src/lib/smoothReveal.ts — `nextRevealedLen` + `RevealClock`, the unit-test seam).
+ * CAPP-77: the drain is ADAPTIVE — `RevealClock` tracks the live incoming throughput
+ * and the per-frame rate is `max(floor, matchFactor×inRate, catch-up)`, so a fast
+ * stream is matched (never lagged) and the reveal finishes ~with the stream; the hook
+ * itself is unchanged (it just drives `clock.frame(ts, target, config)` each tick).
  * The contract:
  *  - `active` is true ONLY for the live, current-turn TRAILING assistant block
  *    (AgentView passes `busy && this is the streaming-caret block` && !reduced-
  *    motion). While active, `text` is the full received ("target") text; the hook
- *    reveals chars toward it at the base rate (catch-up scaled), returning a
- *    GROWING prefix slice.
+ *    reveals chars toward it at the adaptive rate (floor + throughput-match +
+ *    catch-up), returning a GROWING prefix slice.
  *  - The instant `active` flips false — turn end (busy→idle), the block settling
  *    behind a tool/result, a terminal switch / re-mount, a HISTORICAL or BO-12-
  *    rehydrated block, or prefers-reduced-motion — the hook returns the FULL text

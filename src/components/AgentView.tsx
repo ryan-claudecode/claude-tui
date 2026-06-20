@@ -384,9 +384,12 @@ function WorkingRow({ status }: { status: "Thinking" }) {
  *
  * The WS5 streaming caret (a CSS `::after` driven by `.agent-streaming`) sits at the
  * end of the rendered (revealed) text, so it tracks the typewriter's leading edge.
- * `agent-revealing` adds a subtle, reduced-motion-safe fade-in on the freshly
- * revealed prose while the buffer is still draining; it drops the moment the text is
- * fully revealed so a settled block doesn't keep animating.
+ * CAPP-77 — `agent-revealing` now drives a PER-LINE fade + translate-up rise (the
+ * "lines rise into place" feel): the CSS targets only the trailing (`:last-child`)
+ * markdown block, so each freshly-revealed block animates ONCE as it appears and
+ * already-settled blocks (no longer `:last-child`) stay put. The class drops the
+ * moment the buffer catches up, so a settled block never keeps animating; reduced-
+ * motion (where the buffer is bypassed) gets no rise.
  */
 function AssistantBlock({
   block,
