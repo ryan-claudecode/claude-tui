@@ -3,6 +3,7 @@ import {
   DEFAULT_REVEAL_CONFIG,
   isFullyRevealed,
   nextRevealedLen,
+  snapToWordBoundary,
   ThroughputTracker,
   type RevealConfig,
 } from "./smoothReveal"
@@ -240,6 +241,50 @@ describe("ThroughputTracker — CAPP-77 incoming-rate estimate", () => {
     expect(t.rate()).toBeGreaterThan(0)
     t.reset()
     expect(t.rate()).toBe(0)
+  })
+})
+
+describe("snapToWordBoundary — CAPP-78 word-granular reveal", () => {
+  // Snaps the char-granular revealed length DOWN to the last whole word, so the
+  // trailing partial word being typed stays hidden until it's complete — words pop
+  // in instead of letters streaming in, killing the letter-by-letter "typewriter"
+  // staccato. The trailing partial is ALWAYS released once the reveal catches up to
+  // the target (so no word is ever stranded hidden).
+
+  it("hides the trailing partial word mid-stream (backs up to the last whole word)", () => {
+    // "hello world", cut at 8 = inside "world" (…wo|rld). Back up to just after the
+    // space at index 5 → 6, i.e. slice "hello ". "world" stays hidden until complete.
+    expect(snapToWordBoundary("hello world", 8, 11)).toBe(6)
+  })
+
+  it("leaves a cut that already sits at a word boundary untouched", () => {
+    // Next hidden char is the space → "hello" is a complete word, keep all 5.
+    expect(snapToWordBoundary("hello world", 5, 11)).toBe(5)
+    // Last shown char is the space, the next word has 0 chars shown → keep 6.
+    expect(snapToWordBoundary("hello world", 6, 11)).toBe(6)
+  })
+
+  it("releases the trailing partial word once caught up to the target", () => {
+    // Stream paused mid-word and the reveal caught up (shown === target): show it all,
+    // never strand the final partial word behind the boundary snap.
+    expect(snapToWordBoundary("hello wor", 9, 9)).toBe(9)
+    // Also when shown has run to/over the full text.
+    expect(snapToWordBoundary("hello world", 11, 11)).toBe(11)
+  })
+
+  it("shows nothing until the very first word completes (no prior whitespace)", () => {
+    // Cut inside the first word with no earlier whitespace to back up to → 0.
+    expect(snapToWordBoundary("hello world", 3, 11)).toBe(0)
+  })
+
+  it("treats a newline as a word boundary (won't split a word across lines)", () => {
+    // "foo\nbar", cut at 5 = inside "bar". Back up past the newline at index 3 → 4.
+    expect(snapToWordBoundary("foo\nbar", 5, 7)).toBe(4)
+  })
+
+  it("clamps a non-positive shown to 0", () => {
+    expect(snapToWordBoundary("hello", 0, 5)).toBe(0)
+    expect(snapToWordBoundary("hello", -3, 5)).toBe(0)
   })
 })
 

@@ -8,7 +8,62 @@ interface Props {
   source?: string
   /** Optional extra class on the `.markdown-body` container. */
   className?: string
+  /**
+   * CAPP-79 — when set, this is the LIVE streaming block: wrap each prose word in a
+   * `<span class="agent-word">` so the CSS can fade each one in as it's revealed (the
+   * per-word "materialize" that softens the word-snap pop). Settled / historical blocks
+   * leave this off and render plain — so they never re-animate and carry no extra DOM.
+   */
+  revealing?: boolean
 }
+
+/**
+ * CAPP-79 — a tiny dependency-free rehype plugin that wraps every whitespace-delimited
+ * word of the prose text nodes in `<span class="agent-word">`, leaving whitespace as
+ * bare text so the line still wraps naturally. Code is skipped (we never split a
+ * `<code>`/`<pre>` subtree), so syntax stays intact.
+ *
+ * FLICKER-SAFE BY DOM IDENTITY (the same property the CAPP-77 per-line rise relies on):
+ * the streaming block re-parses its growing revealed slice ~per frame, but the prefix
+ * is stable, so React reconciles the already-revealed word spans to the SAME DOM nodes
+ * (no remount → their fade does not restart). Only the NEWEST word is a freshly-mounted
+ * span, so only it plays `agent-word-fade`. Settled words sit at the animation's `both`
+ * end state.
+ */
+function rehypeWordFade() {
+  const SKIP_TAGS = new Set(["code", "pre"])
+  const wrap = (node: { tagName?: string; children?: unknown[] }) => {
+    if (!Array.isArray(node.children)) return
+    if (node.tagName && SKIP_TAGS.has(node.tagName)) return
+    const next: unknown[] = []
+    for (const child of node.children as Array<{ type?: string; value?: string }>) {
+      if (child.type === "text" && typeof child.value === "string") {
+        // Split keeping the whitespace runs; wrap non-space tokens, pass space through.
+        for (const part of child.value.split(/(\s+)/)) {
+          if (part === "") continue
+          if (/^\s+$/.test(part)) {
+            next.push({ type: "text", value: part })
+          } else {
+            next.push({
+              type: "element",
+              tagName: "span",
+              properties: { className: ["agent-word"] },
+              children: [{ type: "text", value: part }],
+            })
+          }
+        }
+      } else {
+        wrap(child as { tagName?: string; children?: unknown[] })
+        next.push(child)
+      }
+    }
+    node.children = next
+  }
+  return (tree: { tagName?: string; children?: unknown[] }) => wrap(tree)
+}
+
+/** Stable plugin-array identity (so React.memo + react-markdown don't see a new ref). */
+const WORD_FADE_REHYPE = [rehypeWordFade]
 
 // A fenced code block with a hover "Copy" button. Reads text straight from the
 // rendered DOM so it works regardless of how react-markdown nests children.
@@ -84,10 +139,14 @@ const MARKDOWN_COMPONENTS = {
  * tolerates partial / unbalanced markdown (e.g. an unclosed ``` fence between frames)
  * without throwing, so incremental rendering never flickers or crashes.
  */
-function MarkdownViewImpl({ source = "", className }: Props) {
+function MarkdownViewImpl({ source = "", className, revealing }: Props) {
   return (
     <div className={className ? `markdown-body ${className}` : "markdown-body"}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={revealing ? WORD_FADE_REHYPE : undefined}
+        components={MARKDOWN_COMPONENTS}
+      >
         {source}
       </ReactMarkdown>
     </div>

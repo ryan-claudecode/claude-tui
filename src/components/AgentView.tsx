@@ -454,7 +454,7 @@ function AssistantBlock({
           clears the instant the block stops being the trailing streaming block (the
           class drops). CAPP-74 — `source` is now the smoothing buffer's REVEALED
           slice while streaming, so the caret sits at the typewriter's leading edge. */}
-      <MarkdownView source={shown} />
+      <MarkdownView source={shown} revealing={active} />
     </div>
   )
 }

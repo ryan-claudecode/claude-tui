@@ -1857,6 +1857,27 @@ body {
 .agent-revealing .markdown-body > *:last-child {
   animation: agent-line-rise 0.22s var(--ease-out) both;
 }
+
+/* CAPP-79 — PER-WORD FADE (Lever B): layered on the CAPP-78 word-snap so each word, as
+   it pops in whole, also SOFTLY materializes (opacity 0→1 + a hair of blur) instead of
+   appearing hard-edged — the "feathered reveal" that kills the last of the constant-rate
+   drain's mechanical feel. Each prose word of the streaming block is an `.agent-word` span
+   (injected by MarkdownView's rehypeWordFade only while `revealing`).
+
+   FLICKER-SAFE for the SAME reason the per-line rise is: the streaming block re-parses its
+   growing slice ~per frame, but React reconciles the already-revealed word spans to the
+   SAME DOM nodes, so their animation does NOT restart — only the newest, freshly-mounted
+   word span plays the fade. `both` holds settled words at the resting state. Composes with
+   the per-line rise (block entrance) without conflict: the block rises once on mount;
+   individual words fade as they stream into it. */
+@keyframes agent-word-fade {
+  from { opacity: 0; filter: blur(0.7px); }
+  to   { opacity: 1; filter: blur(0); }
+}
+.agent-revealing .agent-word {
+  animation: agent-word-fade 0.26s var(--ease-out) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* Instant fade for block entrances — no upward transform. */
   .agent-block { animation: drop-fade 0.01ms var(--ease-out) both; }
@@ -1865,6 +1886,9 @@ body {
   /* No per-line rise under reduced motion — the buffer itself is also bypassed there
      (AssistantBlock paints instantly), so this is belt-and-suspenders. */
   .agent-revealing .markdown-body > *:last-child { animation: none; }
+  /* No per-word fade either — the spans aren't even injected under reduced motion
+     (revealing is false), this is belt-and-suspenders to match. */
+  .agent-revealing .agent-word { animation: none; }
 }
 
 /* BO-8 — assistant + result prose render through the shared MarkdownView

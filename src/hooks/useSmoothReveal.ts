@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import {
   DEFAULT_REVEAL_CONFIG,
   RevealClock,
+  snapToWordBoundary,
   type RevealConfig,
 } from "../lib/smoothReveal"
 
@@ -166,5 +167,9 @@ export function useSmoothReveal(
   // reveal, so render the FULL text rather than a stuck-empty slice.
   if (typeof requestAnimationFrame !== "function") return text
   const shown = Math.floor(Math.min(clockRef.current.revealed, targetRef.current))
-  return text.slice(0, shown)
+  // CAPP-78 — snap the char-granular reveal DOWN to the last whole word so the
+  // trailing partial word stays hidden until complete: words pop in instead of
+  // letters streaming, which kills the constant-rate drain's mechanical staccato.
+  // (Released in full the instant the reveal catches the target — see snapToWordBoundary.)
+  return text.slice(0, snapToWordBoundary(text, shown, targetRef.current))
 }

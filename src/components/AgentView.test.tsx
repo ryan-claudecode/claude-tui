@@ -143,7 +143,9 @@ describe("AgentView markdown rendering", () => {
         streaming
       />,
     )
-    expect(streamingHtml).toContain("fully shown without animation")
+    // CAPP-79 — a streaming block word-wraps its prose (`.agent-word` spans), so the
+    // text is interleaved with span tags; strip them to assert the FULL text is present.
+    expect(streamingHtml.replace(/<[^>]+>/g, "")).toContain("fully shown without animation")
     expect(streamingHtml).toContain("agent-streaming")
   })
 

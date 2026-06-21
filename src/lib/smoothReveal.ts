@@ -192,6 +192,51 @@ export function isFullyRevealed(targetLen: number, revealedLen: number): boolean
 }
 
 /**
+ * CAPP-78 — snap the char-granular revealed length DOWN to the last WHOLE word, so
+ * the trailing partial word currently being typed stays hidden until it's complete.
+ * Layered on top of the (correct) adaptive-rate drain, this turns the reveal from a
+ * letter-by-letter typewriter into a word-by-word "words pop into place" cadence —
+ * the even per-character spacing of a constant-rate drain is exactly what reads as
+ * mechanical, and word-granularity breaks that staccato.
+ *
+ * PURE: a function of (text, shown, target) only — the unit-test seam the hook floors
+ * its float reveal through before slicing.
+ *
+ *  - `shown >= target` (caught up / stream paused with a half-typed final word) →
+ *    return `target`: ALWAYS release the trailing partial once the reveal reaches it,
+ *    so no word is ever stranded hidden. The snap only withholds a partial word while
+ *    the reveal is still strictly BEHIND the received text.
+ *  - cut mid-word (the chars on either side of `shown` are both non-whitespace) → back
+ *    up to just after the previous whitespace, so only complete words are shown. No
+ *    earlier whitespace (the very first word is still being typed) → 0.
+ *  - cut already at a word boundary (a whitespace sits just before or just after it) →
+ *    return `shown` unchanged.
+ *
+ * @param text   the full received text
+ * @param shown  the char-granular revealed length (floored float) to snap
+ * @param target the full received text length
+ * @returns the snapped slice-end index in [0, target]
+ */
+export function snapToWordBoundary(text: string, shown: number, target: number): number {
+  if (shown <= 0) return 0
+  // Caught up to the received text — reveal it all, including a trailing partial word,
+  // so the final word is never stranded behind the boundary snap.
+  if (shown >= target) return target
+
+  const isSpace = (ch: string) => /\s/.test(ch)
+  // A cut splits a word only when the chars on BOTH sides of it are word characters.
+  // If either side is whitespace we're already at a boundary — keep the cut as-is.
+  if (isSpace(text[shown - 1]) || isSpace(text[shown])) return shown
+
+  // Mid-word: back up to just after the previous whitespace so the partial word is hidden.
+  for (let i = shown - 1; i > 0; i--) {
+    if (isSpace(text[i - 1])) return i
+  }
+  // No earlier whitespace — the first word of the whole text is still being typed.
+  return 0
+}
+
+/**
  * CAPP-74 — the PURE frame-clock the rAF hook (useSmoothReveal) drives. It owns the
  * dt-bookkeeping + reveal carry that the hook used to inline, factored out so the
  * STALL regression is unit-testable WITHOUT a DOM/jsdom (the repo's hook-test idiom,
