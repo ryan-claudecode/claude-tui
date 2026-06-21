@@ -255,59 +255,55 @@ export default function AgentComposer({
           Send
         </button>
       </div>
-      {/* The session chrome — model + effort + the Raw-view escape hatch — relocated
-          OUT of the old surface header into a compact secondary row directly under the
-          send/stop buttons. Always visible (no hover-reveal); reads as quiet chrome,
-          smaller than the Send button. The pickers self-disable on busy || !sessionId;
-          the Raw-view button is disabled while busy/switching (the switch would lose a
-          live turn) and shows "Switching…" during the swap. */}
-      <div className="composer-controls-row">
-        <AgentModelPicker
-          sessionId={sessionId}
-          terminalId={terminalId}
-          model={model}
-          variant="composer"
-          onSwitched={onSwitched}
-        />
-        <AgentEffortPicker
-          sessionId={sessionId}
-          terminalId={terminalId}
-          effort={effort}
-          variant="composer"
-          onSwitched={onSwitched}
-        />
-        <button
-          className="agent-raw-view-btn agent-raw-view-btn-composer"
-          onClick={onSwitchToRaw}
-          disabled={rawViewDisabled}
-          title="Switch this session to the raw terminal view (keeps the conversation)"
+      {/* Footer — the persistent hint strip on the LEFT; the session chrome (model +
+          effort + the Raw-view escape hatch, relocated out of the deleted surface header)
+          on the RIGHT, under the Send button. All always visible (no hover-reveal); the
+          chrome reads as quiet/compact, smaller than Send. The pickers self-disable on
+          busy || !sessionId; Raw-view is disabled while busy/switching (the switch would
+          lose a live turn) and shows "Switching…". a11y — ONLY the busy hint is a polite
+          live region (it announces a state change); the idle hint is static, so it must
+          NOT be an aria-live status (that would re-announce noisily). */}
+      <div className="composer-footer">
+        <div
+          className={`composer-hint${busy ? " busy" : ""}`}
+          {...(busy ? { role: "status", "aria-live": "polite" as const } : {})}
         >
-          {switching ? "Switching…" : "Raw view"}
-        </button>
-      </div>
-      {/* WS3 — a PERSISTENT, low-chrome hint strip under the input bar (absorbs the
-          old busy-only footer). Idle: the real affordances as PLAIN, quiet text (no
-          keycap/kbd chips — the owner wants the keys to read as inline muted text,
-          not boxed caps), so they don't vanish with the placeholder on the first
-          keystroke. Busy: the working/interrupt line. Quiet in our voice.
-          a11y — ONLY the busy/working state is a polite live region (it announces a
-          state change worth hearing). The idle hint is static, so it must NOT be an
-          aria-live status — that would re-announce noisily. */}
-      <div
-        className={`composer-hint${busy ? " busy" : ""}`}
-        {...(busy ? { role: "status", "aria-live": "polite" as const } : {})}
-      >
-        {busy ? (
-          <span className="composer-hint-busy">
-            {stopping
-              ? "Stopping — restoring the conversation…"
-              : "Agent is working — Esc or Stop to interrupt"}
-          </span>
-        ) : (
-          <span className="composer-hint-keys">
-            Enter to send · Shift+Enter for newline · / for commands · drop an image to attach
-          </span>
-        )}
+          {busy ? (
+            <span className="composer-hint-busy">
+              {stopping
+                ? "Stopping — restoring the conversation…"
+                : "Agent is working — Esc or Stop to interrupt"}
+            </span>
+          ) : (
+            <span className="composer-hint-keys">
+              Enter to send · Shift+Enter for newline · / for commands · drop an image to attach
+            </span>
+          )}
+        </div>
+        <div className="composer-controls-row">
+          <AgentModelPicker
+            sessionId={sessionId}
+            terminalId={terminalId}
+            model={model}
+            variant="composer"
+            onSwitched={onSwitched}
+          />
+          <AgentEffortPicker
+            sessionId={sessionId}
+            terminalId={terminalId}
+            effort={effort}
+            variant="composer"
+            onSwitched={onSwitched}
+          />
+          <button
+            className="agent-raw-view-btn agent-raw-view-btn-composer"
+            onClick={onSwitchToRaw}
+            disabled={rawViewDisabled}
+            title="Switch this session to the raw terminal view (keeps the conversation)"
+          >
+            {switching ? "Switching…" : "Raw view"}
+          </button>
+        </div>
       </div>
     </div>
   )

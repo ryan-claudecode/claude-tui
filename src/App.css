@@ -1536,7 +1536,10 @@ body {
   -webkit-app-region: drag;
   scrollbar-width: none;
   gap: var(--s-1);
-  padding: var(--s-1) var(--s-3);
+  /* No BOTTOM padding — the tabs drop to the bar's bottom edge so the active tab's
+     flat bottom meets the content-pane outline below (Chrome-style "connected"), with
+     no floating gap between the tab and the well. */
+  padding: var(--s-1) var(--s-3) 0;
 }
 
 /* Chrome-style connected tabs — rounded TOP corners only with a flat bottom, so the
@@ -1616,6 +1619,10 @@ body {
   border: none;
   font-family: inherit;
   padding: 0;
+  /* Bump right + down so it sits in the tab's flat lower-right, clear of the top
+     border-radius and snug to the right edge (not floating with a gap). */
+  margin-top: 2px;
+  margin-right: -3px;
 }
 
 .tab-close:hover {
@@ -6179,20 +6186,33 @@ body {
 .composer-hint-keys {
 }
 
-/* UI tweak — the SECONDARY CONTROLS ROW under the send/stop buttons. The model
-   picker + effort picker + Raw-view button (relocated out of the deleted surface
-   header) sit here as quiet, compact chrome — always visible (no hover-reveal),
-   left-aligned, and wrapping so they never overflow the tray. They read as
-   secondary to the Send button (smaller type, muted fills) and feel integrated
-   with the composer rather than a detached strip. */
-.composer-controls-row {
+/* UI tweak — composer footer: the persistent hint strip on the LEFT, and the session
+   chrome (model + effort + Raw-view, relocated out of the deleted surface header) on the
+   RIGHT, under the Send button. space-between keeps hint left / chrome right; wraps on a
+   narrow (split) pane. */
+.composer-footer {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: var(--s-2);
-  /* A modest top margin to separate from the button row without a hard rule. */
   margin-top: var(--s-1);
   padding: 0 var(--s-1);
+}
+.composer-footer .composer-hint {
+  margin-top: 0;
+  padding: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The session-chrome group (RIGHT side of the footer) — quiet, compact, always visible
+   (no hover-reveal); smaller type than Send. Sits under the Send button. */
+.composer-controls-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: 0 0 auto;
 }
 
 /* The composer-variant pickers + raw-view button — a touch more compact than the
