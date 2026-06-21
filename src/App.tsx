@@ -979,9 +979,9 @@ export default function App() {
                 // BO-4b PER-TERMINAL fork: render on THIS terminal's actual engine
                 // (surfaced from the backend), not a global config boolean. A
                 // headless terminal gets AgentView + the BO-3 composer; an xterm
-                // (or legacy/undefined) terminal keeps TerminalPane. Default stays
-                // xterm, so live behavior is unchanged unless the terminal was
-                // spawned structured.
+                // (or legacy/undefined) terminal keeps TerminalPane. The DEFAULT is
+                // now structured (CAPP-39 gate 4), but this fork keys ONLY on the
+                // per-terminal t.engine, so it is independent of the default.
                 t.engine === "structured" ? (
                   <AgentSurface
                     key={t.id}
