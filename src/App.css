@@ -39,24 +39,26 @@
 }
 
 :root, [data-theme="light"] {
-  /* Surfaces — warm linen */
-  --bg-0: #f8f4ed;
-  --bg-1: #f1ece3;
-  --bg-2: #e8e0d4;
-  --bg-3: #ded5c8;
-  --bg-4: #d4cbbe;
-  --bg-5: #cac0b2;
+  /* Surfaces — warm linen, dimmed a touch in light mode so the UI isn't glaring and
+     the active tab / content well lift with more contrast against the chrome. */
+  --bg-0: #efe8db;
+  --bg-1: #e8e0d3;
+  --bg-2: #ded5c7;
+  --bg-3: #d3cabb;
+  --bg-4: #c9bfb0;
+  --bg-5: #bfb4a4;
 
-  /* Terminal */
-  --terminal-bg: #faf7f2;
+  /* Terminal — the content well stays bright, so it (and the active tab, which shares
+     this fill) reads as a clear lift above the dimmed chrome. */
+  --terminal-bg: #faf6ef;
   --terminal-fg: #3a3028;
   --terminal-dim: #6a5d4e;
   --terminal-muted: #9a8d7e;
 
-  /* Borders */
-  --border: #e0d8cc;
-  --border-strong: #d4cbbe;
-  --border-subtle: #e8e0d4;
+  /* Borders — a touch stronger to define the dimmed surfaces + the connected tab. */
+  --border: #ddd4c6;
+  --border-strong: #cfc5b6;
+  --border-subtle: #e4ddd0;
 
   /* Text */
   --text-0: #2a2420;
@@ -1539,7 +1541,7 @@ body {
   /* No BOTTOM padding — the tabs drop to the bar's bottom edge so the active tab's
      flat bottom meets the content-pane outline below (Chrome-style "connected"), with
      no floating gap between the tab and the well. */
-  padding: var(--s-1) var(--s-3) 0;
+  padding: var(--s-1) var(--s-3) 0 var(--s-4);
 }
 
 /* Chrome-style connected tabs — rounded TOP corners only with a flat bottom, so the
@@ -1558,7 +1560,12 @@ body {
   align-items: center;
   white-space: nowrap;
   gap: 6px;
-  flex: 0 0 auto;
+  /* Chrome-style FIXED width: a preferred ~200px that shrinks (flex-shrink 1) as more
+     tabs appear, down to a min, after which the tab-bar scrolls horizontally. Tabs do
+     NOT grow to fill (flex-grow 0), so few tabs stay a uniform width, not stretched. */
+  flex: 0 1 200px;
+  min-width: 56px;
+  overflow: hidden;
   border: none;
   /* Reserve the active tab's 1px top edge so the baseline doesn't shift on activation. */
   border-top: 1px solid transparent;
@@ -1571,6 +1578,16 @@ body {
 
 .tab .status-dot {
   flex: 0 0 auto;
+}
+
+/* The tab title — takes the slack and truncates with an ellipsis when the tab shrinks
+   (the status dot + close × stay fixed). */
+.tab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Inactive hover — a gentle wash tint + a one-step lift in text color. No reveals. */
@@ -1619,6 +1636,8 @@ body {
   border: none;
   font-family: inherit;
   padding: 0;
+  /* Never shrink — only the tab title truncates when the tab narrows. */
+  flex: 0 0 auto;
   /* Bump right + down so it sits in the tab's flat lower-right, clear of the top
      border-radius and snug to the right edge (not floating with a gap). */
   margin-top: 2px;

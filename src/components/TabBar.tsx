@@ -73,6 +73,7 @@ export default function TabBar({
             />
           ) : (
             <span
+              className="tab-name"
               onDoubleClick={() => {
                 setEditingId(t.id)
                 setEditValue(t.name)
