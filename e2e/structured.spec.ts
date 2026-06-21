@@ -598,3 +598,42 @@ test("structured engine: the raw-view escape hatch is surfaced (header button + 
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
+
+test("structured engine: a terminal tab rename accepts multi-character typing (no select-on-render trap) and persists (CAPP-81)", async () => {
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-rename-"))
+  await seedStructuredConfig(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+  await win.locator(".sidebar-action", { hasText: "+ New session" }).click()
+  await expect(win.locator(".agent-composer textarea")).toHaveCount(1, { timeout: 15_000 })
+
+  // Enter rename on the single terminal tab (double-click the name span, not the dot).
+  await win.locator(".tab span:not(.status-dot)").first().dblclick()
+  const input = win.locator(".tab-rename-input")
+  await expect(input).toBeVisible({ timeout: 10_000 })
+
+  // Type CHARACTER BY CHARACTER. The regression was a select-all that re-fired on every
+  // render, so each keystroke re-selected the field and the next char replaced it —
+  // only the LAST character survived. fill() sets the value atomically and would NOT
+  // catch it; pressSequentially reproduces real per-keystroke typing, which does.
+  const newName = "Renamed Worker"
+  await input.pressSequentially(newName, { delay: 20 })
+  await expect(input).toHaveValue(newName)
+
+  // Commit persists the full multi-char name onto the tab (also exercises the headless
+  // terminal rename path — CAPP-81's service-layer fix — end to end).
+  await input.press("Enter")
+  await expect(win.locator(".tab")).toContainText(newName, { timeout: 10_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
