@@ -4,7 +4,6 @@ import {
   nextScrollTop,
   scrollFollowBehavior,
   shouldStick,
-  resizeFollowBehavior,
 } from "./scrollStick"
 
 describe("isAtBottom", () => {
@@ -125,15 +124,5 @@ describe("shouldStick (UI tweak: de-arm on scroll-up, re-arm at threshold)", () 
 
   it("is armed for content that fits without scrolling", () => {
     expect(shouldStick({ scrollTop: 0, scrollHeight: 150, clientHeight: 200 })).toBe(true)
-  })
-})
-
-describe("resizeFollowBehavior (UI tweak: streaming-growth follow)", () => {
-  it("follows streaming growth SMOOTHLY by default", () => {
-    expect(resizeFollowBehavior(false)).toBe("smooth")
-  })
-
-  it("snaps INSTANT under prefers-reduced-motion", () => {
-    expect(resizeFollowBehavior(true)).toBe("auto")
   })
 })

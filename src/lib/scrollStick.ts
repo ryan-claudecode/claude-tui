@@ -48,19 +48,6 @@ export function shouldStick(m: ScrollMetrics, threshold = 24): boolean {
 }
 
 /**
- * UI tweak (stick-to-bottom) — the instant-vs-smooth decision for the ResizeObserver
- * follow path (the streaming-growth follower). The ResizeObserver fires every time
- * useSmoothReveal grows the content height during a turn; when stuck, we scroll to the
- * new bottom. That follow must be SMOOTH so the viewport glides with the revealing
- * text, EXCEPT under prefers-reduced-motion, where it snaps instant. Kept pure (mirrors
- * {@link scrollFollowBehavior}'s reduced-motion contract) so the choice is testable
- * without a DOM; the DOM/ResizeObserver wiring itself stays in AgentView.
- */
-export function resizeFollowBehavior(reduceMotion: boolean): ScrollBehavior {
-  return reduceMotion ? "auto" : "smooth"
-}
-
-/**
  * WS5 — pure instant-vs-smooth decision for the sticky-to-bottom follow, extracted
  * so the BO-12 cold-restore regression is unit-testable without a DOM (the env is
  * node-only). Returns the `scrollTo` behavior to use AND whether this settle should

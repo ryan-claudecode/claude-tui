@@ -15,7 +15,7 @@ import {
   type NeedsAuthBlock,
   type AssistantTextBlock,
 } from "../lib/agentTranscript"
-import { nextScrollTop, scrollFollowBehavior, shouldStick, resizeFollowBehavior } from "../lib/scrollStick"
+import { nextScrollTop, scrollFollowBehavior, shouldStick } from "../lib/scrollStick"
 import { useSmoothReveal } from "../hooks/useSmoothReveal"
 import { prefersReducedMotion } from "../lib/reducedMotion"
 import AgentModelPicker from "./AgentModelPicker"
@@ -159,6 +159,9 @@ export default function AgentView({
   })
   const seededRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Inner content wrapper whose box GROWS with the transcript — the ResizeObserver
+  // observes this (the scroll container itself is inset:0 and never resizes).
+  const contentRef = useRef<HTMLDivElement>(null)
 
   // Subscribe to the structured stream, filtered to THIS terminal. The reducer
   // runs incrementally (append-in-place coalescing keeps settled block ids
@@ -282,21 +285,26 @@ export default function AgentView({
   // UI tweak (FOLLOW STREAMING GROWTH) — useSmoothReveal grows the assistant block's
   // height frame-by-frame during a turn, but the block-count effect above only fires
   // when a NEW block appends, so the revealing text + HR would scroll out of view.
-  // Observe the scroll container's content size and, while stuck-to-bottom, follow the
-  // growth to the bottom (smooth, or instant under reduced motion). A genuine user
-  // scroll-up de-arms stick (onScroll), so this never fights them; it re-arms when they
-  // return to the bottom. Pure decisions live in scrollStick.ts; this is just the wiring.
+  // Observe the INNER CONTENT wrapper (whose box grows; the scroll container is inset:0
+  // and never resizes) and, while stuck-to-bottom, follow the growth to the bottom.
+  // A genuine user scroll-up de-arms stick (onScroll), so this never fights them; it
+  // re-arms when they return to the bottom.
   useEffect(() => {
     const el = scrollRef.current
-    if (!el) return
+    const content = contentRef.current
+    if (!el || !content) return
     if (typeof ResizeObserver !== "function") return
     const ro = new ResizeObserver(() => {
       if (!stickRef.current) return
-      el.scrollTo({ top: el.scrollHeight, behavior: resizeFollowBehavior(reduceMotion()) })
+      // Continuous follow uses INSTANT ("auto"), never "smooth": the observer fires on
+      // every reveal frame (~60fps), and a smooth scrollTo retargeted each frame never
+      // settles and visibly rubber-bands behind the revealing edge. The motion comes
+      // from the text reveal itself; the scroll just keeps the bottom pinned.
+      el.scrollTo({ top: el.scrollHeight, behavior: "auto" })
     })
-    ro.observe(el)
+    ro.observe(content)
     return () => ro.disconnect()
-  }, [reduceMotion])
+  }, [])
 
   // Track stick state from scroll position. The smooth follow's own intermediate
   // scroll events may briefly read as "not at bottom" and transiently de-stick, but
@@ -343,6 +351,7 @@ export default function AgentView({
       ref={scrollRef}
       onScroll={onScroll}
     >
+      <div className="agent-view-content" ref={contentRef}>
       {state.blocks.length === 0 && !working ? (
         seeding ? (
           // BO-12 — a convo id is bound but the on-disk transcript read is still in
@@ -392,6 +401,7 @@ export default function AgentView({
           {working && <WorkingRow status={working.status} />}
         </>
       )}
+      </div>
     </div>
   )
 }
