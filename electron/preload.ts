@@ -42,6 +42,11 @@ contextBridge.exposeInMainWorld("api", {
   closeTerminal: (sessionId: string, terminalId: string) =>
     ipcRenderer.invoke("worksession:close-terminal", sessionId, terminalId),
   killWorkSession: (sessionId: string) => ipcRenderer.invoke("worksession:kill", sessionId),
+  // CAPP-82 — rename the durable work-session container (the sidebar row). A NEW
+  // accessor distinct from `renameSession` above, which is the TERMINAL-tier rename
+  // (-> terminal:rename) despite its name. Returns whether the rename applied.
+  renameWorkSession: (id: string, name: string) =>
+    ipcRenderer.invoke("worksession:rename", id, name),
   getWorkSessionContext: (sessionId: string) =>
     ipcRenderer.invoke("worksession:context", sessionId),
   getSessionOverview: (sessionId: string) =>

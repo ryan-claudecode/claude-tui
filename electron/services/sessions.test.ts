@@ -1573,3 +1573,58 @@ describe("SessionService.listFolderConversations + openConversationInFolder (CAP
     expect(term.spawned).toHaveLength(0)
   })
 })
+
+describe("SessionService.renameSession (CAPP-82 — container rename)", () => {
+  it("renames the work-session container, persists, and emits worksession:updated", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const sends: Array<{ ch: string; args: unknown[] }> = []
+    svc.setMainWindow({
+      isDestroyed: () => false,
+      webContents: { send: (ch: string, ...args: unknown[]) => sends.push({ ch, args }) },
+    } as any)
+    const s = svc.create()
+
+    const ok = svc.renameSession(s.id, "Renamed Container")
+    expect(ok).toBe(true)
+    expect(svc.get(s.id)!.name).toBe("Renamed Container")
+
+    // emitted the same update channel every other container mutation uses, with the
+    // renamed session payload
+    const update = sends.find((m) => m.ch === "worksession:updated")
+    expect(update).toBeDefined()
+    expect((update!.args[0] as { id: string; name: string }).name).toBe("Renamed Container")
+
+    // persisted to disk (survives a reload)
+    const b = new SessionService({ dir, now: () => 2000 })
+    b.load()
+    expect(b.get(s.id)!.name).toBe("Renamed Container")
+  })
+
+  it("trims surrounding whitespace before applying", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    expect(svc.renameSession(s.id, "   Spaced Out   ")).toBe(true)
+    expect(svc.get(s.id)!.name).toBe("Spaced Out")
+  })
+
+  it("rejects a blank / whitespace-only name (returns false, name unchanged, no emit)", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const sends: string[] = []
+    svc.setMainWindow({
+      isDestroyed: () => false,
+      webContents: { send: (ch: string) => sends.push(ch) },
+    } as any)
+    const s = svc.create()
+    const before = svc.get(s.id)!.name
+
+    expect(svc.renameSession(s.id, "")).toBe(false)
+    expect(svc.renameSession(s.id, "   ")).toBe(false)
+    expect(svc.get(s.id)!.name).toBe(before)
+    expect(sends).not.toContain("worksession:updated")
+  })
+
+  it("returns false for an unknown session id", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    expect(svc.renameSession("nope", "X")).toBe(false)
+  })
+})

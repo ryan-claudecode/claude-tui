@@ -32,6 +32,7 @@ import { useMissions } from "./hooks/useMissions"
 import { useWorkspaces } from "./hooks/useWorkspaces"
 import { filterByWorkspace } from "./lib/workspaceFilter"
 import { filterAttentionByWorkspace } from "./lib/workspaceScope"
+import { deriveResumingRows } from "./lib/resumingList"
 import { useSplitView } from "./hooks/useSplitView"
 import { useOverlays } from "./hooks/useOverlays"
 import { useTheme } from "./hooks/useTheme"
@@ -96,6 +97,8 @@ declare global {
       reopenTerminal: (sessionId: string, terminalId: string) => Promise<{ terminalId: string } | undefined>
       closeTerminal: (sessionId: string, terminalId: string) => Promise<void>
       killWorkSession: (sessionId: string) => Promise<void>
+      // CAPP-82 — rename the durable work-session container (the sidebar row).
+      renameWorkSession: (id: string, name: string) => Promise<boolean>
       getWorkSessionContext: (sessionId: string) => Promise<string | undefined>
       onWorkSessionUpdated: (callback: (session: any) => void) => void
       onWorkSessionRemoved: (callback: (id: string) => void) => void
@@ -230,7 +233,11 @@ export default function App() {
     handleKillSession,
     handleKillSessionById,
     handleRenameTerminal,
+    handleRenameSession,
     handleSelectSession,
+    resumingTracked,
+    resumingOrder,
+    clearResuming,
   } = useSessions(refreshOverviewsRef)
 
   // BO-12 (CAPP-51) — the shared, cross-pane transcript cache (folded TranscriptState
@@ -458,6 +465,38 @@ export default function App() {
   const scopedAttention = useMemo(
     () => filterAttentionByWorkspace(attentionEntries, activeWorkspaceId, sessions, allMissions),
     [attentionEntries, activeWorkspaceId, sessions, allMissions],
+  )
+
+  // CAPP-80 — the transient RESUMING section's rows, derived purely from the live
+  // (post-reopen) sessions + the hook's tracked-token set + restore order. The list
+  // shrinks as tokens clear (focus/dismiss/seen) and the section hides when empty.
+  // Scoped to the active workspace so a restored row can't yank focus off-scope.
+  const resumingRows = useMemo(
+    () => deriveResumingRows(scopedSessions, resumingTracked, resumingOrder),
+    [scopedSessions, resumingTracked, resumingOrder],
+  )
+
+  // Primary click on a RESUMING row: focus that session+terminal (reusing the
+  // existing select paths) and clear the row. A row carries its STABLE restore-token
+  // as `key` (the pre-reopen id) AND the LIVE terminal id to act on — clear by key,
+  // act by the live id.
+  const handleFocusResuming = useCallback(
+    (key: string, sessionId: string, terminalId: string) => {
+      focusEntry(sessionId, terminalId)
+      clearResuming(key)
+    },
+    [focusEntry, clearResuming],
+  )
+  // The always-visible Stop control: USER-initiated close via the EXISTING
+  // close-terminal affordance (same one Ctrl+W / the tab × use), then clear the row.
+  const handleStopResuming = useCallback(
+    (key: string, sessionId: string, terminalId: string) => {
+      void window.api.closeTerminal(sessionId, terminalId).catch((err) =>
+        toast("error", `Couldn't stop the terminal: ${errMsg(err)}`),
+      )
+      clearResuming(key)
+    },
+    [clearResuming],
   )
 
   const {
@@ -860,6 +899,11 @@ export default function App() {
         onKillSession={handleKillSession}
         onKillSessionById={handleKillSessionById}
         onSelectSession={handleSelectSession}
+        onRenameSession={handleRenameSession}
+        resumingRows={resumingRows}
+        onFocusResuming={handleFocusResuming}
+        onStopResuming={handleStopResuming}
+        onDismissResuming={clearResuming}
         workspaces={workspaces}
         activeWorkspace={activeWorkspace}
         workspaceScoped={activeWorkspaceId != null}

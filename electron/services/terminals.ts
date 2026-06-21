@@ -2110,6 +2110,17 @@ export class TerminalService {
   }
 
   rename(id: string, newName: string): boolean {
+    // BO-4a (CAPP-81): a structured terminal lives in `this.headless`, NOT
+    // `this.terminals`. Check it FIRST — mirroring kill()/write() — or a rename of a
+    // headless tab silently no-ops (returns false, never emits terminal:renamed), so
+    // the renderer's onSessionRenamed never fires and the tab snaps back.
+    const head = this.headless.get(id)
+    if (head) {
+      head.name = newName
+      this.sendToRenderer("terminal:renamed", id, newName)
+      this.emitEvent({ type: "renamed", id, name: newName })
+      return true
+    }
     const terminal = this.terminals.get(id)
     if (!terminal) return false
     terminal.name = newName

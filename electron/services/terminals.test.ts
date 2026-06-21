@@ -6,6 +6,8 @@ import {
   type PtyLike,
   type SpawnPty,
   type SpawnPtyOptions,
+  type SpawnProc,
+  type TerminalEvent,
 } from "./terminals"
 
 /**
@@ -119,6 +121,61 @@ describe("TerminalService emit channels (terminal:* not session:*)", () => {
     svc.rename(info.id, "new-name")
     expect(sent).toContain("terminal:renamed")
     expect(sent.some((c) => c.startsWith("session:"))).toBe(false)
+  })
+})
+
+describe("TerminalService.rename — headless (CAPP-81 regression)", () => {
+  // A headless (structured) terminal lives in `this.headless`, not `this.terminals`.
+  // The old rename() only checked the PTY registry and silently returned false for a
+  // headless tab — never updating the name, never emitting terminal:renamed — so the
+  // tab snapped back. rename() now checks headless FIRST (mirroring kill()/write()).
+  function makeHeadless(): { svc: TerminalService; sent: Array<{ channel: string; args: unknown[] }> } {
+    const spawnProc: SpawnProc = (file, args, options) => {
+      void file; void args; void options
+      return {
+        pid: 1,
+        onStdout() {},
+        onStderr() {},
+        onExit() {},
+        onError() {},
+        write() {},
+        kill() {},
+      }
+    }
+    const svc = new TerminalService({ spawnProc })
+    const sent: Array<{ channel: string; args: unknown[] }> = []
+    ;(svc as unknown as { sendToRenderer: (c: string, ...a: unknown[]) => void }).sendToRenderer =
+      (channel, ...args) => { sent.push({ channel, args }) }
+    return { svc, sent }
+  }
+
+  it("renames a HEADLESS terminal: updates the name, emits terminal:renamed, returns true", () => {
+    const { svc, sent } = makeHeadless()
+    const events: TerminalEvent[] = []
+    svc.onEvent((e) => events.push(e))
+
+    const info = svc.createHeadless("orig", process.cwd())
+    sent.length = 0
+    events.length = 0
+
+    const ok = svc.rename(info.id, "renamed-headless")
+    expect(ok).toBe(true)
+
+    // sendToRenderer fired terminal:renamed with the new name
+    const renamed = sent.find((s) => s.channel === "terminal:renamed")
+    expect(renamed).toBeDefined()
+    expect(renamed!.args).toEqual([info.id, "renamed-headless"])
+
+    // emitEvent fired the renamed event too (the seam SessionService folds into the ref)
+    expect(events).toContainEqual({ type: "renamed", id: info.id, name: "renamed-headless" })
+
+    // the name is reflected on the live list() entry
+    expect(svc.list().find((t) => t.id === info.id)?.name).toBe("renamed-headless")
+  })
+
+  it("returns false for an unknown id (neither PTY nor headless)", () => {
+    const { svc } = makeHeadless()
+    expect(svc.rename("does-not-exist", "x")).toBe(false)
   })
 })
 

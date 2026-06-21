@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, type MutableRefObject } from "react"
 import { toast } from "../lib/toast"
+import { commitRenameValue } from "../lib/renameValue"
+import { countResuming, resumingNotice, restoreTokens } from "../lib/resumingList"
 
 export interface Terminal {
   id: string
@@ -69,6 +71,14 @@ export function useSessions(
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
   const [config, setConfig] = useState<any>(null)
+  // CAPP-80 — the transient "RESUMING" section. `resumingOrder` is the immutable
+  // restore order (one `${sessionId}::${terminalId}` token per startup-restored
+  // terminal, captured BEFORE reopen mints new live ids); `resumingTracked` is the
+  // shrinking set of tokens still surfaced. A token is dropped when the user focuses
+  // or dismisses its row (or once the terminal is online AND seen). When the set
+  // empties, the section hides — self-closing. Both stay empty for a no-restore boot.
+  const [resumingOrder, setResumingOrder] = useState<string[]>([])
+  const [resumingTracked, setResumingTracked] = useState<Set<string>>(() => new Set())
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
   const activeTerminals = activeSession?.terminals ?? []
@@ -84,6 +94,16 @@ export function useSessions(
       if (list.length) {
         setActiveSessionId(list[0].id)
       }
+      // CAPP-80 — count the APP-MANAGED terminals being restored (dead refs across
+      // the loaded sessions; NEVER the external claude.exe farm), raise ONE transient
+      // launch notice, and seed the RESUMING section's tracked tokens BEFORE reopen
+      // (reopen mints fresh live ids, so we key by the pre-reopen session::terminal).
+      const restoringN = countResuming(list)
+      const notice = resumingNotice(restoringN)
+      if (notice) toast("info", notice)
+      const tokens = restoreTokens(list)
+      setResumingOrder(tokens)
+      setResumingTracked(new Set(tokens))
       // Auto-restore: reopen every dead terminal in parallel
       const reopens = list.flatMap((s) =>
         s.terminals
@@ -238,12 +258,101 @@ export function useSessions(
     await handleKillSessionById(activeSessionId)
   }, [activeSessionId, handleKillSessionById])
 
+  // Rename a TERMINAL (the tab). Optimistically reflect the new name locally so the
+  // tab doesn't flash the old name before the terminal:renamed event lands; the
+  // authoritative update still arrives via onSessionRenamed. CAPP-81: check the
+  // returned boolean — a headless terminal used to silently no-op — and toast (and
+  // roll back the optimistic name) on a false/throw so the failure isn't lost.
   const handleRenameTerminal = useCallback(async (id: string, newName: string) => {
+    let prev: string | undefined
+    setSessions((cur) =>
+      cur.map((s) => ({
+        ...s,
+        terminals: s.terminals.map((t) => {
+          if (t.id !== id) return t
+          prev = t.name
+          return { ...t, name: newName }
+        }),
+      })),
+    )
+    const rollback = () => {
+      if (prev === undefined) return
+      const old = prev
+      setSessions((cur) =>
+        cur.map((s) => ({
+          ...s,
+          terminals: s.terminals.map((t) => (t.id === id ? { ...t, name: old } : t)),
+        })),
+      )
+    }
     try {
-      await window.api.renameSession(id, newName)
+      const ok = await window.api.renameSession(id, newName)
+      if (!ok) {
+        toast("error", "Couldn't rename the terminal: it may have already closed.")
+        rollback()
+      }
     } catch (err) {
       toast("error", `Couldn't rename the terminal: ${errMsg(err)}`)
+      rollback()
     }
+  }, [])
+
+  // CAPP-82 — rename a WORK SESSION (the sidebar container row). Mirrors
+  // handleRenameTerminal: optimistic local name + rollback + toast on failure, but
+  // calls the NEW renameWorkSession accessor (-> worksession:rename), NOT the
+  // terminal-tier renameSession. The authoritative update arrives via the
+  // worksession:updated snapshot.
+  const handleRenameSession = useCallback(async (id: string, newName: string) => {
+    let prev: string | undefined
+    setSessions((cur) =>
+      cur.map((s) => {
+        if (s.id !== id) return s
+        prev = s.name
+        return { ...s, name: newName }
+      }),
+    )
+    const rollback = () => {
+      if (prev === undefined) return
+      const old = prev
+      setSessions((cur) => cur.map((s) => (s.id === id ? { ...s, name: old } : s)))
+    }
+    try {
+      const ok = await window.api.renameWorkSession(id, newName)
+      if (!ok) {
+        toast("error", "Couldn't rename the session.")
+        rollback()
+      }
+    } catch (err) {
+      toast("error", `Couldn't rename the session: ${errMsg(err)}`)
+      rollback()
+    }
+  }, [])
+
+  // CAPP-80 — drop one RESUMING token from the tracked set (focused/dismissed/seen).
+  // The derived rows shrink accordingly; the section hides when the set empties.
+  const clearResuming = useCallback((token: string) => {
+    setResumingTracked((prev) => {
+      if (!prev.has(token)) return prev
+      const next = new Set(prev)
+      next.delete(token)
+      return next
+    })
+  }, [])
+
+  // CAPP-80 — drop every RESUMING token belonging to a session (focusing the session
+  // counts as "seen" for all its restored terminals).
+  const clearResumingForSession = useCallback((sessionId: string) => {
+    setResumingTracked((prev) => {
+      let changed = false
+      const next = new Set(prev)
+      for (const token of prev) {
+        if (token.startsWith(`${sessionId}::`)) {
+          next.delete(token)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
   }, [])
 
   const handleSelectSession = useCallback(
@@ -251,8 +360,10 @@ export function useSessions(
       setActiveSessionId(id)
       const s = sessions.find((x) => x.id === id)
       setActiveTerminalId(s?.terminals[0]?.id ?? null)
+      // CAPP-80 — focusing a session clears its RESUMING rows (the user has noticed).
+      clearResumingForSession(id)
     },
-    [sessions],
+    [sessions, clearResumingForSession],
   )
 
   return {
@@ -272,6 +383,12 @@ export function useSessions(
     handleKillSession,
     handleKillSessionById,
     handleRenameTerminal,
+    handleRenameSession,
     handleSelectSession,
+    // CAPP-80 — the transient RESUMING section: tracked tokens + restore order
+    // (consumed by App.tsx's deriveResumingRows) and the clear callbacks.
+    resumingTracked,
+    resumingOrder,
+    clearResuming,
   }
 }

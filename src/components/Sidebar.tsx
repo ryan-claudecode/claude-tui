@@ -1,7 +1,9 @@
-import type { CSSProperties } from "react"
+import { useState, useCallback, type CSSProperties } from "react"
 import { deriveSessionRow } from "../lib/sessionRow"
 import { formatWaitTime } from "../lib/attentionRow"
 import { goalExcerpt, missionProgress, isMissionDismissable } from "../lib/missionRow"
+import { commitRenameValue } from "../lib/renameValue"
+import type { ResumingRow } from "../lib/resumingList"
 import type { AttentionEntry } from "../hooks/useAttention"
 import type { MissionSummary } from "../hooks/useMissions"
 import type { WorkspaceSummary } from "../hooks/useWorkspaces"
@@ -26,6 +28,14 @@ interface Props {
   onKillSession: () => void
   onKillSessionById: (id: string) => void
   onSelectSession: (id: string) => void
+  // CAPP-82 — rename the work-session container (double-click the row name).
+  onRenameSession: (id: string, name: string) => void
+  // CAPP-80 — the transient "RESUMING" section: rows for startup-restored
+  // terminals, focus (primary click) + stop (always-visible control) + dismiss.
+  resumingRows: ResumingRow[]
+  onFocusResuming: (key: string, sessionId: string, terminalId: string) => void
+  onStopResuming: (key: string, sessionId: string, terminalId: string) => void
+  onDismissResuming: (key: string) => void
   // WS-D/H — the workspace area (header + pill dropdown + active-workspace
   // controls, top of the sidebar). The sections above (NEEDS YOU / MISSIONS /
   // SESSIONS) are pre-filtered to the active workspace by App.tsx; `workspaceScoped`
@@ -64,17 +74,78 @@ export default function Sidebar({
   sessions, activeSessionId,
   attentionEntries, attentionNow, onJumpAttention, onDismissAttention,
   missions, onOpenMission, onDismissMission, onNewMission, onFocusConductor,
-  onNewSession, onKillSession, onKillSessionById, onSelectSession,
+  onNewSession, onKillSession, onKillSessionById, onSelectSession, onRenameSession,
+  resumingRows, onFocusResuming, onStopResuming, onDismissResuming,
   workspaces, activeWorkspace, workspaceScoped,
   onSelectAllWorkspaces, onSelectWorkspace, onNewWorkspace, onRenameWorkspace, onDeleteWorkspace,
   onSetWorkspaceDir, onRestoreConversation,
 }: Props) {
+  // CAPP-82 — inline rename of the session container row (mirrors TabBar's terminal
+  // editor): double-click → controlled input, commit on Enter/blur, cancel on Escape.
+  // Uses the shared commitRenameValue helper so the trim + blank-revert policy stays
+  // identical to the tab editor.
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState("")
+
+  const commitSessionRename = useCallback(() => {
+    if (editingSessionId) {
+      const prev = sessions.find((s) => s.id === editingSessionId)?.name ?? ""
+      const { name, changed } = commitRenameValue(editValue, prev)
+      if (changed) onRenameSession(editingSessionId, name)
+    }
+    setEditingSessionId(null)
+  }, [editingSessionId, editValue, sessions, onRenameSession])
+
   return (
     <div className="sidebar">
       <div className="sidebar-brand">
         <span className="brand-icon">◈</span>
         <span>ClaudeTUI</span>
       </div>
+
+      {/* CAPP-80 — transient RESUMING section, pinned ABOVE NEEDS YOU. One row per
+          startup-restored APP-MANAGED terminal so non-active restored agents are
+          visible + actionable. Self-closing: a row clears on focus/dismiss; the
+          whole section hides when empty. Each row has an ALWAYS-VISIBLE Stop control
+          (no hover-reveal) wired to the app's existing close-terminal affordance. */}
+      {resumingRows.length > 0 && (
+        <div className="sidebar-section resuming-section">
+          <div className="sidebar-header">RESUMING ({resumingRows.length})</div>
+          {resumingRows.map((r, i) => (
+            <div
+              key={r.key}
+              className={`resuming-item ${r.state}`}
+              style={{ "--i": i } as CSSProperties}
+              onClick={() => onFocusResuming(r.key, r.sessionId, r.terminalId)}
+              title="Jump to this restoring terminal"
+            >
+              <div className="resuming-item-line1">
+                <span className={`status-dot ${r.state === "ready" ? "idle" : "dead"}`} />
+                <span className="resuming-name">{r.sessionName} · {r.terminalName}</span>
+                <button
+                  className="resuming-stop"
+                  title="Stop this terminal"
+                  aria-label={`Stop ${r.sessionName} ${r.terminalName}`}
+                  onClick={(e) => { e.stopPropagation(); onStopResuming(r.key, r.sessionId, r.terminalId) }}
+                >
+                  Stop
+                </button>
+                <button
+                  className="resuming-dismiss"
+                  title="Dismiss"
+                  aria-label="Dismiss resuming entry"
+                  onClick={(e) => { e.stopPropagation(); onDismissResuming(r.key) }}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="resuming-item-line2">
+                {r.state === "ready" ? "Ready" : "Resuming…"}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* WS-D/H — workspace area: section header + select-only pill dropdown +
           always-visible active-workspace controls (folder row / rename / delete),
@@ -222,7 +293,33 @@ export default function Sidebar({
             >
               <div className="session-item-line1">
                 <span className={`status-dot ${dot}`} />
-                <span className="session-name">{s.name}</span>
+                {editingSessionId === s.id ? (
+                  <input
+                    className="session-rename-input"
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitSessionRename()
+                      if (e.key === "Escape") setEditingSessionId(null)
+                    }}
+                    onBlur={commitSessionRename}
+                    autoFocus
+                    ref={(el) => el?.select()}
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <span
+                    className="session-name"
+                    onDoubleClick={(e) => {
+                      e.stopPropagation()
+                      setEditingSessionId(s.id)
+                      setEditValue(s.name)
+                    }}
+                  >
+                    {s.name}
+                  </span>
+                )}
                 <span className="session-count">{count} ▣</span>
                 <button
                   className="session-kill-btn"

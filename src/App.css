@@ -1351,6 +1351,88 @@ body {
 .session-item:hover .session-kill-btn { opacity: 1; }
 .session-kill-btn:hover { color: var(--red); }
 
+/* CAPP-82 — inline session-rename input. Mirrors .tab-rename-input (same tokens,
+   transparent/borderless, inherits the row's font) so the two editors look identical. */
+.session-rename-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font-size: inherit;
+  font-family: inherit;
+  padding: 0;
+  min-width: 40px;
+}
+
+/* CAPP-80 — transient "RESUMING (n)" section (top of the sidebar, above NEEDS YOU).
+   Surfaces startup-restored terminals with always-visible Stop + dismiss controls
+   (NO hover-reveal — both are visible at all times). Mirrors the attention-item
+   layout/tokens; the accent border-left reads as "in progress" without a new palette. */
+.resuming-section { flex-shrink: 0; }
+.resuming-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px var(--s-2);
+  padding: 7px 10px 7px 11px;
+  cursor: pointer;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-3);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.resuming-item.ready { border-left-color: var(--attn-3); }
+.resuming-item:hover { background: var(--bg-4); }
+.resuming-item-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.resuming-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-1);
+  font-weight: 550;
+}
+.resuming-stop {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: var(--bg-5);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.resuming-stop:hover { color: var(--red); border-color: var(--red); }
+.resuming-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: color var(--fast) var(--ease);
+}
+.resuming-dismiss:hover { color: var(--text-1); }
+.resuming-item-line2 {
+  font-size: 11px;
+  color: var(--text-3);
+  padding-left: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .overview-panel { padding: 12px 16px; overflow-y: auto; font-size: 13px; }
 .overview-title { margin: 0 0 12px; font-size: 15px; }
 .overview-section { margin-bottom: 16px; }

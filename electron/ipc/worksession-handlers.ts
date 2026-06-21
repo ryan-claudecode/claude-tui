@@ -31,6 +31,11 @@ export function registerWorkSessionHandlers(deps: { workSessionService: SessionS
   ipcMain.handle("worksession:kill", (_e, sessionId: string) =>
     workSessionService.killSession(sessionId),
   )
+  // CAPP-82 — rename the durable work-session container (the sidebar row). Distinct
+  // from `terminal:rename` (the terminal-tier rename); returns whether it applied.
+  ipcMain.handle("worksession:rename", (_e, sessionId: string, newName: string) =>
+    workSessionService.renameSession(sessionId, newName),
+  )
   ipcMain.handle("worksession:context", (_e, sessionId: string) =>
     workSessionService.getContext(sessionId),
   )

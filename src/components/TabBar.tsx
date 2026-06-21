@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react"
+import { commitRenameValue } from "../lib/renameValue"
 import WindowControls from "./WindowControls"
 
 interface Props {
@@ -30,12 +31,17 @@ export default function TabBar({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState("")
 
+  // CAPP-82 — share the trim + blank-revert + changed-flag policy with the session
+  // row editor via commitRenameValue, so the two inline editors can't drift. Skip
+  // the IPC call when the name didn't actually change (no-op rename).
   const commitRename = useCallback(() => {
-    if (editingId && editValue.trim()) {
-      onRenameTerminal(editingId, editValue.trim())
+    if (editingId) {
+      const prev = terminals.find((t) => t.id === editingId)?.name ?? ""
+      const { name, changed } = commitRenameValue(editValue, prev)
+      if (changed) onRenameTerminal(editingId, name)
     }
     setEditingId(null)
-  }, [editingId, editValue, onRenameTerminal])
+  }, [editingId, editValue, terminals, onRenameTerminal])
 
   return (
     <div className="tab-bar">
@@ -62,6 +68,7 @@ export default function TabBar({
               }}
               onBlur={commitRename}
               autoFocus
+              ref={(el) => el?.select()}
               onClick={(e) => e.stopPropagation()}
             />
           ) : (

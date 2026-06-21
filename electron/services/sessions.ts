@@ -1002,6 +1002,24 @@ export class SessionService {
     this.persist(s)
   }
 
+  /**
+   * CAPP-82 — rename the durable work-session CONTAINER (the sidebar row), distinct
+   * from `nameTerminal` which renames a terminal ref inside it. Guards blank /
+   * whitespace-only input (returns false, name untouched — the renderer reverts to
+   * the prior name) and trims; persists + emits the same `worksession:updated`
+   * snapshot every other container mutation does, so the sidebar updates reactively.
+   */
+  renameSession(id: string, newName: string): boolean {
+    const s = this.sessions.get(id)
+    if (!s) return false
+    const trimmed = newName.trim()
+    if (!trimmed) return false
+    s.name = trimmed
+    this.persist(s)
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
+    return true
+  }
+
   private readonly activityStaleMs = 20_000
 
   /**
