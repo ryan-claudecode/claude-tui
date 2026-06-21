@@ -124,6 +124,11 @@ contextBridge.exposeInMainWorld("api", {
   onThemeChanged: (callback: (mode: string) => void) =>
     ipcRenderer.on("theme:changed", (_e, mode) => callback(mode)),
 
+  // CAPP-39 gate ④ — set the DEFAULT rendering engine for NEW terminals (the
+  // command-palette rollback write-path). Persists to config + applies live.
+  setRenderingEngine: (engine: "xterm" | "structured") =>
+    ipcRenderer.invoke("config:set-rendering-engine", engine),
+
   // Window controls (frameless)
   windowMinimize: () => ipcRenderer.send("window:minimize"),
   windowMaximize: () => ipcRenderer.send("window:maximize"),

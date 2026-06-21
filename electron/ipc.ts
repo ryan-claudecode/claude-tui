@@ -139,11 +139,13 @@ export async function setupIpc(win: BrowserWindow) {
     config.defaultCommand ?? "claude",
     config.defaultArgs ?? ["--dangerously-skip-permissions"],
   )
-  // BO-4a — flip the structured engine ON when config.rendering.engine says so;
-  // defaults to "xterm" (resolveRenderingEngine), so create() is unchanged unless
-  // the user opts in. From here, the normal new-session / new-terminal / reopen
-  // paths (all routed through SessionService → TerminalService.create) spawn the
-  // headless stream-json engine instead of an interactive PTY.
+  // BO-4a / CAPP-39 gate ④ — wire the rendering engine from config. The default is
+  // now "structured" (resolveRenderingEngine returns it unless config explicitly says
+  // "xterm"), so the normal new-session / new-terminal / reopen paths (all routed
+  // through SessionService → TerminalService.create) spawn the headless stream-json
+  // engine by default; only an explicit `rendering.engine: "xterm"` pins the legacy
+  // interactive PTY globally. The command-palette rollback write-path
+  // (config:set-rendering-engine) lets the user flip this default back at runtime.
   sessionService.setEngine(resolveRenderingEngine(config))
   // BO-6 — the default `--model` new structured terminals spawn with. An unset
   // config.rendering.model seeds (best-effort) from the user's own

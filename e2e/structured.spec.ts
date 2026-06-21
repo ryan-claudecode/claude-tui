@@ -154,6 +154,44 @@ test.afterEach(async () => {
   }
 })
 
+test("CAPP-39 gate ④: with NO seeded config, a new session DEFAULTS to the structured surface", async () => {
+  // The negative control proving the DEFAULT engine is now structured (CAPP-39 gate ④).
+  // Unlike the other tests here, this seeds NO config.json, so resolveRenderingEngine
+  // sees an absent rendering.engine and must resolve to "structured" (the new default).
+  // CLAUDETUI_FAKE_STREAM=1 keeps it hermetic: opening a structured session would
+  // otherwise spawn a real `claude -p` (the default routes create() → createHeadless).
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-default-engine-"))
+  // NOTE: deliberately NO seedStructuredConfig — an empty ~/.claude-tui exercises the
+  // default-resolution path, not an explicit opt-in.
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: {
+      ...process.env,
+      USERPROFILE: tempHome, // hermetic home → empty config → DEFAULT engine applies
+      CLAUDETUI_FAKE_STREAM: "1", // structured spawn uses the canned stream, not real claude
+      CI: "1",
+    },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  // Open a session with no config seeded — the default engine decides the surface.
+  await win.locator(".sidebar-action", { hasText: "+ New session" }).click()
+
+  // The STRUCTURED surface mounts (AgentComposer textarea), proving the default is now
+  // structured — and there is NO xterm canvas (the negative control).
+  await expect(win.locator(".agent-composer textarea")).toHaveCount(1, { timeout: 15_000 })
+  await expect(win.locator(".xterm")).toHaveCount(0)
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
 test("structured engine: composer is usable and a streamed reply renders", async () => {
   tempHome = await mkdtemp(join(tmpdir(), "claudetui-structured-"))
   await seedStructuredConfig(tempHome)

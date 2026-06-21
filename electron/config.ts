@@ -46,8 +46,10 @@ export type RenderingEngine = "xterm" | "structured"
 /**
  * Rendering options (BO-4a). Additive/optional — no schema version bump (mirrors
  * the AttentionConfig precedent). `engine` selects which transport a freshly
- * spawned terminal uses; absent/unrecognized resolves to "xterm" via
- * {@link resolveRenderingEngine}, so the default live behavior is unchanged.
+ * spawned terminal uses; absent/unrecognized resolves to "structured" via
+ * {@link resolveRenderingEngine} (CAPP-39 gate ④ — the default is now the headless
+ * stream-json engine), so only an EXPLICIT `engine: "xterm"` opts back into the
+ * legacy interactive PTY globally.
  *
  * BO-6 — `model` is the default `--model` for new STRUCTURED terminals (the
  * headless engine). Additive/optional; absent resolves to the `opus` ALIAS via
@@ -104,12 +106,15 @@ export interface TuiConfig {
 
 /**
  * Resolve the rendering engine from a (possibly partial/legacy) config, defaulting
- * to "xterm" when the field is absent or not a recognized value. The single place
- * the default lives, shared by the main process (engine switch) and any consumer
- * that reads `config.rendering`.
+ * to "structured" (CAPP-39 gate ④) when the field is absent or not a recognized
+ * value — only an EXPLICIT `engine: "xterm"` selects the legacy interactive PTY.
+ * The single place the default lives, shared by the main process (engine switch)
+ * and any consumer that reads `config.rendering`. The per-terminal raw-view escape
+ * hatch (setTerminalEngine / the AgentView "Raw view" button) remains the way back
+ * to xterm for a single terminal.
  */
 export function resolveRenderingEngine(config?: { rendering?: RenderingConfig } | null): RenderingEngine {
-  return config?.rendering?.engine === "structured" ? "structured" : "xterm"
+  return config?.rendering?.engine === "xterm" ? "xterm" : "structured"
 }
 
 /**
@@ -231,6 +236,21 @@ export function setThemeMode(mode: ThemeMode): void {
   const data = readRawConfig()
   if (!data.theme) data.theme = {}
   data.theme.mode = mode
+  saveVersioned(CONFIG_FILE, SCHEMA_VERSION, data)
+}
+
+/**
+ * CAPP-39 gate ④ — persist the DEFAULT rendering engine new terminals spawn with
+ * (the rollback write-path for the command palette). Mirrors {@link setThemeMode}:
+ * read-modify-save through the versioned envelope, creating `rendering` if absent
+ * and preserving its other fields (model/effort). Only affects NEXT-spawned
+ * terminals — currently-open terminals are unaffected (the per-terminal raw-view
+ * escape hatch handles the current one).
+ */
+export function setRenderingEngine(engine: RenderingEngine): void {
+  const data = readRawConfig()
+  if (!data.rendering) data.rendering = {}
+  data.rendering.engine = engine
   saveVersioned(CONFIG_FILE, SCHEMA_VERSION, data)
 }
 

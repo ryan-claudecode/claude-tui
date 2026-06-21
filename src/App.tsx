@@ -198,6 +198,8 @@ declare global {
       getTheme: () => Promise<string>
       setTheme: (mode: string) => Promise<void>
       onThemeChanged: (callback: (mode: string) => void) => void
+      // CAPP-39 gate ④ — set the DEFAULT engine for NEW terminals (rollback write-path)
+      setRenderingEngine: (engine: "xterm" | "structured") => Promise<void>
       // Window controls (frameless)
       windowMinimize: () => void
       windowMaximize: () => void
@@ -688,6 +690,28 @@ export default function App() {
         id: "switch-theme",
         label: `Switch theme (current: ${themeMode})`,
         run: cycleTheme,
+      },
+      // CAPP-39 gate ④ — set the DEFAULT engine for NEW terminals (the rollback
+      // write-path; persists to config + applies on the next-spawned terminal).
+      // This is distinct from the per-terminal "Switch to raw terminal (xterm)"
+      // escape hatch below, which switches the CURRENT terminal's engine.
+      {
+        id: "default-engine-structured",
+        label: "Default new terminals to structured",
+        keywords: "engine default config headless agent structured new terminals rendering",
+        run: async () => {
+          await window.api.setRenderingEngine("structured")
+          toast("success", "New terminals will use the structured engine.")
+        },
+      },
+      {
+        id: "default-engine-xterm",
+        label: "Default new terminals to raw terminal (xterm)",
+        keywords: "engine default config pty legacy raw terminal xterm new terminals rendering rollback",
+        run: async () => {
+          await window.api.setRenderingEngine("xterm")
+          toast("success", "New terminals will use the raw terminal (xterm).")
+        },
       },
     ]
     // CAPP-39 gate ③ — the per-terminal raw-view escape hatch, bidirectional from the

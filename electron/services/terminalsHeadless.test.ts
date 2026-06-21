@@ -968,13 +968,17 @@ function makeDualService(): { svc: TerminalService; ptys: FakePtyLite[]; procs: 
 }
 
 describe("BO-4a engine switch — create() routes by the configured engine", () => {
-  it("default engine is xterm", () => {
+  // CAPP-39 gate ④ — the DEFAULT engine flipped to "structured".
+  it("default engine is structured (CAPP-39 gate ④)", () => {
     const { svc } = makeDualService()
-    expect(svc.getEngine()).toBe("xterm")
+    expect(svc.getEngine()).toBe("structured")
   })
 
-  it("engine=xterm (default): create() spawns a PTY, NOT the headless transport; args byte-unchanged", () => {
+  it("engine=xterm: create() spawns a PTY, NOT the headless transport; args byte-unchanged", () => {
     const { svc, ptys, procs } = makeDualService()
+    // CAPP-39 gate ④ — xterm is no longer the default; opt in explicitly to test the
+    // legacy PTY branch (still byte-unchanged when selected).
+    svc.setEngine("xterm")
     const info = svc.create("t", process.cwd())
     expect(ptys).toHaveLength(1)
     expect(procs).toHaveLength(0)
@@ -985,6 +989,16 @@ describe("BO-4a engine switch — create() routes by the configured engine", () 
     expect(joined).not.toContain("--permission-prompt-tool")
     // It still carries the default interactive flags (unchanged behavior).
     expect(joined).toContain("--dangerously-skip-permissions")
+  })
+
+  it("engine=structured (default): create() routes to createHeadless (stream-json), NOT a PTY", () => {
+    // CAPP-39 gate ④ — with no setEngine call the DEFAULT now routes to the headless
+    // transport, so the structured path is reachable without opting in.
+    const { svc, ptys, procs } = makeDualService()
+    const info = svc.create("t", process.cwd())
+    expect(procs).toHaveLength(1)
+    expect(ptys).toHaveLength(0)
+    expect(svc.isHeadless(info.id)).toBe(true)
   })
 
   it("engine=structured: create() routes to createHeadless (stream-json), NOT a PTY", () => {
@@ -1011,14 +1025,17 @@ describe("BO-4a engine switch — create() routes by the configured engine", () 
     expect(joined).not.toContain("--dangerously-skip-permissions")
   })
 
-  it("setEngine pins xterm for any non-structured value (safe default)", () => {
+  it("setEngine resolves any non-xterm value to structured (CAPP-39 gate ④ safe default)", () => {
+    // CAPP-39 gate ④ — the normalization inverted: only an explicit "xterm" pins the
+    // legacy PTY; an unrecognized value now degrades to the structured default
+    // (mirrors resolveRenderingEngine so the service and resolver agree).
     const { svc } = makeDualService()
     svc.setEngine("bogus" as never)
-    expect(svc.getEngine()).toBe("xterm")
-    svc.setEngine("structured")
     expect(svc.getEngine()).toBe("structured")
     svc.setEngine("xterm")
     expect(svc.getEngine()).toBe("xterm")
+    svc.setEngine("structured")
+    expect(svc.getEngine()).toBe("structured")
   })
 
   it("structured create() preserves identity + emits created on the same seam", () => {
@@ -1034,7 +1051,9 @@ describe("BO-4a engine switch — create() routes by the configured engine", () 
 
   it("BO-4b: the returned info carries the ACTUAL engine (xterm vs structured)", () => {
     const { svc } = makeDualService()
-    // Default engine → an xterm PTY terminal, active on spawn.
+    // CAPP-39 gate ④ — xterm is no longer the default; opt in to exercise the PTY path.
+    // An xterm PTY terminal is active on spawn.
+    svc.setEngine("xterm")
     const x = svc.create("x", process.cwd())
     expect(x.engine).toBe("xterm")
     expect(x.state).toBe("active")
@@ -1067,7 +1086,8 @@ describe("CAPP-39 gate ③ — createXterm spawns a PTY regardless of the global
   it("createXterm and create()'s xterm branch produce byte-equivalent spawn args (same body)", () => {
     const { svc: a, ptys: ptysA } = makeDualService()
     const { svc: b, ptys: ptysB } = makeDualService()
-    a.create("t", "/repo") // global engine xterm (default) → create() xterm branch
+    a.setEngine("xterm") // CAPP-39 gate ④ — opt into the legacy branch (no longer default)
+    a.create("t", "/repo") // global engine xterm → create() xterm branch
     b.setEngine("structured")
     b.createXterm("t", "/repo") // escape-hatch xterm spawn under a structured global
     // The id differs (minted per spawn), but the shell + args are identical — proving
@@ -1105,8 +1125,10 @@ describe("CAPP-39 gate ③ — createXterm spawns a PTY regardless of the global
     // First message flips it active (generating) → busy.
     svc.sendAgentMessage(info.id, userMessage("hi"))
     expect(svc.isBusy(info.id)).toBe(true)
-    // An xterm PTY has no turn machine → never busy here.
+    // An xterm PTY has no turn machine → never busy here. CAPP-39 gate ④ — xterm is
+    // no longer the default, so opt in explicitly to spawn the PTY.
     const { svc: dual } = makeDualService()
+    dual.setEngine("xterm")
     const x = dual.create("x", process.cwd())
     expect(dual.isBusy(x.id)).toBe(false)
     // Unknown id → not busy.
@@ -1167,6 +1189,7 @@ describe("BO-4a list()/getActivity() include headless terminals (the big BO-5 re
 
   it("list()/getActivity() include BOTH transports when mixed", () => {
     const { svc, ptys } = makeDualService()
+    svc.setEngine("xterm") // CAPP-39 gate ④ — opt into xterm (no longer default) for the PTY half
     const pty = svc.create("pty", process.cwd()) // xterm
     void ptys
     svc.setEngine("structured")
@@ -1373,7 +1396,8 @@ describe("BO-6 createHeadless — --model on the spawn args", () => {
 
   it("the xterm (legacy PTY) path does NOT pass --model — byte-unchanged", () => {
     const { svc, ptys, procs } = makeDualService()
-    svc.create("t", process.cwd()) // default engine = xterm
+    svc.setEngine("xterm") // CAPP-39 gate ④ — xterm is no longer the default; opt in
+    svc.create("t", process.cwd())
     expect(procs).toHaveLength(0)
     expect(ptys[0].args.join(" ")).not.toContain("--model")
   })
@@ -1447,8 +1471,9 @@ describe("CAPP-46 createHeadless — --effort on the spawn args", () => {
 
   it("the xterm (legacy PTY) path does NOT pass --effort — byte-unchanged", () => {
     const { svc, ptys, procs } = makeDualService()
+    svc.setEngine("xterm") // CAPP-39 gate ④ — xterm is no longer the default; opt in
     svc.setEffort("high") // even with a default set, the xterm path ignores it
-    svc.create("t", process.cwd()) // default engine = xterm
+    svc.create("t", process.cwd())
     expect(procs).toHaveLength(0)
     expect(ptys[0].args.join(" ")).not.toContain("--effort")
   })

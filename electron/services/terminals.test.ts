@@ -73,7 +73,15 @@ function makeTestTerminalService(): { svc: TerminalService; spawned: FakePty[] }
     spawned.push(fake)
     return fake
   }
-  return { svc: new TerminalService({ spawnPty }), spawned }
+  const svc = new TerminalService({ spawnPty })
+  // CAPP-39 gate ④ — the DEFAULT engine is now "structured", so create() would route
+  // to createHeadless (the spawnProc seam, which falls back to the REAL `claude -p`)
+  // instead of the injected fake PTY. Every test built on this factory exercises the
+  // XTERM/PTY path (it injects only spawnPty and asserts on the recorded FakePty), so
+  // pin the engine to "xterm" here to PRESERVE that intent. Tests that mean to test
+  // the headless path construct the service directly with a spawnProc (see makeHeadless).
+  svc.setEngine("xterm")
+  return { svc, spawned }
 }
 
 describe("TerminalService emit channels (terminal:* not session:*)", () => {

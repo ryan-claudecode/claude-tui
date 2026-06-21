@@ -6,7 +6,14 @@ import type { TestRunnerService } from "../services/tests"
 import type { LayoutService } from "../services/layouts"
 import type { BroadcastService } from "../services/broadcast"
 import type { NotesService } from "../services/notes"
-import { getThemeMode, setThemeMode, type TuiConfig, type ThemeMode } from "../config"
+import {
+  getThemeMode,
+  setThemeMode,
+  setRenderingEngine,
+  type TuiConfig,
+  type ThemeMode,
+  type RenderingEngine,
+} from "../config"
 
 export function registerAppHandlers(deps: {
   config: TuiConfig
@@ -49,6 +56,15 @@ export function registerAppHandlers(deps: {
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send("theme:changed", mode)
     }
+  })
+  // CAPP-39 gate ④ — the rollback write-path: set the DEFAULT engine new terminals
+  // spawn with. Persists to config AND calls the live TerminalService.setEngine so
+  // the change applies to the NEXT-spawned terminal without a restart (mirrors how
+  // ipc.ts startup wires setEngine(resolveRenderingEngine(config))). Currently-open
+  // terminals are unaffected; the per-terminal raw-view escape hatch handles those.
+  ipcMain.handle("config:set-rendering-engine", (_e, engine: RenderingEngine) => {
+    setRenderingEngine(engine)
+    sessionService.setEngine(engine)
   })
 
   // App testing tools

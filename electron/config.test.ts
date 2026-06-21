@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import {
   getThemeMode,
   setThemeMode,
+  setRenderingEngine,
   loadConfig,
   resolveRenderingEngine,
   resolveRenderingModel,
@@ -94,14 +95,56 @@ describe("rendering.engine config (BO-4a)", () => {
     expect(loadConfig().rendering).toBeUndefined()
   })
 
-  it("resolveRenderingEngine defaults to xterm when absent/unknown, structured only when set", () => {
-    expect(resolveRenderingEngine(undefined)).toBe("xterm")
-    expect(resolveRenderingEngine(null)).toBe("xterm")
-    expect(resolveRenderingEngine({})).toBe("xterm")
-    expect(resolveRenderingEngine({ rendering: {} })).toBe("xterm")
-    expect(resolveRenderingEngine({ rendering: { engine: "bogus" as never } })).toBe("xterm")
+  // CAPP-39 gate ④ — the default flipped: absent/unknown now resolves to "structured";
+  // ONLY an explicit `engine: "xterm"` selects the legacy interactive PTY.
+  it("resolveRenderingEngine defaults to structured when absent/unknown, xterm only when explicitly set", () => {
+    expect(resolveRenderingEngine(undefined)).toBe("structured")
+    expect(resolveRenderingEngine(null)).toBe("structured")
+    expect(resolveRenderingEngine({})).toBe("structured")
+    expect(resolveRenderingEngine({ rendering: {} })).toBe("structured")
+    expect(resolveRenderingEngine({ rendering: { engine: "bogus" as never } })).toBe("structured")
     expect(resolveRenderingEngine({ rendering: { engine: "xterm" } })).toBe("xterm")
     expect(resolveRenderingEngine({ rendering: { engine: "structured" } })).toBe("structured")
+  })
+
+  // CAPP-39 gate ④ — the rollback write-path. Mirrors the setThemeMode test:
+  // read-modify-save through the versioned envelope, preserving other rendering
+  // fields (model/effort). Both directions are exercised.
+  it("setRenderingEngine writes rendering.engine in the versioned envelope, preserving other rendering fields", () => {
+    // already-versioned file on disk (so no read-repair rewrite fires first)
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({ schemaVersion: 1, data: { rendering: { model: "sonnet", effort: "high" } } }),
+    )
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {})
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined as any)
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {})
+
+    setRenderingEngine("xterm")
+
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+    const written = JSON.parse(writeSpy.mock.calls[0][1] as string)
+    expect(written.schemaVersion).toBe(1)
+    expect(written.data.rendering.engine).toBe("xterm")
+    // other rendering fields survive the write
+    expect(written.data.rendering.model).toBe("sonnet")
+    expect(written.data.rendering.effort).toBe("high")
+  })
+
+  it("setRenderingEngine creates the rendering object when absent and writes structured", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({ schemaVersion: 1, data: { theme: { mode: "dark" } } }),
+    )
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {})
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined as any)
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {})
+
+    setRenderingEngine("structured")
+
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+    const written = JSON.parse(writeSpy.mock.calls[0][1] as string)
+    expect(written.data.rendering.engine).toBe("structured")
+    // unrelated fields are untouched
+    expect(written.data.theme.mode).toBe("dark")
   })
 })
 

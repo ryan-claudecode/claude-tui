@@ -630,10 +630,13 @@ export class TerminalService {
   /**
    * BO-4a — the rendering transport new terminals spawn with. "xterm" routes
    * create() to the legacy interactive PTY; "structured" routes it to
-   * createHeadless (stream-json engine). Defaults to "xterm" so create() is
-   * byte-behavior-unchanged until the switch is flipped from config (ipc.ts).
+   * createHeadless (stream-json engine). CAPP-39 gate ④ — defaults to "structured"
+   * (the headless engine is now the default surface); ipc.ts still wires the config
+   * via setEngine(resolveRenderingEngine(config)), so an explicit `rendering.engine:
+   * "xterm"` pins the legacy PTY globally and the per-terminal raw-view escape hatch
+   * (createXterm / setTerminalEngine) remains the per-terminal way back.
    */
-  private engine: RenderingEngine = "xterm"
+  private engine: RenderingEngine = "structured"
   /**
    * BO-6 — the default `--model` new STRUCTURED terminals spawn with (wired from
    * config.rendering.model in ipc.ts via {@link resolveRenderingModel}). A
@@ -881,12 +884,13 @@ export class TerminalService {
 
   /**
    * BO-4a — set the rendering engine new terminals spawn with (wired from
-   * config.rendering.engine in ipc.ts via {@link resolveRenderingEngine}). Any
-   * value other than "structured" pins "xterm", so an unrecognized config can
-   * only ever degrade to the safe default.
+   * config.rendering.engine in ipc.ts via {@link resolveRenderingEngine}). CAPP-39
+   * gate ④ — only an explicit "xterm" pins the legacy PTY; any other value (including
+   * an unrecognized config) resolves to the "structured" default, mirroring
+   * resolveRenderingEngine so the service and the resolver agree.
    */
   setEngine(engine: RenderingEngine): void {
-    this.engine = engine === "structured" ? "structured" : "xterm"
+    this.engine = engine === "xterm" ? "xterm" : "structured"
   }
 
   /** BO-4a test/inspection accessor — the engine new terminals currently use. */

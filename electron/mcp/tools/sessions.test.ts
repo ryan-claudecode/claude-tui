@@ -46,7 +46,13 @@ function makeTerminals(): { svc: TerminalService; ptys: FakePty[] } {
     ptys.push(f)
     return f
   }
-  return { svc: new TerminalService({ spawnProc, spawnPty }), ptys }
+  const svc = new TerminalService({ spawnProc, spawnPty })
+  // CAPP-39 gate ④ — the DEFAULT engine is now "structured". This factory's xterm-path
+  // tests (the legacy /handoff fire, the WS-G create_session cwd assertions) call
+  // create() and assert on the recorded FakePty (`ptys[0]`), so pin "xterm" to PRESERVE
+  // that intent; the structured tests below still flip it explicitly via setEngine.
+  svc.setEngine("xterm")
+  return { svc, ptys }
 }
 
 /** A fake McpServer capturing registered tool handlers by name. */
@@ -119,7 +125,7 @@ describe("trigger_handoff MCP routing (BO-4a punch-list c)", () => {
   })
 
   it("an XTERM terminal still fires the legacy /handoff (unchanged)", async () => {
-    const { svc: terminals, ptys } = makeTerminals() // default engine = xterm
+    const { svc: terminals, ptys } = makeTerminals() // makeTerminals pins engine = xterm (CAPP-39 gate ④)
     const info = terminals.create("t", process.cwd())
     const work = new SessionService({ dir: mkdtempSync(join(tmpdir(), "bo4a-handoff-")) })
     const handlers = register(terminals, work)

@@ -11,7 +11,9 @@ punch-list. This is the **first time BO-1 → BO-2 → BO-3 run together live**.
   — additive/optional, no schema bump (mirrors `AttentionConfig`). Added to the
   `TuiConfig` interface **and** `loadConfig()`'s projected keys, so it surfaces via
   `get_config` / `preload.getConfig`. `resolveRenderingEngine()` is the single
-  default ("xterm" unless explicitly "structured").
+  default — **as of CAPP-39 gate ④ the default is "structured"** (the headless
+  stream-json engine), and only an explicit `engine: "xterm"` selects the legacy PTY
+  globally. (At BO-4a the default was "xterm"; the flip is documented below.)
 - **Engine switch** in `TerminalService.create()`: `engine === "structured"` →
   `createHeadless`; else the legacy xterm path, byte-behavior-unchanged. Wired from
   config in `ipc.ts` (`setEngine(resolveRenderingEngine(config))`). create()/
@@ -73,7 +75,12 @@ lands.
 
 - `npm test` — 416 passed, live harness skipped (hermetic).
 - `npm run build` — green.
-- `npm run e2e` — green (defaults to xterm).
+- `npm run e2e` — green.
 
-Default engine stays **xterm** (the flip to structured-by-default is BO-4b, after this
-is proven). The switch exists and works end-to-end when set.
+At BO-4a the default engine stayed **xterm** while the structured switch was proven.
+**CAPP-39 gate ④ flipped the default to "structured"** — `resolveRenderingEngine` /
+`resolveEngine` / `TerminalService`'s engine field now resolve to structured unless
+config explicitly says `engine: "xterm"`. A hard cutover (solo-dev project, low risk);
+the per-terminal raw-view escape hatch (`setTerminalEngine` / the AgentView "Raw view"
+button) remains the per-terminal way back to xterm, and a command-palette rollback
+write-path ("Default new terminals to raw terminal (xterm)") flips the default back.
