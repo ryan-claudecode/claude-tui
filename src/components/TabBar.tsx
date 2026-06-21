@@ -68,7 +68,7 @@ export default function TabBar({
               }}
               onBlur={commitRename}
               autoFocus
-              ref={(el) => el?.select()}
+              onFocus={(e) => e.currentTarget.select()}
               onClick={(e) => e.stopPropagation()}
             />
           ) : (

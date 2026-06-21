@@ -303,7 +303,7 @@ export default function Sidebar({
                     }}
                     onBlur={commitSessionRename}
                     autoFocus
-                    ref={(el) => el?.select()}
+                    onFocus={(e) => e.currentTarget.select()}
                     onClick={(e) => e.stopPropagation()}
                     onDoubleClick={(e) => e.stopPropagation()}
                   />
