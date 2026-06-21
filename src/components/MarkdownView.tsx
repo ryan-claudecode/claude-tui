@@ -17,21 +17,50 @@ interface Props {
   revealing?: boolean
 }
 
+/** A minimal hast word-span node the rehype plugin builds + later (re)classes. */
+type WordSpan = {
+  type: "element"
+  tagName: "span"
+  properties: { className: string[] }
+  children: Array<{ type: "text"; value: string }>
+}
+
+/**
+ * CAPP-79 (BLOCKER 2 fix) — the PURE "which word animates" decision, extracted so the
+ * frontier-only invariant is unit-testable WITHOUT a DOM (the test env is node-only).
+ *
+ * Returns the className array for the prose word at `index` of `count` total words: the
+ * FRONTIER (last, newest-revealed) word gets the animating `agent-word-new`; every
+ * SETTLED word gets only the structural `agent-word`. So even if a settled word REMOUNTS
+ * when the growing markdown slice forms an inline/block construct mid-stream (bold,
+ * inline code, link, heading, list — react-markdown reconciles siblings by positional
+ * keys, giving the following spans new keys → remount), it carries NO animation class and
+ * therefore does NOT re-fade. Only the active edge (the frontier word) animates — the
+ * SAME edge-only principle CAPP-77 used for the per-line rise. The frontier itself
+ * re-animating on a structure remount is acceptable: it's the live reveal edge.
+ */
+export function wordFadeClass(index: number, count: number): string[] {
+  return index === count - 1 ? ["agent-word", "agent-word-new"] : ["agent-word"]
+}
+
 /**
  * CAPP-79 — a tiny dependency-free rehype plugin that wraps every whitespace-delimited
- * word of the prose text nodes in `<span class="agent-word">`, leaving whitespace as
+ * word of the prose text nodes in a `<span class="agent-word">`, leaving whitespace as
  * bare text so the line still wraps naturally. Code is skipped (we never split a
  * `<code>`/`<pre>` subtree), so syntax stays intact.
  *
- * FLICKER-SAFE BY DOM IDENTITY (the same property the CAPP-77 per-line rise relies on):
- * the streaming block re-parses its growing revealed slice ~per frame, but the prefix
- * is stable, so React reconciles the already-revealed word spans to the SAME DOM nodes
- * (no remount → their fade does not restart). Only the NEWEST word is a freshly-mounted
- * span, so only it plays `agent-word-fade`. Settled words sit at the animation's `both`
- * end state.
+ * FRONTIER-ONLY ANIMATION (the BLOCKER 2 flicker fix): after wrapping, ONLY the LAST word
+ * span in document order is tagged `agent-word-new` (via {@link wordFadeClass}); the CSS
+ * animates only `.agent-revealing .agent-word-new`, NOT every `.agent-word`. So settled
+ * words never fade again even when a mid-stream structure change (a new `**`/`` ` ``/`#`/
+ * `-`) shifts react-markdown's positional sibling keys and REMOUNTS the following spans —
+ * a remounted SETTLED span has no animating class, so no paragraph-wide re-blur. As the
+ * reveal advances, the frontier moves to the new last word and only it animates.
  */
 function rehypeWordFade() {
   const SKIP_TAGS = new Set(["code", "pre"])
+  // Collected in DOCUMENT ORDER as we walk, so the LAST is the reveal frontier.
+  const spans: WordSpan[] = []
   const wrap = (node: { tagName?: string; children?: unknown[] }) => {
     if (!Array.isArray(node.children)) return
     if (node.tagName && SKIP_TAGS.has(node.tagName)) return
@@ -44,12 +73,15 @@ function rehypeWordFade() {
           if (/^\s+$/.test(part)) {
             next.push({ type: "text", value: part })
           } else {
-            next.push({
+            const span: WordSpan = {
               type: "element",
               tagName: "span",
+              // Structural class only for now; the frontier pass below adds the animator.
               properties: { className: ["agent-word"] },
               children: [{ type: "text", value: part }],
-            })
+            }
+            spans.push(span)
+            next.push(span)
           }
         }
       } else {
@@ -59,7 +91,13 @@ function rehypeWordFade() {
     }
     node.children = next
   }
-  return (tree: { tagName?: string; children?: unknown[] }) => wrap(tree)
+  return (tree: { tagName?: string; children?: unknown[] }) => {
+    wrap(tree)
+    // Frontier-only: tag ONLY the last word span; settled words keep just `agent-word`.
+    for (let i = 0; i < spans.length; i++) {
+      spans[i].properties.className = wordFadeClass(i, spans.length)
+    }
+  }
 }
 
 /** Stable plugin-array identity (so React.memo + react-markdown don't see a new ref). */

@@ -2,6 +2,7 @@ import React from "react"
 import { describe, it, expect } from "vitest"
 import { renderToStaticMarkup } from "react-dom/server"
 import { BlockView, assistantBlockClass } from "./AgentView"
+import { wordFadeClass } from "./MarkdownView"
 import type {
   AssistantTextBlock,
   ResultBlock,
@@ -277,5 +278,66 @@ describe("AgentView — per-line rise class stability across the catch-up cycle"
     expect(assistantBlockClass(true, true)).toContain("agent-streaming")
     expect(assistantBlockClass(true, false)).toContain("agent-streaming") // reduced motion: caret yes, rise no
     expect(assistantBlockClass(false, false)).not.toContain("agent-streaming")
+  })
+})
+
+/**
+ * CAPP-79 (BLOCKER 2) — FRONTIER-ONLY per-word fade. The shipped wiring animated EVERY
+ * `.agent-word` and relied on DOM identity to keep settled words from re-firing; but a
+ * mid-stream markdown structure change (bold/inline-code/link/heading/list) shifts
+ * react-markdown's positional sibling keys → remounts the following spans → their fade
+ * RE-FIRED on already-settled text (a paragraph-wide re-blur). The fix tags ONLY the
+ * frontier (last) word with the animating `agent-word-new`; settled words carry just the
+ * structural `agent-word`, so a remounted settled span has NO animation and can't re-fade.
+ *
+ * The "which word animates" decision is the pure `wordFadeClass`, unit-tested here.
+ * DOM-RECONCILIATION FLICKER ITSELF is structurally untestable in the node harness (no
+ * jsdom / no real react-markdown remount-on-keying to observe), so we pin the decision
+ * function + assert the RENDERED markup carries exactly one frontier word.
+ */
+describe("AgentView — per-word fade is frontier-only (CAPP-79 BLOCKER 2)", () => {
+  it("wordFadeClass tags ONLY the frontier (last) word with the animator", () => {
+    const total = 5
+    // Settled words (every index but the last) get just the structural class — NO animator.
+    for (let i = 0; i < total - 1; i++) {
+      expect(wordFadeClass(i, total)).toEqual(["agent-word"])
+      expect(wordFadeClass(i, total)).not.toContain("agent-word-new")
+    }
+    // The frontier (last) word gets the animating class.
+    expect(wordFadeClass(total - 1, total)).toEqual(["agent-word", "agent-word-new"])
+  })
+
+  it("a settled word carries NO animation class — a remount cannot re-fade it", () => {
+    // The whole point: even if react-markdown remounts a settled word span on a structure
+    // change, its className has no `agent-word-new`, so the CSS animation never plays.
+    expect(wordFadeClass(0, 8)).not.toContain("agent-word-new")
+    expect(wordFadeClass(3, 8)).not.toContain("agent-word-new")
+    // Single-word edge: the only word IS the frontier.
+    expect(wordFadeClass(0, 1)).toEqual(["agent-word", "agent-word-new"])
+  })
+
+  it("renders exactly ONE frontier word span in a streaming block's markup", () => {
+    // A streaming block (revealing=true; node has no rAF so it renders the FULL text) wraps
+    // every prose word; only the last carries `agent-word-new`.
+    const html = renderToStaticMarkup(
+      <BlockView
+        block={{ kind: "assistant", id: "b0", text: "alpha beta gamma delta" }}
+        onExpand={() => {}}
+        terminalId="t1"
+        sessionId={null}
+        streaming
+      />,
+    )
+    const wordSpans = (html.match(/<span class="agent-word/g) ?? []).length
+    const frontier = (html.match(/agent-word-new/g) ?? []).length
+    expect(wordSpans).toBeGreaterThan(1) // multiple words wrapped
+    expect(frontier).toBe(1) // exactly ONE animates — the frontier
+  })
+
+  it("a SETTLED (non-streaming) block injects NO word spans at all", () => {
+    // revealing is off for settled/historical blocks, so rehypeWordFade never runs — no
+    // `.agent-word` spans, hence nothing can ever animate on a settled/rehydrated block.
+    const html = renderAssistant("settled prose with several words here")
+    expect(html).not.toContain("agent-word")
   })
 })

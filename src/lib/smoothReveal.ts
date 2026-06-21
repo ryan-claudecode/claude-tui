@@ -237,6 +237,78 @@ export function snapToWordBoundary(text: string, shown: number, target: number):
 }
 
 /**
+ * CAPP-78 (monotonicity fix) — the largest no-boundary trailing partial we ever hold
+ * back before falling through to revealing it char-by-char. A normal word is well under
+ * this; a long URL / a space-free 200-char run / a CJK run with no ASCII whitespace
+ * would otherwise snap to 0 (or to a far-back boundary) and show NOTHING until the whole
+ * run completes. Once the unrevealed trailing run exceeds this cap we stop withholding it
+ * so the reveal keeps STREAMING progressively instead of stalling at a boundary.
+ */
+export const MAX_WORD_HOLDBACK = 48
+
+/**
+ * CAPP-78 (BLOCKER 1 fix) — the MONOTONIC word-granular reveal end. `snapToWordBoundary`
+ * alone is non-monotonic: once a whole word has been released (the drain caught the
+ * target → the full word showed), the NEXT delta grows the target with a fresh trailing
+ * partial, and the raw snap drops the end BACK BELOW the just-shown text → the visible
+ * prose SHRINKS then re-grows = a deterministic flicker on every catch-up→delta cycle.
+ * It also strands long boundary-less runs (a URL / CJK) at 0 until they complete.
+ *
+ * This wraps the snap so the revealed end is MONOTONIC NON-DECREASING across frames: the
+ * word-snap may only DELAY revealing a not-yet-shown trailing partial, never RE-HIDE
+ * already-shown chars. The hook feeds back its previous result as `prevShown`.
+ *
+ * PURE: a function of (text, shown, target, prevShown) only — the unit-test seam for the
+ * monotonicity + boundary-less invariants (DOM-free).
+ *
+ * Rules (in order):
+ *  - `shown >= target` (drain caught up / stream paused) → `target`: ALWAYS release the
+ *    trailing partial at the edge, monotonically (it's ≥ any prior shown). No word stranded.
+ *  - otherwise snap to the last whole word (`snapToWordBoundary`); BUT
+ *    - BOUNDARY-LESS FALLBACK: if the withheld trailing run (`shown - snapped`) exceeds
+ *      {@link MAX_WORD_HOLDBACK} (a long URL / space-free / CJK run with no boundary in
+ *      reach), reveal up to `shown` char-by-char instead of holding the whole run hidden.
+ *    - HEAD-START / FIRST-WORD: if the snap is 0 because there's no PRIOR whitespace yet
+ *      (the very first word is still being typed), reveal up to `shown` so the first paint
+ *      isn't empty when the opening word is longer than the head start (the CAPP-74
+ *      head-start reconcile) and the first word streams in instead of popping at the end.
+ *  - MONOTONIC CLAMP: never return less than `prevShown` (already-shown chars stay shown),
+ *    and never more than `target` (a transcript reset that shrank the target snaps down).
+ *
+ * @param text      the full received text
+ * @param shown     the char-granular revealed length (floored drain float)
+ * @param target    the full received text length
+ * @param prevShown the previously-returned reveal end (fed back for monotonicity)
+ * @param maxHoldback boundary-less cap (defaults to {@link MAX_WORD_HOLDBACK})
+ * @returns the monotonic slice-end index in [prevShown clamped to target, target]
+ */
+export function revealedWordEnd(
+  text: string,
+  shown: number,
+  target: number,
+  prevShown: number,
+  maxHoldback: number = MAX_WORD_HOLDBACK,
+): number {
+  // Drain caught up (or a half-typed final word at a stream pause): release to the edge.
+  // Always ≥ any prior shown while the target grows (monotonic); on a shrunk target
+  // (transcript reset) this snaps DOWN to the new target, which is the intended reset.
+  if (shown >= target) return target
+
+  let end = snapToWordBoundary(text, shown, target)
+  // BOUNDARY-LESS FALLBACK — the trailing run we'd withhold is too long to keep hidden
+  // (a long URL / space-free string / CJK with no ASCII whitespace in reach). Stream it
+  // char-by-char so the reveal keeps advancing instead of showing nothing until it ends.
+  if (shown - end > maxHoldback) end = shown
+  // HEAD-START / FIRST-WORD — the snap is 0 only because no earlier whitespace exists yet
+  // (the first word of the whole text is mid-type). Reveal what the drain reached so the
+  // first paint isn't empty (head-start reconcile) and the first word streams in.
+  else if (end === 0 && shown > 0) end = shown
+
+  // MONOTONIC: never re-hide already-shown chars; never exceed the (possibly shrunk) target.
+  return Math.min(target, Math.max(prevShown, end))
+}
+
+/**
  * CAPP-74 — the PURE frame-clock the rAF hook (useSmoothReveal) drives. It owns the
  * dt-bookkeeping + reveal carry that the hook used to inline, factored out so the
  * STALL regression is unit-testable WITHOUT a DOM/jsdom (the repo's hook-test idiom,

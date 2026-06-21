@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest"
 import {
   DEFAULT_REVEAL_CONFIG,
   isFullyRevealed,
+  MAX_WORD_HOLDBACK,
   nextRevealedLen,
+  revealedWordEnd,
   snapToWordBoundary,
   ThroughputTracker,
   type RevealConfig,
@@ -285,6 +287,150 @@ describe("snapToWordBoundary — CAPP-78 word-granular reveal", () => {
   it("clamps a non-positive shown to 0", () => {
     expect(snapToWordBoundary("hello", 0, 5)).toBe(0)
     expect(snapToWordBoundary("hello", -3, 5)).toBe(0)
+  })
+})
+
+describe("revealedWordEnd — CAPP-78 MONOTONIC word reveal (BLOCKER 1 fix)", () => {
+  // `revealedWordEnd` wraps the raw word-snap so the revealed END is MONOTONIC
+  // NON-DECREASING across frames: the word-snap may only DELAY a not-yet-shown trailing
+  // partial, never RE-HIDE already-shown chars. It also streams long boundary-less runs
+  // (URLs / CJK) instead of stalling at 0, and reveals the first word promptly.
+
+  // Drive a realistic catch-up→delta sequence: each frame has a (text, shown, target).
+  // The drain catches a word fully (shown === target) then the next delta grows target
+  // with a fresh trailing partial and shown ticks up behind it. This is the exact cycle
+  // the raw snap re-hides on. Sequence over "hello world foo":
+  // The key re-hide trigger: the drain CATCHES UP while a trailing partial word is the
+  // current edge (shown === target shows a half-word, e.g. "hello wor"), so that partial
+  // is RELEASED; then the next delta EXTENDS that same word ("hello world"), and the raw
+  // snap — with shown still mid the now-longer word — drops BACK to the previous space
+  // (9 → 6), re-hiding the "wor" the user already saw. That backwards step is the flicker.
+  type Frame = { text: string; shown: number; target: number }
+  const catchUpThenDelta: Frame[] = [
+    { text: "hello", shown: 3, target: 5 }, // first word mid-type
+    { text: "hello", shown: 5, target: 5 }, // caught up → "hello" fully shown
+    { text: "hello wor", shown: 7, target: 9 }, // delta: new partial "wor" streaming
+    { text: "hello wor", shown: 9, target: 9 }, // caught up → "wor" RELEASED (partial shown)
+    { text: "hello world", shown: 9, target: 11 }, // delta extends "wor"→"world"; raw RE-HIDES to 6
+    { text: "hello world", shown: 11, target: 11 }, // caught up → "world" fully shown
+    { text: "hello world fo", shown: 12, target: 14 }, // delta: new partial "fo"
+    { text: "hello world foo", shown: 14, target: 15 }, // grows; raw re-hides "fo" again
+    { text: "hello world foo", shown: 15, target: 15 }, // caught up → all shown
+  ]
+
+  it("is MONOTONIC NON-DECREASING across a catch-up→delta sequence (never re-hides)", () => {
+    let prev = 0
+    const ends: number[] = []
+    for (const f of catchUpThenDelta) {
+      const end = revealedWordEnd(f.text, f.shown, f.target, prev)
+      ends.push(end)
+      // The shown length NEVER decreases frame-to-frame — the core invariant.
+      expect(end).toBeGreaterThanOrEqual(prev)
+      prev = end
+    }
+    // And the FINAL text fully reveals at the end of the stream.
+    expect(ends[ends.length - 1]).toBe(15)
+  })
+
+  it("REGRESSION: the raw snapToWordBoundary GOES BACKWARDS on the same sequence", () => {
+    // The negative control — the shipped non-monotonic snap. After "hello" releases fully
+    // (snap returns 5), the next delta's partial makes the raw snap drop BACK to 6 then,
+    // crucially, a frame where the new partial has no completed word yet makes it shrink
+    // below the prior shown. We assert at least one frame-to-frame DECREASE exists.
+    let prev = 0
+    let sawDecrease = false
+    for (const f of catchUpThenDelta) {
+      const raw = snapToWordBoundary(f.text, f.shown, f.target)
+      if (raw < prev) sawDecrease = true
+      prev = raw
+    }
+    expect(sawDecrease).toBe(true) // proves the raw snap re-hides released text
+    // …and the monotonic wrapper has ZERO decreases on the identical input (contrast).
+    let mPrev = 0
+    let mDecrease = false
+    for (const f of catchUpThenDelta) {
+      const end = revealedWordEnd(f.text, f.shown, f.target, mPrev)
+      if (end < mPrev) mDecrease = true
+      mPrev = end
+    }
+    expect(mDecrease).toBe(false)
+  })
+
+  it("releases the full text at turn end (shown caught up to target)", () => {
+    // No matter what was held back, once the drain reaches the target the partial is
+    // released in full — never stranded behind the boundary snap.
+    expect(revealedWordEnd("the quick brown fox", 19, 19, 10)).toBe(19)
+    // Even a half-typed final word at a stream pause releases when shown === target.
+    expect(revealedWordEnd("hello wor", 9, 9, 6)).toBe(9)
+  })
+
+  it("a transcript reset (target shrank under us) snaps DOWN to the new target", () => {
+    // prevShown was 11 but the target reset to 4 → snap to the new target, no phantom.
+    expect(revealedWordEnd("test", 4, 4, 11)).toBe(4)
+  })
+
+  describe("boundary-less runs stream progressively (no stall at 0)", () => {
+    it("a long space-free string (URL) advances char-by-char past the holdback cap", () => {
+      // A single space-free token longer than the holdback. With NO whitespace anywhere,
+      // the raw snap returns 0 the whole time → nothing shows until it completes. The
+      // monotonic wrapper streams it: once the unrevealed run exceeds the cap, it reveals
+      // up to `shown`, advancing every frame.
+      const url = "https://example.com/" + "a".repeat(200)
+      const target = url.length
+      let prev = 0
+      const ends: number[] = []
+      // Drive shown from a few chars up to most of the string.
+      for (let shown = 4; shown < target; shown += 10) {
+        const end = revealedWordEnd(url, shown, target, prev)
+        ends.push(end)
+        expect(end).toBeGreaterThanOrEqual(prev)
+        prev = end
+      }
+      // It made real progress (not stuck at 0) — the last revealed end is well past 0.
+      expect(ends[ends.length - 1]).toBeGreaterThan(MAX_WORD_HOLDBACK)
+      // And the run keeps advancing (strictly more than the first frame).
+      expect(ends[ends.length - 1]).toBeGreaterThan(ends[0])
+    })
+
+    it("a CJK run with no ASCII whitespace reveals progressively", () => {
+      // No /\s/ boundaries anywhere → the raw snap would hold at 0. The wrapper streams it.
+      const cjk = "速い茶色のキツネが怠惰な犬を飛び越える".repeat(6) // long, space-free
+      const target = cjk.length
+      let prev = 0
+      let advanced = false
+      for (let shown = 2; shown < target; shown += 12) {
+        const end = revealedWordEnd(cjk, shown, target, prev)
+        if (end > prev) advanced = true
+        expect(end).toBeGreaterThanOrEqual(prev)
+        prev = end
+      }
+      expect(advanced).toBe(true)
+      expect(prev).toBeGreaterThan(MAX_WORD_HOLDBACK)
+    })
+
+    it("REGRESSION: the raw snap is STUCK AT 0 for a boundary-less run", () => {
+      const url = "https://example.com/" + "x".repeat(100)
+      // Every partial frame of a space-free run snaps to 0 — nothing ever shows.
+      for (let shown = 4; shown < url.length; shown += 20) {
+        expect(snapToWordBoundary(url, shown, url.length)).toBe(0)
+      }
+    })
+  })
+
+  describe("CAPP-74 HEAD_START reconcile (no empty first paint)", () => {
+    it("reveals the first word promptly when it is longer than the head start", () => {
+      // First word "Resolving" (9 chars) longer than the 3-char head start. The raw snap
+      // returns 0 (no prior whitespace) → an EMPTY first paint. The wrapper reveals what
+      // the drain reached (the head start) so the first paint is non-empty.
+      const text = "Resolving the issue now"
+      const target = text.length
+      expect(revealedWordEnd(text, 3, target, 0)).toBe(3) // head start shows, not 0
+      expect(revealedWordEnd(text, 5, target, 3)).toBe(5) // first word streams in
+    })
+
+    it("REGRESSION: the raw snap shows NOTHING for a head start inside a long first word", () => {
+      expect(snapToWordBoundary("Resolving the issue", 3, 19)).toBe(0)
+    })
   })
 })
 

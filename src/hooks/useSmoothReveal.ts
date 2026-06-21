@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import {
   DEFAULT_REVEAL_CONFIG,
   RevealClock,
-  snapToWordBoundary,
+  revealedWordEnd,
   type RevealConfig,
 } from "../lib/smoothReveal"
 
@@ -67,6 +67,12 @@ export function useSmoothReveal(
     clockRef.current = new RevealClock()
     if (active) clockRef.current.revealed = Math.min(target, HEAD_START)
   }
+  // CAPP-78 (monotonicity) — the previously-returned word-reveal END, fed back into
+  // `revealedWordEnd` so the snapped reveal is MONOTONIC NON-DECREASING: a fresh trailing
+  // partial that lands after a whole word was released can DELAY a not-yet-shown partial
+  // but can NEVER re-hide already-shown chars (the catch-up→delta re-hide flicker fix).
+  // Reset to 0 on the activation edge (new turn) and when inactive (the full text shows).
+  const prevShownRef = useRef(0)
   const [, setRevealed] = useState(0)
   const rafRef = useRef<number | null>(null)
   // The current target length + config, kept in REFS so a delta growing the target
@@ -111,6 +117,9 @@ export function useSmoothReveal(
       const clock = clockRef.current!
       clock.resetClock()
       clock.revealed = target
+      // The full text shows when inactive; reset the monotonic floor so the NEXT
+      // activation (a new turn) starts its word-reveal from 0, not the prior turn's end.
+      prevShownRef.current = target
       setRevealed(target)
     }
   }, [active, target])
@@ -133,6 +142,8 @@ export function useSmoothReveal(
     // FIRST non-empty paint already shows the head-start prose + caret — no leading
     // empty block while we wait for the first rAF tick (whose dt=0 yields no paint).
     clock.start(HEAD_START, targetRef.current)
+    // New turn → reset the monotonic word-reveal floor so it doesn't carry a stale end.
+    prevShownRef.current = 0
     setRevealed(clock.revealed)
     rafRef.current = requestAnimationFrame(tick)
     return () => {
@@ -167,9 +178,14 @@ export function useSmoothReveal(
   // reveal, so render the FULL text rather than a stuck-empty slice.
   if (typeof requestAnimationFrame !== "function") return text
   const shown = Math.floor(Math.min(clockRef.current.revealed, targetRef.current))
-  // CAPP-78 — snap the char-granular reveal DOWN to the last whole word so the
-  // trailing partial word stays hidden until complete: words pop in instead of
-  // letters streaming, which kills the constant-rate drain's mechanical staccato.
-  // (Released in full the instant the reveal catches the target — see snapToWordBoundary.)
-  return text.slice(0, snapToWordBoundary(text, shown, targetRef.current))
+  // CAPP-78 — snap the char-granular reveal DOWN to the last whole word so the trailing
+  // partial word stays hidden until complete: words pop in instead of letters streaming,
+  // killing the constant-rate drain's mechanical staccato. `revealedWordEnd` makes that
+  // MONOTONIC (never re-hides an already-shown word when a fresh partial lands — the
+  // catch-up→delta flicker fix), streams long boundary-less runs (URLs / CJK) char-by-
+  // char instead of stalling at 0, and reveals the first word promptly (head-start
+  // reconcile). Released in full the instant the drain catches the target.
+  const end = revealedWordEnd(text, shown, targetRef.current, prevShownRef.current)
+  prevShownRef.current = end
+  return text.slice(0, end)
 }

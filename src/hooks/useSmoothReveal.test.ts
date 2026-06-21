@@ -4,6 +4,8 @@ import {
   RevealClock,
   isFullyRevealed,
   nextRevealedLen,
+  revealedWordEnd,
+  snapToWordBoundary,
   type RevealConfig,
 } from "../lib/smoothReveal"
 
@@ -231,5 +233,92 @@ describe("useSmoothReveal — RevealClock drain (rAF seam)", () => {
     expect(r0).toBe(HEAD_START) // dt=0 → no progress on the first frame
     const r1 = clock.frame(16, 100, CFG)
     expect(r1).toBeGreaterThan(HEAD_START) // second frame has a real dt → advances
+  })
+})
+
+/**
+ * CAPP-78 (BLOCKER 1) — end-to-end: the hook's RENDER path applies the MONOTONIC word
+ * reveal (`revealedWordEnd`) on top of the floored drain float, feeding back the previous
+ * end. This mirror of that wiring drives the drain + the word reveal together over a
+ * brisk stream and asserts the RENDERED slice length never decreases — the catch-up→delta
+ * re-hide flicker can't occur. Pure (no DOM): same `RevealClock` seam the hook delegates to.
+ */
+describe("useSmoothReveal — word-reveal monotonicity over the live drain (render-path mirror)", () => {
+  // Drive the FULL fixed wiring: a RevealClock drain + the monotonic word reveal fed its
+  // own previous end, exactly as the hook's return path does each render/frame.
+  function driveWordReveal(text: string, deltas: Delta[], cfg = CFG): number[] {
+    const clock = new RevealClock()
+    clock.start(HEAD_START, deltas[0]?.target ?? 0)
+    let prevEnd = 0
+    const ends: number[] = []
+    for (const { ts, target } of deltas) {
+      clock.frame(ts, target, cfg)
+      const shown = Math.floor(Math.min(clock.revealed, target))
+      const end = revealedWordEnd(text, shown, target, prevEnd)
+      prevEnd = end
+      ends.push(end)
+    }
+    return ends
+  }
+
+  it("the rendered word-reveal length is MONOTONIC across a brisk catch-up→delta stream", () => {
+    // Stream "the quick brown fox jumps over" with a LUMP arrival pattern so the drain
+    // repeatedly catches a trailing partial then a fresh lump extends it — the re-hide
+    // trigger. (A pure char-per-frame stream lets the drain stay perfectly caught up,
+    // which never lags mid-word; lumps force the drain BEHIND a mid-word edge.)
+    const text = "the quick brown fox jumps over"
+    const deltas: Delta[] = []
+    let ts = 0
+    // Each lump grows the target by ~5 chars every 3 frames; the drain (floor 100cps ≈
+    // 1.6 ch/frame) lags behind, so `shown` sits mid-word while target races ahead — the
+    // exact condition the raw snap re-hides on.
+    for (let i = 0; i < text.length; i += 5) {
+      const target = Math.min(text.length, i + 5)
+      for (let f = 0; f < 3; f++) {
+        ts += 16
+        deltas.push({ ts, target })
+      }
+    }
+    // A few trailing frames so the drain fully catches up to the final target.
+    for (let f = 0; f < 30; f++) {
+      ts += 16
+      deltas.push({ ts, target: text.length })
+    }
+    const ends = driveWordReveal(text, deltas)
+    for (let i = 1; i < ends.length; i++) {
+      expect(ends[i]).toBeGreaterThanOrEqual(ends[i - 1]) // never re-hides
+    }
+    // The final text fully reveals once the drain catches up (shown === target).
+    expect(ends[ends.length - 1]).toBe(text.length)
+  })
+
+  it("REGRESSION: the raw snap (no monotonic floor) DECREASES on the same lumpy stream", () => {
+    // The pre-fix render path used snapToWordBoundary directly with no monotonic floor.
+    // Driving the SAME lagging drain, the raw snap drops back below a prior reveal at
+    // least once (re-hiding text the user already saw) — the flicker the fix removes.
+    const text = "the quick brown fox jumps over"
+    const clock = new RevealClock()
+    let ts = 0
+    let started = false
+    let sawDecrease = false
+    let prev = 0
+    const step = (target: number) => {
+      if (!started) {
+        clock.start(HEAD_START, target)
+        started = true
+      }
+      ts += 16
+      clock.frame(ts, target, CFG)
+      const shown = Math.floor(Math.min(clock.revealed, target))
+      const raw = snapToWordBoundary(text, shown, target)
+      if (raw < prev) sawDecrease = true
+      prev = raw
+    }
+    for (let i = 0; i < text.length; i += 5) {
+      const target = Math.min(text.length, i + 5)
+      for (let f = 0; f < 3; f++) step(target)
+    }
+    for (let f = 0; f < 30; f++) step(text.length)
+    expect(sawDecrease).toBe(true) // the shipped non-monotonic snap re-hides text
   })
 })
