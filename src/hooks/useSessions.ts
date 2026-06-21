@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, type MutableRefObject } from "react"
 import { toast } from "../lib/toast"
 import { commitRenameValue } from "../lib/renameValue"
-import { countResuming, resumingNotice, restoreTokens } from "../lib/resumingList"
+import { countResuming, resumingNotice, restoreSeeds, type ResumingSeed } from "../lib/resumingList"
 
 export interface Terminal {
   id: string
@@ -71,14 +71,18 @@ export function useSessions(
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
   const [config, setConfig] = useState<any>(null)
-  // CAPP-80 — the transient "RESUMING" section. `resumingOrder` is the immutable
-  // restore order (one `${sessionId}::${terminalId}` token per startup-restored
-  // terminal, captured BEFORE reopen mints new live ids); `resumingTracked` is the
-  // shrinking set of tokens still surfaced. A token is dropped when the user focuses
-  // or dismisses its row (or once the terminal is online AND seen). When the set
-  // empties, the section hides — self-closing. Both stay empty for a no-restore boot.
-  const [resumingOrder, setResumingOrder] = useState<string[]>([])
+  // CAPP-80 — the transient "RESUMING" section. `resumingSeeds` are the immutable
+  // restore seeds (one per startup-restored terminal: stable `${sessionId}::${id}`
+  // token + the pre-reopen display name, captured BEFORE reopen mints new live ids).
+  // `resumingTracked` is the shrinking set of tokens still surfaced — a token is
+  // dropped only by USER action (focus / dismiss / stop / select its session). When
+  // the set empties, the section hides — self-closing. `resumingLiveIds` maps each
+  // token to its fresh live terminal id as that reopen resolves, so rows resolve by
+  // STABLE id (never array position — a sibling close/handoff must not re-target other
+  // rows). All three stay empty for a no-restore boot.
+  const [resumingSeeds, setResumingSeeds] = useState<ResumingSeed[]>([])
   const [resumingTracked, setResumingTracked] = useState<Set<string>>(() => new Set())
+  const [resumingLiveIds, setResumingLiveIds] = useState<Map<string, string>>(() => new Map())
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
   const activeTerminals = activeSession?.terminals ?? []
@@ -94,23 +98,39 @@ export function useSessions(
       if (list.length) {
         setActiveSessionId(list[0].id)
       }
-      // CAPP-80 — count the APP-MANAGED terminals being restored (dead refs across
-      // the loaded sessions; NEVER the external claude.exe farm), raise ONE transient
-      // launch notice, and seed the RESUMING section's tracked tokens BEFORE reopen
-      // (reopen mints fresh live ids, so we key by the pre-reopen session::terminal).
-      const restoringN = countResuming(list)
-      const notice = resumingNotice(restoringN)
+      // CAPP-80 — surface the APP-MANAGED terminals being restored (dead refs across
+      // the loaded sessions; NEVER the external claude.exe farm). The toast counts ALL
+      // of them for global awareness across workspaces; the RESUMING section itself is
+      // workspace-scoped (App.tsx), so its visible count may be smaller — intentional.
+      const notice = resumingNotice(countResuming(list))
       if (notice) toast("info", notice)
-      const tokens = restoreTokens(list)
-      setResumingOrder(tokens)
-      setResumingTracked(new Set(tokens))
-      // Auto-restore: reopen every dead terminal in parallel
-      const reopens = list.flatMap((s) =>
-        s.terminals
-          .filter((t) => t.lastState === "dead")
-          .map((t) => window.api.reopenTerminal(s.id, t.id))
+      // Seed the section from the pre-reopen refs (reopen mints fresh ids). Exclude the
+      // foreground (auto-selected first) session — the user is already looking at it,
+      // so it counts as seen and shouldn't list itself as "resuming".
+      const seeds = restoreSeeds(list)
+      setResumingSeeds(seeds)
+      const firstId = list[0]?.id
+      setResumingTracked(
+        new Set(seeds.filter((s) => s.sessionId !== firstId).map((s) => s.token)),
       )
-      await Promise.all(reopens)
+      // Auto-restore: reopen every dead terminal in parallel, recording each fresh
+      // live id against its restore-token as it resolves so rows resolve by STABLE id.
+      await Promise.all(
+        seeds.map(async (seed) => {
+          try {
+            const res = await window.api.reopenTerminal(seed.sessionId, seed.originalId)
+            if (res?.terminalId) {
+              setResumingLiveIds((prev) => {
+                const next = new Map(prev)
+                next.set(seed.token, res.terminalId)
+                return next
+              })
+            }
+          } catch {
+            // A failed reopen leaves the row in "resuming" (honest); user can dismiss.
+          }
+        }),
+      )
       // Re-read sessions after restore — terminal IDs change during reopen
       const updated = await window.api.listWorkSessions()
       setSessions(updated)
@@ -385,10 +405,11 @@ export function useSessions(
     handleRenameTerminal,
     handleRenameSession,
     handleSelectSession,
-    // CAPP-80 — the transient RESUMING section: tracked tokens + restore order
-    // (consumed by App.tsx's deriveResumingRows) and the clear callbacks.
+    // CAPP-80 — the transient RESUMING section: tracked tokens + restore seeds +
+    // live-id map (consumed by App.tsx's deriveResumingRows) and the clear callback.
     resumingTracked,
-    resumingOrder,
+    resumingSeeds,
+    resumingLiveIds,
     clearResuming,
   }
 }

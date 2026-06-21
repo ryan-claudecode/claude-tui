@@ -457,6 +457,8 @@ body {
 .missions-new-btn:focus-visible,
 .mission-conductor-btn:focus-visible,
 .mission-dismiss-btn:focus-visible,
+.resuming-stop:focus-visible,
+.resuming-dismiss:focus-visible,
 .session-kill-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

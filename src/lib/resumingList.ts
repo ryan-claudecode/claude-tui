@@ -2,19 +2,23 @@
  * Pure view-model for the transient "RESUMING (n)" sidebar section (CAPP-80).
  *
  * On launch the restore flow reopens EVERY app-managed dead terminal in parallel,
- * but only the first session is made active — so the others run invisibly. This
- * section surfaces one row per startup-restored terminal so the user gets a real,
- * non-flashing window to notice + act, then self-closes as rows are focused,
- * dismissed, or come online and are seen.
+ * but only the first (foreground) session is made active — so the others run
+ * invisibly. This section surfaces one row per startup-restored terminal so the user
+ * gets a real, non-flashing window to notice + act.
+ *
+ * Clearing is USER-INITIATED: a row is dropped when the user focuses it, dismisses
+ * it, stops it, or selects its owning session. When the tracked set empties the
+ * section hides — self-closing. (There is intentionally no "online + seen" auto-clear;
+ * a restored agent stays listed until the user acts on it, so it can't slip away
+ * unnoticed.)
  *
  * IMPORTANT: this only ever describes APP-MANAGED terminals (refs inside persisted
  * work-sessions being reopened). It NEVER enumerates the standalone `claude.exe`
- * farm the user runs outside the app — the caller seeds `restoring` from the
- * sessions it is itself reopening, so an external process can't leak in here.
+ * farm the user runs outside the app — the caller seeds from the sessions it is
+ * itself reopening, so an external process can't leak in here.
  *
- * Kept separate from the hook/component so the derivation (counting, pluralization,
- * the self-closing filter) is unit-testable in vitest's node environment (no React,
- * no DOM) — mirrors `sessionRow.ts` / `attentionRow.ts`.
+ * Kept separate from the hook/component so the derivation is unit-testable in
+ * vitest's node environment (no React, no DOM) — mirrors `sessionRow.ts`.
  */
 
 /** A terminal as seen by the sidebar (the same minimal shape used elsewhere). */
@@ -30,20 +34,33 @@ export interface ResumingSession {
   terminals: ResumingTerminal[]
 }
 
+/**
+ * A restore-token captured BEFORE reopen, with the pre-reopen display name.
+ *
+ * The token (`${sessionId}::${originalId}`) is the STABLE row key. The live terminal
+ * id is learned later (reopen mints a fresh id) and supplied via the `liveIds` map.
+ * Carrying the name here means a still-resuming row never blanks/flashes even in the
+ * brief window where the original ref has been re-keyed but the live id hasn't landed.
+ */
+export interface ResumingSeed {
+  token: string
+  sessionId: string
+  originalId: string
+  sessionName: string
+  terminalName: string
+}
+
 /** One rendered RESUMING row: a restored terminal and how to address it. */
 export interface ResumingRow {
-  /** STABLE key for the row — the originating session+terminal pair the user is
-   *  restoring. The live terminal id changes on reopen (a fresh PTY/proc id), so
-   *  rows are keyed by the durable restore-token, not the live id. */
+  /** STABLE key — the originating session+terminal restore-token (not the live id,
+   *  which changes on reopen). */
   key: string
   sessionId: string
-  /** The CURRENT (live) terminal id to focus/stop — re-resolved each derive from
-   *  the session's terminal at this row's position, since reopen mints a new id. */
+  /** The id to focus/stop: the LIVE id once reopen has landed, else the original. */
   terminalId: string
   sessionName: string
   terminalName: string
-  /** "resuming" while the terminal is still dead (PTY/proc not yet attached);
-   *  "ready" once it has come online (active/idle). */
+  /** "resuming" while the PTY/proc is not yet attached; "ready" once online. */
   state: "resuming" | "ready"
 }
 
@@ -68,80 +85,94 @@ export function resumingNotice(n: number): string | null {
 }
 
 /**
- * The set of restore-tokens this section should track. Each token keys a terminal
- * the launch flow is reopening, in the form `${sessionId}::${terminalId}` — the id
- * captured BEFORE reopen (which mints a new live id). The caller builds this once
- * at startup from the sessions it is restoring.
+ * Build one seed per app-managed dead terminal, in restore order, capturing the
+ * pre-reopen name. The caller seeds the tracked set + live-id map from these.
  */
-export function restoreTokens(sessions: ResumingSession[]): string[] {
-  const tokens: string[] = []
+export function restoreSeeds(sessions: ResumingSession[]): ResumingSeed[] {
+  const seeds: ResumingSeed[] = []
   for (const s of sessions) {
     for (const t of s.terminals) {
-      if (t.lastState === "dead") tokens.push(`${s.id}::${t.id}`)
+      if (t.lastState === "dead") {
+        seeds.push({
+          token: `${s.id}::${t.id}`,
+          sessionId: s.id,
+          originalId: t.id,
+          sessionName: s.name,
+          terminalName: t.name,
+        })
+      }
     }
   }
-  return tokens
+  return seeds
 }
 
 /**
- * Derive the rows the RESUMING section renders.
+ * Derive the rows the RESUMING section renders, resolving each row's live terminal
+ * by STABLE id — never by array position.
  *
- * @param sessions   the CURRENT session list (post-reopen ids land here)
- * @param tracked    restore-tokens still being surfaced — a token is dropped by
- *                   the caller once the user focuses or dismisses it, or once it
- *                   has come online AND been seen
- * @param order      the original tracked tokens in restore order, so rows keep a
- *                   stable order even as the live ids churn (sessions[i] order may
- *                   shift). Each token is `${sessionId}::${originalTerminalId}`;
- *                   we resolve the live terminal by POSITION within the session.
+ * This id-resolution is the load-bearing correctness property: closing, handing off,
+ * or reordering one terminal in a multi-terminal session must NOT re-target or drop
+ * its siblings' rows (an earlier position-keyed version did exactly that, and could
+ * point a row's Stop at the wrong background agent).
  *
- * Self-closing: a token absent from `tracked` is filtered out, so the list shrinks
- * to empty (the section then hides). A row whose session/terminal can no longer be
- * resolved (killed mid-restore) is also dropped.
+ * @param sessions  the CURRENT (post-reopen) session list
+ * @param tracked   restore-tokens still surfaced (cleared by user focus/dismiss/stop/select)
+ * @param seeds     the immutable restore seeds (display order + captured names)
+ * @param liveIds   token → live terminal id, populated as each reopen resolves
+ *
+ * Resolution per seed (in order, if still tracked):
+ *  - session gone        → drop (killed mid-restore)
+ *  - live id known:
+ *      - terminal present → row (state from its lastState; usually "ready")
+ *      - terminal absent  → drop (it came online then was closed/removed — no sibling impact)
+ *  - live id unknown (reopen still pending, or it failed):
+ *      - use the original ref if still present for the freshest name/state, else the
+ *        captured name → a "resuming" row keyed to THIS seed only (never blanks,
+ *        never mis-pairs onto a sibling)
  */
 export function deriveResumingRows(
   sessions: ResumingSession[],
   tracked: ReadonlySet<string>,
-  order: readonly string[],
+  seeds: readonly ResumingSeed[],
+  liveIds: ReadonlyMap<string, string>,
 ): ResumingRow[] {
-  // Map each session id → its terminals so we can resolve a token to a live row.
   const byId = new Map<string, ResumingSession>()
   for (const s of sessions) byId.set(s.id, s)
 
-  // For each session, remember which restore-tokens belong to it (in order) so we
-  // can pair the i-th tracked token with the i-th terminal after reopen re-keys.
-  const tokensPerSession = new Map<string, string[]>()
-  for (const token of order) {
-    const sep = token.indexOf("::")
-    if (sep === -1) continue
-    const sid = token.slice(0, sep)
-    const arr = tokensPerSession.get(sid) ?? []
-    arr.push(token)
-    tokensPerSession.set(sid, arr)
-  }
-
   const rows: ResumingRow[] = []
-  for (const token of order) {
-    if (!tracked.has(token)) continue
-    const sep = token.indexOf("::")
-    if (sep === -1) continue
-    const sid = token.slice(0, sep)
-    const session = byId.get(sid)
+  for (const seed of seeds) {
+    if (!tracked.has(seed.token)) continue
+    const session = byId.get(seed.sessionId)
     if (!session) continue
-    // Resolve the live terminal by this token's position among its session's
-    // restore-tokens (reopen preserves terminal count/order within a session).
-    const sessionTokens = tokensPerSession.get(sid) ?? []
-    const pos = sessionTokens.indexOf(token)
-    const terminal = pos >= 0 ? session.terminals[pos] : undefined
-    if (!terminal) continue
-    rows.push({
-      key: token,
-      sessionId: session.id,
-      terminalId: terminal.id,
-      sessionName: session.name,
-      terminalName: terminal.name,
-      state: terminal.lastState === "dead" ? "resuming" : "ready",
-    })
+
+    const liveId = liveIds.get(seed.token)
+    if (liveId != null) {
+      // Reopen has landed: resolve by the live id. If it's gone, the terminal was
+      // closed/removed after coming online — drop only THIS row.
+      const term = session.terminals.find((t) => t.id === liveId)
+      if (!term) continue
+      rows.push({
+        key: seed.token,
+        sessionId: session.id,
+        terminalId: liveId,
+        sessionName: session.name,
+        terminalName: term.name,
+        state: term.lastState === "dead" ? "resuming" : "ready",
+      })
+    } else {
+      // Reopen pending or failed: a stable "resuming" row for this seed alone. Prefer
+      // the live ref (still present pre-reopen) for the freshest name/state; otherwise
+      // fall back to the captured name so the row can't blank or flash out.
+      const term = session.terminals.find((t) => t.id === seed.originalId)
+      rows.push({
+        key: seed.token,
+        sessionId: session.id,
+        terminalId: term?.id ?? seed.originalId,
+        sessionName: session.name,
+        terminalName: term?.name ?? seed.terminalName,
+        state: term && term.lastState !== "dead" ? "ready" : "resuming",
+      })
+    }
   }
   return rows
 }

@@ -111,11 +111,10 @@ export default function Sidebar({
       {resumingRows.length > 0 && (
         <div className="sidebar-section resuming-section">
           <div className="sidebar-header">RESUMING ({resumingRows.length})</div>
-          {resumingRows.map((r, i) => (
+          {resumingRows.map((r) => (
             <div
               key={r.key}
               className={`resuming-item ${r.state}`}
-              style={{ "--i": i } as CSSProperties}
               onClick={() => onFocusResuming(r.key, r.sessionId, r.terminalId)}
               title="Jump to this restoring terminal"
             >

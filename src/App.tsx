@@ -236,7 +236,8 @@ export default function App() {
     handleRenameSession,
     handleSelectSession,
     resumingTracked,
-    resumingOrder,
+    resumingSeeds,
+    resumingLiveIds,
     clearResuming,
   } = useSessions(refreshOverviewsRef)
 
@@ -472,8 +473,8 @@ export default function App() {
   // shrinks as tokens clear (focus/dismiss/seen) and the section hides when empty.
   // Scoped to the active workspace so a restored row can't yank focus off-scope.
   const resumingRows = useMemo(
-    () => deriveResumingRows(scopedSessions, resumingTracked, resumingOrder),
-    [scopedSessions, resumingTracked, resumingOrder],
+    () => deriveResumingRows(scopedSessions, resumingTracked, resumingSeeds, resumingLiveIds),
+    [scopedSessions, resumingTracked, resumingSeeds, resumingLiveIds],
   )
 
   // Primary click on a RESUMING row: focus that session+terminal (reusing the
