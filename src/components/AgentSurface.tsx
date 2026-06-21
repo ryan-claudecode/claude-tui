@@ -1,8 +1,6 @@
 import { useCallback, useState } from "react"
 import AgentView, { type TranscriptCache } from "./AgentView"
 import AgentComposer from "./AgentComposer"
-import AgentModelPicker from "./AgentModelPicker"
-import AgentEffortPicker from "./AgentEffortPicker"
 import { toast } from "../lib/toast"
 
 interface Props {
@@ -39,11 +37,17 @@ interface Props {
  * `<div class="agent-surface"><AgentView/><AgentComposer/></div>` both call sites
  * used before.
  *
- * CAPP-39 gate ③ — the header also carries the "Raw view" escape hatch: switch THIS
+ * CAPP-39 gate ③ — the surface also owns the "Raw view" escape hatch: switch THIS
  * structured terminal back to the legacy xterm/PTY engine at runtime (resuming the
  * same conversation). Copies the AgentModelPicker respawn-and-re-point pattern
  * (setTerminalEngine → res.terminalId → onSwitched), so the surface stays
  * self-contained and works identically single-pane and in a split.
+ *
+ * UI tweak (header removal) — the old top header bar is gone; the model picker, the
+ * effort picker, and the Raw-view button now live in a `.composer-controls-row`
+ * UNDER the composer's send/stop button row. AgentSurface still owns the switchToRaw
+ * handler + switching state (it has the sessionId/terminalId), and threads them — plus
+ * model/effort — down into AgentComposer, which renders the secondary chrome.
  */
 export default function AgentSurface({
   terminalId,
@@ -81,20 +85,6 @@ export default function AgentSurface({
 
   return (
     <div className={`agent-surface ${active ? "active" : "hidden"}`}>
-      <div className="agent-surface-header">
-        <AgentModelPicker sessionId={sessionId} terminalId={terminalId} model={model} onSwitched={onSwitched} />
-        <AgentEffortPicker sessionId={sessionId} terminalId={terminalId} effort={effort} onSwitched={onSwitched} />
-        {/* CAPP-39 gate ③ — switch this session to the raw xterm terminal. Disabled
-            while the agent is busy (the switch would lose the live turn — Stop first). */}
-        <button
-          className="agent-raw-view-btn"
-          onClick={switchToRaw}
-          disabled={!sessionId || busy || switching}
-          title="Switch this session to the raw terminal view (keeps the conversation)"
-        >
-          {switching ? "Switching…" : "Raw view"}
-        </button>
-      </div>
       <AgentView
         terminalId={terminalId}
         active={active}
@@ -105,7 +95,17 @@ export default function AgentSurface({
         transcriptCache={transcriptCache}
         onSwitched={onSwitched}
       />
-      <AgentComposer terminalId={terminalId} busy={busy} onSwitched={onSwitched} />
+      <AgentComposer
+        terminalId={terminalId}
+        sessionId={sessionId}
+        model={model}
+        effort={effort}
+        busy={busy}
+        switching={switching}
+        rawViewDisabled={!sessionId || busy || switching}
+        onSwitchToRaw={switchToRaw}
+        onSwitched={onSwitched}
+      />
     </div>
   )
 }

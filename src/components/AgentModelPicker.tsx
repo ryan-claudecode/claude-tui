@@ -8,8 +8,9 @@ interface Props {
   terminalId: string
   /** The terminal's current `--model` (alias or id). */
   model?: string
-  /** "header" (the surface toolbar) | "banner" (inline in the unavailable-model error). */
-  variant?: "header" | "banner"
+  /** "header" (legacy surface toolbar) | "banner" (inline in the unavailable-model
+   *  error) | "composer" (the compact secondary controls row under the composer). */
+  variant?: "header" | "banner" | "composer"
   /**
    * Called with the REPLACEMENT terminal id after a switch. The respawn mints a
    * fresh terminal id (mirroring handoff/reopen), so the caller must re-point the

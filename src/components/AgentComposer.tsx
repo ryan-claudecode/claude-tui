@@ -1,18 +1,37 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import SlashCommandPicker from "./SlashCommandPicker"
 import { useSlashPicker } from "../hooks/useSlashPicker"
+import AgentModelPicker from "./AgentModelPicker"
+import AgentEffortPicker from "./AgentEffortPicker"
 
 interface Props {
   /** The structured (headless) terminal this composer feeds. */
   terminalId: string
+  /** The work-session container the terminal belongs to (for the model/effort/raw
+   *  switches now rendered under the composer). Null until the session is started. */
+  sessionId?: string | null
+  /** The terminal's current `--model` (shown in + driven by the model picker). */
+  model?: string
+  /** CAPP-46 — the terminal's current `--effort` level (driven by the effort picker). */
+  effort?: string
   /**
    * BO-10 — the agent is generating a turn or parked on a permission prompt. While
    * busy, Send is disabled (writing to a blocked stdin would silently buffer unread
    * — the message would look "sent" but lost) and a Stop button surfaces instead.
    */
   busy?: boolean
+  /** CAPP-39 gate ③ — true while the structured→xterm engine swap is in flight; the
+   *  Raw-view button shows "Switching…" and stays disabled. Owned by AgentSurface. */
+  switching?: boolean
+  /** CAPP-39 gate ③ — disabled state for the Raw-view button (= !sessionId || busy ||
+   *  switching). Computed by AgentSurface, which owns the switch. */
+  rawViewDisabled?: boolean
+  /** CAPP-39 gate ③ — fire AgentSurface's structured→xterm switch (relocated from the
+   *  old header into the composer controls row). */
+  onSwitchToRaw?: () => void
   /** Re-point the active selection at the respawned terminal after an interrupt
-   *  (the kill+resume mints a new terminal id, like the model switch). */
+   *  (the kill+resume mints a new terminal id, like the model switch). Also passed to
+   *  the model/effort pickers, whose respawn mints a fresh id too. */
   onSwitched?: (terminalId: string) => void
 }
 
@@ -28,7 +47,17 @@ interface Props {
  * A structured message always submits, so there is no staged "don't run" mode
  * here: send is immediate.
  */
-export default function AgentComposer({ terminalId, busy = false, onSwitched }: Props) {
+export default function AgentComposer({
+  terminalId,
+  sessionId = null,
+  model,
+  effort,
+  busy = false,
+  switching = false,
+  rawViewDisabled = false,
+  onSwitchToRaw,
+  onSwitched,
+}: Props) {
   const [text, setText] = useState("")
   const [attachments, setAttachments] = useState<string[]>([])
   const [dragOver, setDragOver] = useState(false)
@@ -224,6 +253,36 @@ export default function AgentComposer({ terminalId, busy = false, onSwitched }: 
           disabled={busy || (!text.trim() && attachments.length === 0)}
         >
           Send
+        </button>
+      </div>
+      {/* The session chrome — model + effort + the Raw-view escape hatch — relocated
+          OUT of the old surface header into a compact secondary row directly under the
+          send/stop buttons. Always visible (no hover-reveal); reads as quiet chrome,
+          smaller than the Send button. The pickers self-disable on busy || !sessionId;
+          the Raw-view button is disabled while busy/switching (the switch would lose a
+          live turn) and shows "Switching…" during the swap. */}
+      <div className="composer-controls-row">
+        <AgentModelPicker
+          sessionId={sessionId}
+          terminalId={terminalId}
+          model={model}
+          variant="composer"
+          onSwitched={onSwitched}
+        />
+        <AgentEffortPicker
+          sessionId={sessionId}
+          terminalId={terminalId}
+          effort={effort}
+          variant="composer"
+          onSwitched={onSwitched}
+        />
+        <button
+          className="agent-raw-view-btn agent-raw-view-btn-composer"
+          onClick={onSwitchToRaw}
+          disabled={rawViewDisabled}
+          title="Switch this session to the raw terminal view (keeps the conversation)"
+        >
+          {switching ? "Switching…" : "Raw view"}
         </button>
       </div>
       {/* WS3 — a PERSISTENT, low-chrome hint strip under the input bar (absorbs the

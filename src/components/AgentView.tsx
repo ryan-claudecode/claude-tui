@@ -15,7 +15,7 @@ import {
   type NeedsAuthBlock,
   type AssistantTextBlock,
 } from "../lib/agentTranscript"
-import { nextScrollTop, scrollFollowBehavior } from "../lib/scrollStick"
+import { nextScrollTop, scrollFollowBehavior, shouldStick, resizeFollowBehavior } from "../lib/scrollStick"
 import { useSmoothReveal } from "../hooks/useSmoothReveal"
 import { prefersReducedMotion } from "../lib/reducedMotion"
 import AgentModelPicker from "./AgentModelPicker"
@@ -225,6 +225,17 @@ export default function AgentView({
   // prefers-reduced-motion via `matchMedia` (the global CSS reset only governs
   // CSS-driven scroll; an explicit `scrollTo({behavior:'smooth'})` must opt out here).
   const didFirstScrollRef = useRef(false)
+
+  // The current prefers-reduced-motion answer, read fresh at the call site (cheap;
+  // the value can change at runtime if the user toggles the OS setting mid-session).
+  const reduceMotion = useCallback(
+    () =>
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    [],
+  )
+
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -237,10 +248,6 @@ export default function AgentView({
     // We just appended, so `before` reflects pre-append metrics only loosely;
     // when pinned we always snap to the bottom, which is the intended behavior.
     const top = target ?? el.scrollHeight
-    const reduceMotion =
-      typeof window !== "undefined" &&
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
     // WS5 fix — decide instant-vs-smooth via the pure helper, passing the block
     // count so the EMPTY initial mount (blocks.length === 0, before the async BO-12
     // disk seed commits) does NOT consume the one-shot. Only the first NON-EMPTY
@@ -251,23 +258,61 @@ export default function AgentView({
     const { behavior, markFirstDone } = scrollFollowBehavior(
       didFirstScrollRef.current,
       state.blocks.length,
-      reduceMotion,
+      reduceMotion(),
     )
     if (markFirstDone) didFirstScrollRef.current = true
     el.scrollTo({ top, behavior })
-  }, [state.blocks])
+  }, [state.blocks, reduceMotion])
+
+  // UI tweak (stick-to-bottom on SEND) — when the turn starts (busy flips true) the
+  // user's just-sent message + the "thinking" WorkingRow + the turn separator (HR)
+  // append at the bottom; without an explicit follow they land below the fold. Force a
+  // snap to the bottom on the busy rising edge so the new turn is in view. Re-arm
+  // stick too (the user pressed Send → they want to watch this turn). Instant snap:
+  // there's no streaming yet to glide with, and it matches the "jump to the new turn"
+  // intent. Guard the empty initial mount (busy may be false there anyway).
+  useEffect(() => {
+    if (!busy) return
+    const el = scrollRef.current
+    if (!el) return
+    stickRef.current = true
+    el.scrollTo({ top: el.scrollHeight, behavior: "auto" })
+  }, [busy])
+
+  // UI tweak (FOLLOW STREAMING GROWTH) — useSmoothReveal grows the assistant block's
+  // height frame-by-frame during a turn, but the block-count effect above only fires
+  // when a NEW block appends, so the revealing text + HR would scroll out of view.
+  // Observe the scroll container's content size and, while stuck-to-bottom, follow the
+  // growth to the bottom (smooth, or instant under reduced motion). A genuine user
+  // scroll-up de-arms stick (onScroll), so this never fights them; it re-arms when they
+  // return to the bottom. Pure decisions live in scrollStick.ts; this is just the wiring.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (typeof ResizeObserver !== "function") return
+    const ro = new ResizeObserver(() => {
+      if (!stickRef.current) return
+      el.scrollTo({ top: el.scrollHeight, behavior: resizeFollowBehavior(reduceMotion()) })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [reduceMotion])
 
   // Track stick state from scroll position. The smooth follow's own intermediate
   // scroll events may briefly read as "not at bottom" and transiently de-stick, but
   // this is self-correcting: the animation's final frame lands at the bottom (re-
   // sticking), and every new block re-evaluates follow — so at worst one delta's
   // follow is skipped, never a permanent freeze. A genuine user scroll-up is ALWAYS
-  // honored (it de-sticks and we never yank them back).
+  // honored (it de-sticks and we never yank them back); a scroll back DOWN within the
+  // threshold RE-ARMS (shouldStick is symmetric — same threshold both edges).
   const onScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
-    stickRef.current =
-      el.scrollHeight - (el.scrollTop + el.clientHeight) <= 24
+    stickRef.current = shouldStick({
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    })
   }, [])
 
   const expand = useCallback((block: TranscriptBlock) => {

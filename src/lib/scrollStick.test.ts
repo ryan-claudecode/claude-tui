@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest"
-import { isAtBottom, nextScrollTop, scrollFollowBehavior } from "./scrollStick"
+import {
+  isAtBottom,
+  nextScrollTop,
+  scrollFollowBehavior,
+  shouldStick,
+  resizeFollowBehavior,
+} from "./scrollStick"
 
 describe("isAtBottom", () => {
   it("is true when scrolled to the exact bottom", () => {
@@ -85,5 +91,49 @@ describe("scrollFollowBehavior (WS5 instant-vs-smooth)", () => {
   it("always snaps instant under reduced-motion, even on a later settle", () => {
     const r = scrollFollowBehavior(true, 9, true)
     expect(r.behavior).toBe("auto")
+  })
+})
+
+describe("shouldStick (UI tweak: de-arm on scroll-up, re-arm at threshold)", () => {
+  it("is armed (true) when pinned to the exact bottom", () => {
+    expect(shouldStick({ scrollTop: 800, scrollHeight: 1000, clientHeight: 200 })).toBe(true)
+  })
+
+  it("stays armed within the threshold of the bottom (re-arm zone)", () => {
+    // 14px from the bottom (< 24 threshold) → re-armed.
+    expect(shouldStick({ scrollTop: 786, scrollHeight: 1000, clientHeight: 200 }, 24)).toBe(true)
+  })
+
+  it("DE-ARMS (false) the instant the user scrolls up past the threshold", () => {
+    // 100px from the bottom (> 24 threshold) → reading history, leave them alone.
+    expect(shouldStick({ scrollTop: 700, scrollHeight: 1000, clientHeight: 200 }, 24)).toBe(false)
+  })
+
+  it("RE-ARMS (true) the moment the user scrolls back within the threshold", () => {
+    // Same content; user was de-armed at scrollTop 700, then scrolls back down to 790
+    // → within 24px of bottom → re-armed (no hysteresis: same threshold both edges).
+    expect(shouldStick({ scrollTop: 700, scrollHeight: 1000, clientHeight: 200 }, 24)).toBe(false)
+    expect(shouldStick({ scrollTop: 790, scrollHeight: 1000, clientHeight: 200 }, 24)).toBe(true)
+  })
+
+  it("uses the SAME threshold as isAtBottom (no hysteresis)", () => {
+    const m = { scrollTop: 779, scrollHeight: 1000, clientHeight: 200 } // 21px from bottom
+    expect(shouldStick(m, 24)).toBe(isAtBottom(m, 24))
+    const m2 = { scrollTop: 770, scrollHeight: 1000, clientHeight: 200 } // 30px from bottom
+    expect(shouldStick(m2, 24)).toBe(isAtBottom(m2, 24))
+  })
+
+  it("is armed for content that fits without scrolling", () => {
+    expect(shouldStick({ scrollTop: 0, scrollHeight: 150, clientHeight: 200 })).toBe(true)
+  })
+})
+
+describe("resizeFollowBehavior (UI tweak: streaming-growth follow)", () => {
+  it("follows streaming growth SMOOTHLY by default", () => {
+    expect(resizeFollowBehavior(false)).toBe("smooth")
+  })
+
+  it("snaps INSTANT under prefers-reduced-motion", () => {
+    expect(resizeFollowBehavior(true)).toBe("auto")
   })
 })

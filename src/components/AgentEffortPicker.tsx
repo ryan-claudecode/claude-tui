@@ -8,8 +8,9 @@ interface Props {
   terminalId: string
   /** The terminal's current `--effort` level, or undefined when none is set. */
   effort?: string
-  /** "header" (the surface toolbar) | "banner" (inline variant, for parity with the model picker). */
-  variant?: "header" | "banner"
+  /** "header" (legacy surface toolbar) | "banner" (inline variant, for parity with the
+   *  model picker) | "composer" (the compact secondary controls row under the composer). */
+  variant?: "header" | "banner" | "composer"
   /**
    * Called with the REPLACEMENT terminal id after a switch. The respawn mints a
    * fresh terminal id (mirroring the model switch / handoff / reopen), so the caller

@@ -271,6 +271,28 @@ test("structured engine: composer is usable and a streamed reply renders", async
   // No throw/crash from the mid-stream partial markdown (unclosed bold + open
   // ``` fence between deltas) — the pageErrors assertion at the end enforces this.
 
+  // UI tweak (header removal) — the OLD top header bar is gone, and the model picker +
+  // effort picker + Raw-view button now live in the `.composer-controls-row` UNDER the
+  // composer's send/stop buttons. Assert the header is absent and the controls relocated.
+  await expect(win.locator(".agent-surface-header")).toHaveCount(0)
+  const controlsRow = win.locator(".agent-composer .composer-controls-row")
+  await expect(controlsRow).toBeVisible()
+  await expect(controlsRow.locator(".agent-model-picker-select")).toBeVisible()
+  await expect(controlsRow.locator(".agent-effort-picker-select")).toBeVisible()
+  await expect(controlsRow.locator(".agent-raw-view-btn")).toBeVisible()
+
+  // UI tweak (stick-to-bottom) — after sending, the transcript is scrolled to (near)
+  // the bottom so the just-sent message + the streamed reply are in view (not below
+  // the fold). Assert scrollTop + clientHeight is within a small threshold of
+  // scrollHeight (the same ~24px stick threshold, with headroom for sub-pixel rounding).
+  await expect(async () => {
+    const atBottom = await win.locator(".agent-view").evaluate((el) => {
+      const e = el as HTMLElement
+      return e.scrollHeight - (e.scrollTop + e.clientHeight)
+    })
+    expect(atBottom).toBeLessThanOrEqual(32)
+  }).toPass({ timeout: 10_000 })
+
   // BO-6 — the model picker is on the structured surface, showing the default model
   // (opus, since the seeded config sets no rendering.model and the temp home has no
   // ~/.claude/settings.json) with the alias options.
