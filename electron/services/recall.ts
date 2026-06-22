@@ -1,4 +1,5 @@
 import type { WorkSession, Note } from "./sessions"
+import { UNTAGGED_STEM, type WorkspaceFinding } from "./workspaceMemory"
 
 /**
  * CAPP-86 — "The Lexicon" foundational v1. RecallService is a READ-ONLY,
@@ -20,6 +21,13 @@ import type { WorkSession, Note } from "./sessions"
 /** The scope a recall query runs over (the design doc's three coordinated surfaces). */
 export type RecallScope = "session" | "workspace" | "all"
 
+/** Synthetic session id stamped on every workspace-memory RecallEntry. It can never
+ *  match a real WorkSession id, so a memory entry is invisible under `session` scope
+ *  and never adds a phantom session to the cross-session digest (CAPP-87 / U4). */
+export const WORKSPACE_MEMORY_SESSION_ID = "__workspace_memory__"
+/** The display name a workspace-memory entry carries (the citation the rail/panel show). */
+export const WORKSPACE_MEMORY_SESSION_NAME = "Workspace memory"
+
 /**
  * One indexed unit of session knowledge. A `summary` entry has no `status` semantics
  * of its own (it's the rolling blurb); a `note` entry carries its ledger status, and
@@ -33,10 +41,18 @@ export interface RecallEntry {
   text: string
   /** "active" | "ruled-out" for notes; "summary" for a session summary entry. */
   status: "active" | "ruled-out" | "summary"
-  source: "note" | "summary"
+  /** CAPP-87 / U4 — `workspace-memory` is a promoted/authored finding from the durable
+   *  workspace tier; it carries a synthetic sessionId and (for promotions) provenance. */
+  source: "note" | "summary" | "workspace-memory"
   createdAt: number
   /** For a ruled-out note: the text of the note that corrected/superseded it. */
   correction?: string
+  /** For a workspace-memory entry: the session the finding was promoted FROM (undefined
+   *  for a user/agent-authored memory finding). Half of the (origin) de-dup key. */
+  originSessionId?: string
+  /** For a workspace-memory entry: the origin session `Note.id` it was promoted from —
+   *  the other half of the (originSessionId, originNoteId) de-dup key. */
+  originNoteId?: string
 }
 
 /** A ranked recall hit: the indexed entry plus its match score. */
@@ -46,12 +62,18 @@ export interface RecallHit extends RecallEntry {
 
 /** A cross-session digest for the Rail KNOWS section (CAPP-84). */
 export interface RecallSummary {
-  /** Number of work sessions that contributed at least one entry within scope. */
+  /** Number of work sessions that contributed at least one entry within scope. NEVER
+   *  counts the synthetic workspace-memory "session" (that's a separate digest below). */
   sessions: number
-  /** Total active findings (notes) within scope. */
+  /** Total active findings (notes) within scope. Workspace-memory findings are excluded
+   *  here — they're counted in {@link RecallSummary.workspaceMemory} instead. */
   findings: number
-  /** Total ruled-out (superseded) findings within scope. */
+  /** Total ruled-out (superseded) findings within scope. Workspace-memory excluded. */
   ruledOut: number
+  /** CAPP-87 / U4 — the durable workspace-memory tier's counts within scope. ALWAYS
+   *  PRESENT (never omitted) so the digest shape is uniform; it's the second tier of the
+   *  two-tier brain (memory ∪ live session findings), surfaced as its own rail group. */
+  workspaceMemory: { findings: number; ruledOut: number }
   /** The most-recently-created ruled-out one-liner within scope (with its correction), if any. */
   recentRuledOut?: { text: string; correction?: string; sessionName: string; createdAt: number }
 }
@@ -102,14 +124,54 @@ export const lexicalScorer: RecallScorer = {
 }
 
 /**
- * Derive the flat recall index from a list of work sessions. One entry per
- * non-empty summary + one per note (active and superseded). A superseded note
- * carries the text of the note that corrected it (resolved via `supersededBy`),
- * mirroring `getContext`/`getOverview`'s ruled-out rendering. Pure (no I/O), so the
- * service can re-derive it cheaply and tests can assert it directly.
+ * A workspace-memory finding flattened with its OWNING bucket's workspaceId. A bare
+ * {@link WorkspaceFinding} has no workspaceId of its own (it lives on the bucket
+ * record), so `getIndex` attaches the bucket id when it flattens
+ * `listWorkspaceMemory()`. `workspaceId` is still the raw STORED value (a real id or the
+ * untagged stem) — `deriveRecallIndex` normalizes the stem → `undefined`.
  */
-export function deriveRecallIndex(sessions: WorkSession[]): RecallEntry[] {
+export type MemoryFinding = WorkspaceFinding & { workspaceId: string }
+
+/**
+ * Derive the flat recall index — a UNION of two durable tiers (CAPP-87 / U4):
+ *   1. live SESSION findings (per non-empty summary + per note, active & superseded), and
+ *   2. WORKSPACE-MEMORY findings (the promoted/authored durable tier).
+ *
+ * Counted EXACTLY ONCE. A finding promoted up to workspace memory leaves its origin
+ * `Note` in place on disk, so naively the union would hold both. We de-dup so the
+ * WORKSPACE twin WINS: the session-note pass skips any note whose
+ * `(originSessionId, originNoteId)` pair matches a promoted memory finding. The key is
+ * the PAIR (not a bare note id — two sessions in different workspaces can share a note
+ * id; and not a content hash — the Keep flow lets users edit promoted text). This is a
+ * SINGLE combined signature precisely because the note pass must already know the full
+ * promoted-origin set (`promotedKeys`) to suppress correctly.
+ *
+ * Each memory finding emits one entry with a synthetic sessionId
+ * ({@link WORKSPACE_MEMORY_SESSION_ID}) and `source: "workspace-memory"`. The bucket's
+ * workspaceId rides ON each flattened finding (a `WorkspaceFinding` itself does not
+ * carry one — it lives on the owning `WorkspaceMemoryRecord`; `getIndex` attaches it
+ * when it flattens the buckets). The emitted `workspaceId` is the SCOPE value, not the
+ * storage key: the untagged bucket's stem ({@link UNTAGGED_STEM}) is normalized to
+ * `undefined` so `scopeFilter` matches an untagged caller (whose `workspaceId` is
+ * `undefined`) — see C2 in the plan.
+ *
+ * Pure (no I/O), so the service re-derives it cheaply and tests assert it directly.
+ */
+export function deriveRecallIndex(
+  sessions: WorkSession[],
+  memoryFindings: MemoryFinding[] = [],
+): RecallEntry[] {
   const entries: RecallEntry[] = []
+
+  // The de-dup set: every promoted memory finding keyed on its origin PAIR. A live
+  // session note matching one of these is suppressed from the index (the workspace
+  // twin already carries it). Authored memory findings (no origin) don't participate.
+  const promotedKeys = new Set(
+    memoryFindings
+      .filter((f) => f.originSessionId && f.originNoteId)
+      .map((f) => `${f.originSessionId}|${f.originNoteId}`),
+  )
+
   for (const s of sessions) {
     const base = { sessionId: s.id, sessionName: s.name, workspaceId: s.workspaceId }
     if (s.summary && s.summary.trim()) {
@@ -125,6 +187,10 @@ export function deriveRecallIndex(sessions: WorkSession[]): RecallEntry[] {
     }
     const byId = new Map<string, Note>(s.notes.map((n) => [n.id, n]))
     for (const n of s.notes) {
+      // De-dup: skip the live origin note when its (session, note) pair was promoted —
+      // the durable workspace twin wins. Never deletes from disk; just omits from the
+      // derived index so the same logical finding isn't counted twice.
+      if (promotedKeys.has(`${s.id}|${n.id}`)) continue
       if (n.status === "superseded") {
         const correction = n.supersededBy ? byId.get(n.supersededBy)?.text : undefined
         entries.push({
@@ -140,6 +206,44 @@ export function deriveRecallIndex(sessions: WorkSession[]): RecallEntry[] {
       }
     }
   }
+
+  // Workspace-memory tier → one entry each. Within a single record the supersede graph
+  // is closed over the workspace twin ids (rewritten on promote), so a superseded
+  // finding's correction is its in-record corrector's text.
+  const memById = new Map<string, MemoryFinding>(memoryFindings.map((f) => [f.id, f]))
+  for (const f of memoryFindings) {
+    // Normalize the untagged bucket's storage stem → undefined (the scope value), so an
+    // untagged caller (workspaceId === undefined) matches under 'workspace' scope.
+    const workspaceId = f.workspaceId === UNTAGGED_STEM ? undefined : f.workspaceId
+    if (f.status === "superseded") {
+      const correction = f.supersededBy ? memById.get(f.supersededBy)?.text : undefined
+      entries.push({
+        sessionId: WORKSPACE_MEMORY_SESSION_ID,
+        sessionName: WORKSPACE_MEMORY_SESSION_NAME,
+        workspaceId,
+        text: f.text,
+        status: "ruled-out",
+        source: "workspace-memory",
+        createdAt: f.createdAt,
+        ...(correction ? { correction } : {}),
+        ...(f.originSessionId != null ? { originSessionId: f.originSessionId } : {}),
+        ...(f.originNoteId != null ? { originNoteId: f.originNoteId } : {}),
+      })
+    } else {
+      entries.push({
+        sessionId: WORKSPACE_MEMORY_SESSION_ID,
+        sessionName: WORKSPACE_MEMORY_SESSION_NAME,
+        workspaceId,
+        text: f.text,
+        status: "active",
+        source: "workspace-memory",
+        createdAt: f.createdAt,
+        ...(f.originSessionId != null ? { originSessionId: f.originSessionId } : {}),
+        ...(f.originNoteId != null ? { originNoteId: f.originNoteId } : {}),
+      })
+    }
+  }
+
   return entries
 }
 
@@ -152,6 +256,14 @@ export function deriveRecallIndex(sessions: WorkSession[]): RecallEntry[] {
  *                  An UNTAGGED caller (no workspace, the "All" bucket) sees only
  *                  untagged entries — symmetric, no cross-workspace leak.
  *  - 'all'       → everything (explicit opt-in).
+ *
+ * CAPP-87 / U4 — workspace-memory (the durable tier) participates IDENTICALLY to notes:
+ *  - 'session' → a memory entry's synthetic sessionId can never equal a real session id,
+ *    so workspace memory is INVISIBLE under 'session' scope (deliberate).
+ *  - 'workspace' (default) → a memory entry matches on its NORMALIZED workspaceId (the
+ *    derive step turned the untagged stem into `undefined`), so an untagged caller sees
+ *    only the untagged bucket's memory and a ws-A caller never sees the untagged bucket.
+ *  - 'all' → memory is returnable cross-workspace, an explicit, documented opt-in.
  */
 export function scopeFilter(
   entries: RecallEntry[],
@@ -173,6 +285,7 @@ export interface RecallServiceOpts {
 
 export class RecallService {
   private listSessions: () => WorkSession[]
+  private listWorkspaceMemory: () => Array<{ workspaceId: string; findings: WorkspaceFinding[] }>
   private scorer: RecallScorer
   /** The derived index, or null when invalidated (re-built lazily on next read). */
   private index: RecallEntry[] | null = null
@@ -181,9 +294,18 @@ export class RecallService {
    * @param listSessions a callback returning the current WorkSession[] (injected,
    *   mirroring how SessionService takes getActiveWorkspaceId — so RecallService is
    *   decoupled from SessionService and trivially testable with synthetic input).
+   * @param listWorkspaceMemory a callback returning the durable workspace-memory tier
+   *   (CAPP-87 / U4) — the second source unioned into the index. Injected (not reached
+   *   into directly) so the service stays decoupled + testable; defaults to none so the
+   *   single-arg call sites and tests keep working.
    */
-  constructor(listSessions: () => WorkSession[], opts: RecallServiceOpts = {}) {
+  constructor(
+    listSessions: () => WorkSession[],
+    listWorkspaceMemory: () => Array<{ workspaceId: string; findings: WorkspaceFinding[] }> = () => [],
+    opts: RecallServiceOpts = {},
+  ) {
     this.listSessions = listSessions
+    this.listWorkspaceMemory = listWorkspaceMemory
     this.scorer = opts.scorer ?? lexicalScorer
   }
 
@@ -196,9 +318,17 @@ export class RecallService {
     this.index = null
   }
 
-  /** Lazily (re)derive + cache the index from the current sessions. */
+  /** Lazily (re)derive + cache the UNION index from the current sessions AND the
+   *  durable workspace-memory tier (flattened across every bucket, each finding tagged
+   *  with its owning bucket's workspaceId so scoping works — a bare WorkspaceFinding
+   *  has none of its own). */
   private getIndex(): RecallEntry[] {
-    if (this.index === null) this.index = deriveRecallIndex(this.listSessions())
+    if (this.index === null) {
+      const memoryFindings = this.listWorkspaceMemory().flatMap((m) =>
+        m.findings.map((f) => ({ ...f, workspaceId: m.workspaceId })),
+      )
+      this.index = deriveRecallIndex(this.listSessions(), memoryFindings)
+    }
     return this.index
   }
 
@@ -231,14 +361,27 @@ export class RecallService {
   }
 
   /**
-   * Cross-session digest for the Rail KNOWS section: counts of findings / ruled-out
-   * across OTHER sessions in scope (the caller's OWN session is EXCLUDED — its
-   * findings already show in the rail's "This session" digest, so counting them here
-   * would double-count). The result is the caller's most-recent ruled-out one-liner
-   * across those other sessions (with its correction). 'workspace' is the natural
-   * default for the rail. NB: when the workspace has only the caller's session, this
-   * yields sessions:0 / findings:0, and `deriveKnowsRecall` correctly HIDES the
-   * cross-session group (no "Across N sessions" line for a lone session).
+   * Digests for the Rail KNOWS section — now TWO tiers (CAPP-87 / U4):
+   *
+   *  • CROSS-SESSION ("Across sessions"): counts of findings / ruled-out across OTHER
+   *    sessions in scope (the caller's OWN session is EXCLUDED — its findings already
+   *    show in the rail's "This session" digest, so counting them here would
+   *    double-count), plus the most-recent cross-session ruled-out one-liner. When the
+   *    workspace has only the caller's session this yields sessions:0 / findings:0, and
+   *    `deriveKnowsRecall` correctly HIDES the cross-session group.
+   *
+   *  • WORKSPACE-MEMORY ({@link RecallSummary.workspaceMemory}, ALWAYS PRESENT): the
+   *    durable tier's active / ruled-out counts in scope. A finding promoted FROM the
+   *    caller's own session is excluded (its live note already shows in "This session"),
+   *    but agent/user-authored memory and memory promoted from OTHER sessions are kept.
+   *
+   * The loop handles workspace-memory in a DEDICATED branch placed BEFORE the
+   * self/origin `continue`, because that `continue` skips the whole iteration — the
+   * memory counting could not live after it. The cross-session accumulation is guarded
+   * `e.source !== "workspace-memory"`, so a synthetic memory entry never adds a phantom
+   * session, never feeds the cross-session `findings`/`ruledOut`/`recentRuledOut`.
+   *
+   * 'workspace' is the natural default for the rail.
    */
   summary(
     scope: RecallScope = "workspace",
@@ -248,11 +391,25 @@ export class RecallService {
     const sessionIds = new Set<string>()
     let findings = 0
     let ruledOut = 0
+    let wmFindings = 0
+    let wmRuledOut = 0
     let recent: RecallSummary["recentRuledOut"] | undefined
     for (const e of scoped) {
-      // Exclude the caller's own session — its knowledge already appears in the
-      // rail's "This session" digest; counting it here would double-count.
-      if (caller.sessionId && e.sessionId === caller.sessionId) continue
+      if (e.source === "workspace-memory") {
+        // Workspace-memory digest: exclude ONLY findings promoted FROM the caller's own
+        // session (its live note already shows in "This session"); still count
+        // agent/user-authored memory and memory promoted from OTHER sessions. This
+        // branch never feeds sessionIds / findings / ruledOut / recentRuledOut.
+        if (caller.sessionId && e.originSessionId === caller.sessionId) continue
+        if (e.status === "ruled-out") wmRuledOut++
+        else if (e.status === "active") wmFindings++
+        continue
+      }
+      // ── cross-session ("other sessions") digest ──
+      // Exclude the caller's own session — its knowledge already appears in the rail's
+      // "This session" digest; counting it here would double-count. The originSessionId
+      // guard catches the (rare) case of a non-memory entry carrying it.
+      if (caller.sessionId && (e.sessionId === caller.sessionId || e.originSessionId === caller.sessionId)) continue
       sessionIds.add(e.sessionId)
       if (e.source === "note" && e.status === "active") findings++
       else if (e.status === "ruled-out") {
@@ -271,6 +428,7 @@ export class RecallService {
       sessions: sessionIds.size,
       findings,
       ruledOut,
+      workspaceMemory: { findings: wmFindings, ruledOut: wmRuledOut },
       ...(recent ? { recentRuledOut: recent } : {}),
     }
   }

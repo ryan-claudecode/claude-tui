@@ -5,9 +5,13 @@ import {
   scopeFilter,
   lexicalScorer,
   tokenize,
+  WORKSPACE_MEMORY_SESSION_ID,
+  WORKSPACE_MEMORY_SESSION_NAME,
   type RecallScorer,
+  type MemoryFinding,
 } from "./recall"
 import type { WorkSession, Note } from "./sessions"
+import { UNTAGGED_STEM, type WorkspaceFinding } from "./workspaceMemory"
 
 /**
  * CAPP-86 — "The Lexicon" RecallService. Hermetic: synthetic WorkSession[] fed in
@@ -41,6 +45,37 @@ function session(over: Partial<WorkSession> & { id: string }): WorkSession {
     createdAt: over.createdAt ?? 0,
     updatedAt: over.updatedAt ?? 0,
   }
+}
+
+let wmSeq = 0
+/** A memory finding (with its owning bucket's `workspaceId` attached, the shape
+ *  `deriveRecallIndex` takes directly) for the union/de-dup tests. `workspaceId` is the
+ *  STORED value (a real id, or UNTAGGED_STEM for the untagged bucket); the derive step
+ *  normalizes the stem → undefined. */
+function wmFinding(over: Partial<MemoryFinding> & { text: string }): MemoryFinding {
+  const t = over.createdAt ?? 0
+  return {
+    id: over.id ?? `wm-${++wmSeq}`,
+    text: over.text,
+    workspaceId: over.workspaceId ?? "ws-a",
+    createdAt: t,
+    source: over.source ?? "self",
+    status: over.status ?? "active",
+    ...(over.supersededBy ? { supersededBy: over.supersededBy } : {}),
+    ...(over.originSessionId != null ? { originSessionId: over.originSessionId } : {}),
+    ...(over.originNoteId != null ? { originNoteId: over.originNoteId } : {}),
+    promotedAt: over.promotedAt ?? t,
+  }
+}
+
+/** Wrap a list of buckets as the `listWorkspaceMemory()` injection shape (the service
+ *  re-attaches each bucket's workspaceId to its findings when flattening). The
+ *  WorkspaceFinding[] here drop the test helper's `workspaceId` to match the real
+ *  listWorkspaceMemory() return type. */
+function memorySource(
+  buckets: Array<{ workspaceId: string; findings: MemoryFinding[] }>,
+): () => Array<{ workspaceId: string; findings: WorkspaceFinding[] }> {
+  return () => buckets.map((b) => ({ workspaceId: b.workspaceId, findings: b.findings }))
 }
 
 describe("tokenize", () => {
@@ -216,6 +251,7 @@ describe("RecallService.recall", () => {
     const onlyMagic: RecallScorer = { score: (_q, text) => (text.includes("magic") ? 1 : 0) }
     const svc = new RecallService(
       () => [session({ id: "s1", notes: [note("nothing here", 1), note("the magic word", 2)] })],
+      () => [], // no workspace memory (second injected source, CAPP-87 / U4)
       { scorer: onlyMagic },
     )
     const hits = svc.recall("irrelevant query", "all", {})
@@ -270,7 +306,13 @@ describe("RecallService.summary", () => {
 
   it("returns zeroed counts for an empty corpus", () => {
     const svc = new RecallService(() => [])
-    expect(svc.summary("all", {})).toEqual({ sessions: 0, findings: 0, ruledOut: 0 })
+    // CAPP-87 / U4 — workspaceMemory is ALWAYS present (uniform shape), zeroed when empty.
+    expect(svc.summary("all", {})).toEqual({
+      sessions: 0,
+      findings: 0,
+      ruledOut: 0,
+      workspaceMemory: { findings: 0, ruledOut: 0 },
+    })
   })
 
   it("EXCLUDES the caller's own session so the cross-session digest reflects only OTHER sessions", () => {
@@ -338,5 +380,236 @@ describe("RecallService.workspaceIdOf", () => {
     expect(svc.workspaceIdOf("s1")).toBe("ws-x")
     expect(svc.workspaceIdOf("missing")).toBeUndefined()
     expect(svc.workspaceIdOf(undefined)).toBeUndefined()
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────────────
+// CAPP-87 / U4 — the UNION of live session findings ∪ workspace memory, de-duped so
+// each logical finding is counted EXACTLY ONCE on the (originSessionId, originNoteId)
+// pair. These are the heart of U4: the exactly-once de-dup (both risks + collision),
+// the untagged-key normalization, scope behavior, and the workspaceMemory digest.
+// ────────────────────────────────────────────────────────────────────────────────
+
+describe("deriveRecallIndex — union with workspace memory", () => {
+  it("emits one entry per workspace-memory finding with the synthetic id + provenance", () => {
+    const idx = deriveRecallIndex(
+      [],
+      [
+        wmFinding({ text: "authored memory", workspaceId: "ws-a", source: "user" }),
+        wmFinding({
+          text: "promoted memory",
+          workspaceId: "ws-a",
+          originSessionId: "s9",
+          originNoteId: "n9",
+        }),
+      ],
+    )
+    expect(idx).toHaveLength(2)
+    for (const e of idx) {
+      expect(e.source).toBe("workspace-memory")
+      expect(e.sessionId).toBe(WORKSPACE_MEMORY_SESSION_ID)
+      expect(e.sessionName).toBe(WORKSPACE_MEMORY_SESSION_NAME)
+      expect(e.workspaceId).toBe("ws-a")
+    }
+    const promoted = idx.find((e) => e.text === "promoted memory")!
+    expect(promoted.originSessionId).toBe("s9")
+    expect(promoted.originNoteId).toBe("n9")
+    const authored = idx.find((e) => e.text === "authored memory")!
+    expect(authored.originSessionId).toBeUndefined()
+    expect(authored.originNoteId).toBeUndefined()
+  })
+
+  it("a superseded memory finding carries its in-record corrector's text (and a bare strike when missing)", () => {
+    const idx = deriveRecallIndex(
+      [],
+      [
+        wmFinding({ id: "twin-wrong", text: "old memory claim", status: "superseded", supersededBy: "twin-fix" }),
+        wmFinding({ id: "twin-fix", text: "the corrected memory claim" }),
+        wmFinding({ id: "orphan", text: "superseded, corrector trimmed", status: "superseded" }),
+      ],
+    )
+    const ruled = idx.find((e) => e.text === "old memory claim")!
+    expect(ruled.status).toBe("ruled-out")
+    expect(ruled.correction).toBe("the corrected memory claim")
+    const orphan = idx.find((e) => e.text === "superseded, corrector trimmed")!
+    expect(orphan.status).toBe("ruled-out")
+    expect(orphan.correction).toBeUndefined() // bare strikethrough, no dangling arrow
+  })
+
+  it("DE-DUP by the (originSessionId|originNoteId) PAIR — a promoted-from-live finding appears EXACTLY once", () => {
+    const live = session({
+      id: "s1",
+      workspaceId: "ws-a",
+      notes: [note("the auth bug is in token refresh", 10, { id: "n1" })],
+    })
+    const idx = deriveRecallIndex(
+      [live],
+      [wmFinding({ text: "the auth bug is in token refresh", workspaceId: "ws-a", originSessionId: "s1", originNoteId: "n1" })],
+    )
+    // The live origin note is suppressed; only the workspace twin remains.
+    const matches = idx.filter((e) => e.text === "the auth bug is in token refresh")
+    expect(matches).toHaveLength(1)
+    expect(matches[0].source).toBe("workspace-memory")
+  })
+
+  it("COLLISION — two sessions in DIFFERENT workspaces share a bare note id; only the PROMOTED origin is suppressed", () => {
+    const sA = session({ id: "sA", workspaceId: "ws-a", notes: [note("shared note text A", 1, { id: "dup" })] })
+    const sB = session({ id: "sB", workspaceId: "ws-b", notes: [note("shared note text B", 2, { id: "dup" })] })
+    // Only sA's note was promoted (origin pair = sA|dup). sB|dup must NOT be suppressed.
+    const idx = deriveRecallIndex(
+      [sA, sB],
+      [wmFinding({ text: "shared note text A", workspaceId: "ws-a", originSessionId: "sA", originNoteId: "dup" })],
+    )
+    // sB's live note survives (a bare-id key would have wrongly suppressed it).
+    expect(idx.some((e) => e.sessionId === "sB" && e.text === "shared note text B")).toBe(true)
+    // sA's live note is suppressed (the workspace twin wins); no live sA "dup" note left.
+    expect(idx.some((e) => e.sessionId === "sA" && e.source === "note")).toBe(false)
+    // The workspace twin is present.
+    expect(idx.some((e) => e.source === "workspace-memory" && e.text === "shared note text A")).toBe(true)
+  })
+
+  it("an EDITED promotion still de-dups by the pair (not by content)", () => {
+    const live = session({ id: "s1", workspaceId: "ws-a", notes: [note("original wording", 1, { id: "n1" })] })
+    const idx = deriveRecallIndex(
+      [live],
+      // The promoted twin's text was edited in the Keep flow — pair still matches.
+      [wmFinding({ text: "edited wording", workspaceId: "ws-a", originSessionId: "s1", originNoteId: "n1" })],
+    )
+    expect(idx.some((e) => e.source === "note")).toBe(false) // origin suppressed by pair
+    expect(idx.filter((e) => e.text === "edited wording")).toHaveLength(1)
+    expect(idx.some((e) => e.text === "original wording")).toBe(false)
+  })
+
+  it("untagged normalization — an untagged-bucket finding's emitted workspaceId is undefined (NOT the stem)", () => {
+    const idx = deriveRecallIndex([], [wmFinding({ text: "global memory", workspaceId: UNTAGGED_STEM })])
+    expect(idx).toHaveLength(1)
+    expect(idx[0].workspaceId).toBeUndefined()
+    // The sentinel stem must never reach the recall surface.
+    expect(idx[0].workspaceId).not.toBe(UNTAGGED_STEM)
+  })
+})
+
+describe("RecallService — union scope + digest (CAPP-87 / U4)", () => {
+  const buildSvc = (
+    sessions: WorkSession[],
+    memory: Array<{ workspaceId: string; findings: MemoryFinding[] }>,
+  ) => new RecallService(() => sessions, memorySource(memory))
+
+  it("recall unions memory entries within the default workspace scope", () => {
+    const svc = buildSvc(
+      [session({ id: "s1", workspaceId: "ws-a", notes: [note("live finding about auth", 1)] })],
+      [{ workspaceId: "ws-a", findings: [wmFinding({ text: "durable memory about auth", workspaceId: "ws-a", source: "user" })] }],
+    )
+    const hits = svc.recall("auth", "workspace", { workspaceId: "ws-a" })
+    expect(hits.some((h) => h.source === "workspace-memory" && h.text === "durable memory about auth")).toBe(true)
+    expect(hits.some((h) => h.source === "note" && h.text === "live finding about auth")).toBe(true)
+  })
+
+  it("'session' scope EXCLUDES workspace memory (synthetic id never matches a real session)", () => {
+    const svc = buildSvc(
+      [session({ id: "s1", workspaceId: "ws-a", notes: [note("session-only finding", 1)] })],
+      [{ workspaceId: "ws-a", findings: [wmFinding({ text: "memory finding", workspaceId: "ws-a", source: "user" })] }],
+    )
+    const hits = svc.recall("finding", "session", { sessionId: "s1", workspaceId: "ws-a" })
+    expect(hits.some((h) => h.source === "workspace-memory")).toBe(false)
+    expect(hits.some((h) => h.text === "session-only finding")).toBe(true)
+  })
+
+  it("'workspace' scope: an untagged caller sees the untagged bucket; a ws-A caller does NOT", () => {
+    const svc = buildSvc(
+      [],
+      [{ workspaceId: UNTAGGED_STEM, findings: [wmFinding({ text: "untagged global memory", workspaceId: UNTAGGED_STEM, source: "user" })] }],
+    )
+    // Untagged caller (workspaceId undefined) sees the untagged memory.
+    const untaggedHits = svc.recall("memory", "workspace", { workspaceId: undefined })
+    expect(untaggedHits.some((h) => h.text === "untagged global memory")).toBe(true)
+    // A ws-A caller does NOT see the untagged bucket (no cross-workspace leak).
+    const wsAHits = svc.recall("memory", "workspace", { workspaceId: "ws-a" })
+    expect(wsAHits.some((h) => h.text === "untagged global memory")).toBe(false)
+  })
+
+  it("'all' scope returns memory cross-workspace (explicit documented opt-in)", () => {
+    const svc = buildSvc(
+      [],
+      [
+        { workspaceId: "ws-a", findings: [wmFinding({ text: "ws-a memory", workspaceId: "ws-a", source: "user" })] },
+        { workspaceId: "ws-b", findings: [wmFinding({ text: "ws-b memory", workspaceId: "ws-b", source: "user" })] },
+      ],
+    )
+    const hits = svc.recall("memory", "all", { workspaceId: "ws-a" })
+    expect(hits.some((h) => h.text === "ws-a memory")).toBe(true)
+    expect(hits.some((h) => h.text === "ws-b memory")).toBe(true)
+  })
+
+  it("summary(): the workspaceMemory digest counts active/ruled-out separately and never adds a phantom session", () => {
+    const svc = buildSvc(
+      [session({ id: "s1", workspaceId: "ws-a", notes: [note("a live active finding", 1)] })],
+      [
+        {
+          workspaceId: "ws-a",
+          findings: [
+            wmFinding({ text: "memory active 1", workspaceId: "ws-a", source: "user" }),
+            wmFinding({ text: "memory active 2", workspaceId: "ws-a", source: "agent" }),
+            wmFinding({ id: "mw", text: "memory ruled out", workspaceId: "ws-a", status: "superseded" }),
+          ],
+        },
+      ],
+    )
+    const sum = svc.summary("workspace", { sessionId: "sOther", workspaceId: "ws-a" })
+    // The workspace-memory entries do NOT add a phantom session.
+    expect(sum.sessions).toBe(1)
+    expect(sum.findings).toBe(1) // only the live note
+    expect(sum.ruledOut).toBe(0) // the memory ruled-out is NOT in the cross-session count
+    expect(sum.workspaceMemory).toEqual({ findings: 2, ruledOut: 1 })
+  })
+
+  it("summary(): cross-session recentRuledOut NEVER picks a workspace-memory entry", () => {
+    const svc = buildSvc(
+      [
+        session({
+          id: "sOther",
+          name: "Other session",
+          workspaceId: "ws-a",
+          notes: [note("session ruled out", 10, { id: "w", status: "superseded", supersededBy: "f" }), note("the fix", 11, { id: "f" })],
+        }),
+      ],
+      [
+        {
+          workspaceId: "ws-a",
+          // A memory ruled-out with a much NEWER createdAt — must NOT become recentRuledOut.
+          findings: [wmFinding({ text: "memory ruled out NEWER", workspaceId: "ws-a", status: "superseded", createdAt: 9999 })],
+        },
+      ],
+    )
+    const sum = svc.summary("workspace", { workspaceId: "ws-a" })
+    expect(sum.recentRuledOut?.text).toBe("session ruled out") // the session one, not memory
+  })
+
+  it("summary(): EXCLUDES a memory finding promoted FROM the caller's own session, keeps others", () => {
+    const svc = buildSvc(
+      [session({ id: "sA", workspaceId: "ws-a", notes: [] })],
+      [
+        {
+          workspaceId: "ws-a",
+          findings: [
+            // Promoted FROM the caller (sA) → excluded from the memory digest.
+            wmFinding({ text: "promoted from caller", workspaceId: "ws-a", originSessionId: "sA", originNoteId: "n1" }),
+            // Promoted from ANOTHER session → kept.
+            wmFinding({ text: "promoted from other", workspaceId: "ws-a", originSessionId: "sB", originNoteId: "n2" }),
+            // Authored (no origin) → kept.
+            wmFinding({ text: "authored memory", workspaceId: "ws-a", source: "user" }),
+          ],
+        },
+      ],
+    )
+    const sum = svc.summary("workspace", { sessionId: "sA", workspaceId: "ws-a" })
+    // Only the two non-caller-origin memory findings are counted.
+    expect(sum.workspaceMemory).toEqual({ findings: 2, ruledOut: 0 })
+  })
+
+  it("summary(): workspaceMemory is ALWAYS present even with no memory in scope", () => {
+    const svc = buildSvc([session({ id: "s1", workspaceId: "ws-a", notes: [note("x", 1)] })], [])
+    const sum = svc.summary("workspace", { workspaceId: "ws-a" })
+    expect(sum.workspaceMemory).toEqual({ findings: 0, ruledOut: 0 })
   })
 })

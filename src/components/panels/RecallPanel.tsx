@@ -11,13 +11,20 @@ import { useState, useEffect, useMemo, useRef } from "react"
 
 type RecallStatus = "active" | "ruled-out" | "summary"
 
+/** The synthetic sessionId every workspace-memory hit carries (mirrors
+ *  WORKSPACE_MEMORY_SESSION_ID in recall.ts). Used to suppress the "Open overview"
+ *  button on the memory group (there's no real session to open). */
+const WORKSPACE_MEMORY_SESSION_ID = "__workspace_memory__"
+
 interface RecallHit {
   sessionId: string
   sessionName: string
   workspaceId?: string
   text: string
   status: RecallStatus
-  source: "note" | "summary"
+  /** "workspace-memory" is the durable promoted/authored tier (CAPP-87 / U4); its hits
+   *  carry the synthetic memory sessionId + a "Workspace memory" citation. */
+  source: "note" | "summary" | "workspace-memory"
   createdAt: number
   correction?: string
   score: number
@@ -192,12 +199,16 @@ export default function RecallPanel(props: RecallPanelProps) {
             <section key={g.sessionId} className="recall-group">
               <div className="recall-group-header">
                 <span className="recall-group-name">{g.sessionName || "Untitled session"}</span>
-                <button
-                  className="recall-open-overview"
-                  onClick={() => openOverview(g.sessionId)}
-                >
-                  Open overview
-                </button>
+                {/* The synthetic workspace-memory group has no real session to open, so
+                    its "Open overview" affordance is suppressed (CAPP-87 / U4). */}
+                {g.sessionId !== WORKSPACE_MEMORY_SESSION_ID && (
+                  <button
+                    className="recall-open-overview"
+                    onClick={() => openOverview(g.sessionId)}
+                  >
+                    Open overview
+                  </button>
+                )}
               </div>
               <ul className="recall-hits">
                 {g.hits.map((h, i) => (

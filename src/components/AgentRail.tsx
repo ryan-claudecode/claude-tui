@@ -240,6 +240,31 @@ export default function AgentRail({
                 )}
               </div>
             )}
+
+            {/* Workspace memory — the durable, always-present tier (CAPP-87 / U4),
+                surfaced as its OWN third group (independent of how many sessions
+                contributed). "Open Recall →" reuses the same cross-session Recall panel
+                (which now unions workspace memory too). No hover-reveal. */}
+            {knows.workspaceMemory && (
+              <div className="agent-rail-knows-group">
+                <div className="agent-rail-knows-head">
+                  <span className="agent-rail-knows-scope">Workspace memory</span>
+                  <button
+                    type="button"
+                    className="agent-rail-knows-open"
+                    onClick={onOpenRecall}
+                    disabled={!onOpenRecall}
+                    title="Open the cross-session Recall panel"
+                  >
+                    Open Recall →
+                  </button>
+                </div>
+                <KnowsChips
+                  findings={knows.workspaceMemory.findings}
+                  ruledOut={knows.workspaceMemory.ruledOut}
+                />
+              </div>
+            )}
           </section>
         )}
 

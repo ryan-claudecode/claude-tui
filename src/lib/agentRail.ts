@@ -204,15 +204,20 @@ export interface KnowsOverviewInput {
 }
 
 /** The minimal slice of RecallService.summary() the cross-session digest reads.
- *  NOTE: v1 RecallService.summary() counts EVERY session in scope (it has no
- *  exclude-self mechanism), so `sessions` is "contributing sessions in the workspace"
- *  — it MAY include the active session. We do not add backend to subtract it; the
- *  component frames the digest as a workspace recall, not strictly "other" sessions. */
+ *  NOTE: RecallService.summary() EXCLUDES the caller's own session (matched by
+ *  `sessionId`, and — for a workspace-memory finding promoted FROM the caller — by
+ *  `originSessionId`), so `sessions`/`findings`/`ruledOut` reflect OTHER sessions only.
+ *  The durable workspace-memory tier is a SEPARATE digest (`workspaceMemory`), counted
+ *  in its own branch and surfaced as its own rail group (CAPP-87 / U4). */
 export interface KnowsRecallInput {
-  /** Sessions that contributed at least one entry within scope (workspace by default). */
+  /** OTHER sessions that contributed at least one entry within scope (workspace by
+   *  default) — the caller's own session is excluded. */
   sessions: number
   findings: number
   ruledOut: number
+  /** The durable workspace-memory tier's counts in scope. Optional on the input shape
+   *  (older callers/tests may omit it); when absent it's treated as empty (0/0). */
+  workspaceMemory?: { findings: number; ruledOut: number }
   recentRuledOut?: { text: string; correction?: string; sessionName: string }
 }
 
@@ -240,8 +245,8 @@ export interface KnowsSession {
 
 /** The cross-session ("Across sessions") recall digest the KNOWS section renders. */
 export interface KnowsRecall {
-  /** Contributing sessions in scope (workspace). MAY include the active session —
-   *  the v1 RecallService.summary() has no exclude-self; see KnowsRecallInput. */
+  /** Contributing OTHER sessions in scope (workspace). Excludes the active session —
+   *  RecallService.summary() now subtracts it (see KnowsRecallInput). */
   sessions: number
   findings: number
   ruledOut: number
@@ -249,15 +254,27 @@ export interface KnowsRecall {
   recentRuledOut?: RuledOutLine & { sessionName: string }
 }
 
-/** The shaped KNOWS view-model — both digests + whether the section renders at all. */
+/** The durable workspace-memory ("Workspace memory") digest the KNOWS section renders
+ *  as its OWN third group (CAPP-87 / U4) — independent of how many other sessions
+ *  contributed, since memory is the always-present tier. */
+export interface KnowsWorkspaceMemory {
+  /** Active workspace-memory findings in scope. */
+  findings: number
+  /** Ruled-out workspace-memory findings in scope. */
+  ruledOut: number
+}
+
+/** The shaped KNOWS view-model — the digests + whether the section renders at all. */
 export interface RailKnows {
-  /** True IFF either digest has something worth showing. When false the rail OMITS
-   *  the whole KNOWS section so an empty session never clutters the calm column. */
+  /** True IFF any digest has something worth showing. When false the rail OMITS the
+   *  whole KNOWS section so an empty session never clutters the calm column. */
   hasContent: boolean
   /** The per-session digest, or null when the active session has no context yet. */
   session: KnowsSession | null
   /** The cross-session recall digest, or null when no OTHER sessions have hits. */
   recall: KnowsRecall | null
+  /** The durable workspace-memory digest, or null when memory is empty in scope. */
+  workspaceMemory: KnowsWorkspaceMemory | null
 }
 
 /**
@@ -275,7 +292,14 @@ export interface RailKnows {
  * scoped to the caller's workspace by the IPC default). It counts as content only
  * when there is at least one contributing session AND at least one finding or
  * ruled-out — a lone empty digest (0/0 across 0 sessions) is treated as nothing to
- * show. (The v1 digest does not exclude the active session — see KnowsRecallInput.)
+ * show. (The digest EXCLUDES the active session — and a memory finding promoted from
+ * it — see KnowsRecallInput.)
+ *
+ * Workspace memory ("Workspace memory", CAPP-87 / U4): the durable tier's counts, also
+ * straight from RecallService.summary().workspaceMemory. It has its OWN non-empty gate
+ * (any finding or ruled-out) — it is NOT gated on other sessions contributing, because
+ * memory is the always-present tier (it can be the ONLY thing in scope and must still
+ * render).
  */
 export function deriveKnows(
   overview: KnowsOverviewInput | null | undefined,
@@ -283,7 +307,13 @@ export function deriveKnows(
 ): RailKnows {
   const session = deriveKnowsSession(overview)
   const recall = deriveKnowsRecall(recallSummary)
-  return { hasContent: session != null || recall != null, session, recall }
+  const workspaceMemory = deriveKnowsWorkspaceMemory(recallSummary)
+  return {
+    hasContent: session != null || recall != null || workspaceMemory != null,
+    session,
+    recall,
+    workspaceMemory,
+  }
 }
 
 function deriveKnowsSession(ov: KnowsOverviewInput | null | undefined): KnowsSession | null {
@@ -331,4 +361,21 @@ function deriveKnowsRecall(rs: KnowsRecallInput | null | undefined): KnowsRecall
     ruledOut: rs.ruledOut,
     ...(recentRuledOut ? { recentRuledOut } : {}),
   }
+}
+
+/**
+ * Shape the durable workspace-memory digest from RecallService.summary().workspaceMemory
+ * (CAPP-87 / U4). Its OWN non-empty gate — `findings > 0 || ruledOut > 0` — deliberately
+ * does NOT reuse {@link deriveKnowsRecall}'s `rs.sessions <= 0` gate: memory is the
+ * always-present tier, independent of how many OTHER sessions contributed, so it must
+ * render even when it's the only thing in scope. Returns null (group hidden) when empty
+ * or when the digest is absent (an older summary that predates the field).
+ */
+function deriveKnowsWorkspaceMemory(
+  rs: KnowsRecallInput | null | undefined,
+): KnowsWorkspaceMemory | null {
+  const wm = rs?.workspaceMemory
+  if (!wm) return null
+  if (wm.findings <= 0 && wm.ruledOut <= 0) return null
+  return { findings: wm.findings, ruledOut: wm.ruledOut }
 }

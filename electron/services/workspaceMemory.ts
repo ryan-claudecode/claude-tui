@@ -92,9 +92,12 @@ export interface PromoteEntry {
  * NEVER collide with a real (string) workspaceId in the in-memory cache `Map`.
  */
 const UNTAGGED = Symbol("untagged")
-/** The filename STEM the untagged bucket maps to. A real workspaceId equal to this
- *  is rejected so it can never clobber (or be clobbered by) the untagged file. */
-const UNTAGGED_STEM = "__untagged__"
+/** The filename STEM the untagged bucket maps to, AND the value the untagged bucket's
+ *  record carries in its `workspaceId` field. A real workspaceId equal to this is
+ *  rejected so it can never clobber (or be clobbered by) the untagged file. EXPORTED
+ *  (CAPP-87 / U4) so RecallService can normalize an untagged entry's stem → `undefined`
+ *  (the scope value) without hardcoding the literal. */
+export const UNTAGGED_STEM = "__untagged__"
 
 type BucketKey = string | typeof UNTAGGED
 

@@ -206,9 +206,9 @@ describe("deriveKnows", () => {
     },
   }
 
-  it("empty in, empty out: no content, both digests null", () => {
+  it("empty in, empty out: no content, all digests null", () => {
     const k = deriveKnows(null, null)
-    expect(k).toEqual({ hasContent: false, session: null, recall: null })
+    expect(k).toEqual({ hasContent: false, session: null, recall: null, workspaceMemory: null })
   })
 
   it("shapes the per-session digest: counts + summary + most-recent ruled-out", () => {
@@ -316,5 +316,50 @@ describe("deriveKnows", () => {
     expect(k.hasContent).toBe(true)
     expect(k.session).not.toBeNull()
     expect(k.recall).not.toBeNull()
+  })
+
+  // ── Workspace memory — the third KNOWS group (CAPP-87 / U4) ──────────────────────
+
+  it("renders the workspace-memory group when ONLY memory has content (sessions === 0)", () => {
+    // No overview, and the recall digest has NO other sessions — only the durable
+    // memory tier carries content. The memory group must still render (it is the
+    // always-present tier, gated independently of `sessions`).
+    const k = deriveKnows(null, {
+      sessions: 0,
+      findings: 0,
+      ruledOut: 0,
+      workspaceMemory: { findings: 3, ruledOut: 1 },
+    })
+    expect(k.hasContent).toBe(true)
+    expect(k.session).toBeNull()
+    expect(k.recall).toBeNull() // cross-session group correctly hidden (no other sessions)
+    expect(k.workspaceMemory).toEqual({ findings: 3, ruledOut: 1 })
+  })
+
+  it("hides the workspace-memory group when memory is empty (0/0)", () => {
+    const k = deriveKnows(null, {
+      sessions: 0,
+      findings: 0,
+      ruledOut: 0,
+      workspaceMemory: { findings: 0, ruledOut: 0 },
+    })
+    expect(k.workspaceMemory).toBeNull()
+    expect(k.hasContent).toBe(false)
+  })
+
+  it("treats an absent workspaceMemory field (older summary) as empty", () => {
+    const k = deriveKnows(null, { sessions: 0, findings: 0, ruledOut: 0 })
+    expect(k.workspaceMemory).toBeNull()
+  })
+
+  it("the memory group renders even on a ruled-out-only digest", () => {
+    const k = deriveKnows(null, {
+      sessions: 0,
+      findings: 0,
+      ruledOut: 0,
+      workspaceMemory: { findings: 0, ruledOut: 2 },
+    })
+    expect(k.workspaceMemory).toEqual({ findings: 0, ruledOut: 2 })
+    expect(k.hasContent).toBe(true)
   })
 })

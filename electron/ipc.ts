@@ -84,12 +84,24 @@ export const workSessionService = new SessionService({
   recallRelated: ({ sessionId, workspaceId, query, limit }) =>
     recallService
       .recall(query, "workspace", { sessionId, workspaceId }, limit + 5)
-      // Exclude the session's OWN entries — they're already in the primer above.
-      .filter((h) => h.sessionId !== sessionId)
+      // Exclude the session's OWN entries — they're already in the primer above. This
+      // covers BOTH a live note from this session (h.sessionId === sessionId) AND a
+      // workspace-memory finding PROMOTED FROM this session (h.originSessionId ===
+      // sessionId), which carries the synthetic memory sessionId (CAPP-87 / U4). A
+      // user/agent-authored memory hit (no originSessionId) IS eligible — legitimate
+      // cross-context knowledge — so the "Related from other sessions" block can carry it.
+      .filter((h) => h.sessionId !== sessionId && h.originSessionId !== sessionId)
       .slice(0, limit)
       .map((h) => ({ text: h.text, sessionName: h.sessionName, status: h.status, correction: h.correction })),
 })
-recallService = new RecallService(() => workSessionService.list())
+// CAPP-87 / U4 — RecallService is now a UNION of live session findings ∪ the durable
+// workspace-memory tier, de-duped on the (originSessionId, originNoteId) pair. The
+// second injected source is the in-memory workspace-memory snapshot; memory writes
+// already invalidate the index via onMemoryChanged (wired in setupIpc above/below).
+recallService = new RecallService(
+  () => workSessionService.list(),
+  () => workspaceMemoryService.listWorkspaceMemory(),
+)
 
 /**
  * The attention queue (AQ-1). Constructed in setupIpc once the main window

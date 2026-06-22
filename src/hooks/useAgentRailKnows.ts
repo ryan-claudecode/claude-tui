@@ -7,8 +7,10 @@ import { deriveKnows, type RailKnows } from "../lib/agentRail"
  *   • This session   ← window.api.getSessionOverview(activeSessionId) — the SAME
  *     accessor the ⊕ Session Overview panel uses.
  *   • Across sessions ← window.api.recallSummary("workspace", activeSessionId) — the
- *     v1 RecallService cross-session digest, scoped to the ACTIVE session's workspace
- *     (the IPC default 'workspace' → no cross-workspace leak).
+ *     RecallService cross-session digest, scoped to the ACTIVE session's workspace
+ *     (the IPC default 'workspace' → no cross-workspace leak). The SAME summary object
+ *     also carries the durable `workspaceMemory` tier (CAPP-87 / U4), which deriveKnows
+ *     shapes into the third "Workspace memory" KNOWS group — so no extra fetch is needed.
  *
  * LIVE without a second listener: the KNOWS-relevant signals (notes / summary) ride
  * along the existing `worksession:updated` push, which useSessions already owns (it
