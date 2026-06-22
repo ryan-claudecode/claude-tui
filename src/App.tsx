@@ -556,12 +556,22 @@ export default function App() {
       | { id?: string; summary?: string; notes?: Array<{ id: string; status: string }> }
       | null
     if (!s?.id) return ""
-    // A compact signature: summary length + a per-note id:status fold. Changes on a
-    // new note, a correction (status flip), or a summary edit — exactly the KNOWS
-    // inputs — without re-fetching on unrelated terminal-activity pushes.
+    // Active-session signature: a per-note id:status fold + a CONTENT signature of the
+    // summary (not just length, so a same-length edit "cat"→"dog" still repaints).
     const noteSig = (s.notes ?? []).map((n) => `${n.id}:${n.status}`).join(",")
-    return `${s.id}|${s.summary?.length ?? 0}|${noteSig}`
-  }, [activeSession])
+    const sum = s.summary ?? ""
+    const sumSig = `${sum.length}:${sum.slice(0, 12)}:${sum.slice(-12)}`
+    // Workspace-wide signature so a finding/summary landing in a SIBLING session
+    // refreshes the cross-session "Across sessions" digest (which aggregates the whole
+    // workspace), not only the active session's own changes. Cheap fold over a handful
+    // of sessions; the refetch is gated on the string VALUE, so unrelated pushes (e.g.
+    // terminal activity) that don't change notes/summary won't re-fetch.
+    const wsSig = (sessions as Array<{ id: string; workspaceId?: string; summary?: string; notes?: unknown[] }>)
+      .filter((x) => (x.workspaceId ?? null) === (activeWorkspaceId ?? null))
+      .map((x) => `${x.id}:${x.summary?.length ?? 0}:${x.notes?.length ?? 0}`)
+      .join(",")
+    return `${s.id}|${sumSig}|${noteSig}|${wsSig}`
+  }, [activeSession, sessions, activeWorkspaceId])
 
   const railKnows = useAgentRailKnows({
     sessionId: activeSessionId,
