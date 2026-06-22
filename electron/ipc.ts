@@ -17,7 +17,7 @@ import { FileService } from "./services/files"
 import { UiService } from "./services/ui"
 import { MissionService } from "./services/mission"
 import { SessionService } from "./services/sessions"
-import { RecallService } from "./services/recall"
+import { RecallService, primerHitEligible } from "./services/recall"
 import { WorkspaceMemoryService } from "./services/workspaceMemory"
 import { CompanionService } from "./services/companion"
 import { AttentionService } from "./services/attention"
@@ -90,7 +90,7 @@ export const workSessionService = new SessionService({
       // sessionId), which carries the synthetic memory sessionId (CAPP-87 / U4). A
       // user/agent-authored memory hit (no originSessionId) IS eligible — legitimate
       // cross-context knowledge — so the "Related from other sessions" block can carry it.
-      .filter((h) => h.sessionId !== sessionId && h.originSessionId !== sessionId)
+      .filter((h) => primerHitEligible(h, sessionId))
       .slice(0, limit)
       .map((h) => ({ text: h.text, sessionName: h.sessionName, status: h.status, correction: h.correction })),
 })

@@ -166,6 +166,11 @@ export function deriveRecallIndex(
   // The de-dup set: every promoted memory finding keyed on its origin PAIR. A live
   // session note matching one of these is suppressed from the index (the workspace
   // twin already carries it). Authored memory findings (no origin) don't participate.
+  // INVARIANT (held by promote_finding / kill-with-promote): a finding is promoted into
+  // its OWNING session's workspace, so the twin always shares the origin note's scope —
+  // suppressing the live note never makes the finding vanish for a caller who could see
+  // the twin, and a given pair has at most one twin. The memory pass below de-dups on the
+  // same pair defensively, in case that invariant is ever broken by a cross-bucket promote.
   const promotedKeys = new Set(
     memoryFindings
       .filter((f) => f.originSessionId && f.originNoteId)
@@ -211,7 +216,17 @@ export function deriveRecallIndex(
   // is closed over the workspace twin ids (rewritten on promote), so a superseded
   // finding's correction is its in-record corrector's text.
   const memById = new Map<string, MemoryFinding>(memoryFindings.map((f) => [f.id, f]))
+  // Defensive exactly-once across buckets: collapse two memory twins that share an origin
+  // pair (only reachable if a finding is promoted into >1 bucket — see the INVARIANT above;
+  // WorkspaceMemoryService's per-record idempotency can't catch a cross-bucket duplicate).
+  // Authored findings (no origin pair) always pass through.
+  const seenMemoryPairs = new Set<string>()
   for (const f of memoryFindings) {
+    if (f.originSessionId && f.originNoteId) {
+      const pair = `${f.originSessionId}|${f.originNoteId}`
+      if (seenMemoryPairs.has(pair)) continue
+      seenMemoryPairs.add(pair)
+    }
     // Normalize the untagged bucket's storage stem → undefined (the scope value), so an
     // untagged caller (workspaceId === undefined) matches under 'workspace' scope.
     const workspaceId = f.workspaceId === UNTAGGED_STEM ? undefined : f.workspaceId
@@ -245,6 +260,21 @@ export function deriveRecallIndex(
   }
 
   return entries
+}
+
+/**
+ * Primer eligibility for a recall hit (CAPP-87 / U4 §C7). A hit belongs in a session's
+ * "Related from other sessions" primer block iff it is NOT the caller's own live note AND
+ * NOT a workspace-memory finding promoted FROM the caller — the latter carries the synthetic
+ * memory sessionId (never === the caller) yet would re-surface the caller's own knowledge in
+ * its own primer. An authored memory hit (no originSessionId) IS eligible. Extracted as a
+ * pure predicate so the rule is unit-testable; the live wiring is the primer closure in ipc.ts.
+ */
+export function primerHitEligible(
+  hit: { sessionId: string; originSessionId?: string },
+  callerSessionId: string,
+): boolean {
+  return hit.sessionId !== callerSessionId && hit.originSessionId !== callerSessionId
 }
 
 /**

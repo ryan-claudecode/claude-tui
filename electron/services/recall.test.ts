@@ -7,6 +7,7 @@ import {
   tokenize,
   WORKSPACE_MEMORY_SESSION_ID,
   WORKSPACE_MEMORY_SESSION_NAME,
+  primerHitEligible,
   type RecallScorer,
   type MemoryFinding,
 } from "./recall"
@@ -487,6 +488,61 @@ describe("deriveRecallIndex — union with workspace memory", () => {
     // The sentinel stem must never reach the recall surface.
     expect(idx[0].workspaceId).not.toBe(UNTAGGED_STEM)
   })
+
+  it("supersede-after-promote (best-effort): the twin remains AND the new in-session corrector also surfaces", () => {
+    // n1 was promoted (pair s1|n1 → suppressed), then superseded in-session by a NEW note
+    // n2. n2's id is not in promotedKeys, so BOTH the workspace twin AND n2 surface — the
+    // ratified best-effort behavior (memory-wins-on-the-original; we don't chase the chain).
+    const live = session({
+      id: "s1",
+      workspaceId: "ws-a",
+      notes: [
+        note("the original promoted claim", 5, { id: "n1", status: "superseded", supersededBy: "n2" }),
+        note("the newer in-session correction", 6, { id: "n2" }),
+      ],
+    })
+    const idx = deriveRecallIndex(
+      [live],
+      [wmFinding({ text: "the original promoted claim", workspaceId: "ws-a", originSessionId: "s1", originNoteId: "n1" })],
+    )
+    // The promoted origin note (n1) is suppressed by the pair...
+    expect(idx.some((e) => e.source === "note" && e.text === "the original promoted claim")).toBe(false)
+    // ...its workspace twin remains...
+    expect(idx.some((e) => e.source === "workspace-memory" && e.text === "the original promoted claim")).toBe(true)
+    // ...and the NEW corrector n2 (different id, not promoted) surfaces as a live note.
+    expect(idx.some((e) => e.source === "note" && e.text === "the newer in-session correction")).toBe(true)
+  })
+
+  it("memory pass de-dups two twins sharing an origin pair across buckets (defensive exactly-once)", () => {
+    // The same finding promoted into TWO buckets (a real ws + the untagged bucket). Only
+    // reachable if the owning-workspace invariant is broken, but derive must count it once.
+    const idx = deriveRecallIndex(
+      [],
+      [
+        wmFinding({ id: "twinA", text: "duplicated twin", workspaceId: "ws-a", originSessionId: "s1", originNoteId: "n1" }),
+        wmFinding({ id: "twinB", text: "duplicated twin", workspaceId: UNTAGGED_STEM, originSessionId: "s1", originNoteId: "n1" }),
+      ],
+    )
+    expect(idx.filter((e) => e.text === "duplicated twin")).toHaveLength(1)
+  })
+})
+
+describe("primerHitEligible (CAPP-87 / U4 §C7)", () => {
+  it("excludes the caller's own live note", () => {
+    expect(primerHitEligible({ sessionId: "sA" }, "sA")).toBe(false)
+  })
+  it("excludes a memory hit promoted FROM the caller (synthetic sessionId, originSessionId === caller)", () => {
+    expect(primerHitEligible({ sessionId: WORKSPACE_MEMORY_SESSION_ID, originSessionId: "sA" }, "sA")).toBe(false)
+  })
+  it("KEEPS a memory hit promoted from ANOTHER session", () => {
+    expect(primerHitEligible({ sessionId: WORKSPACE_MEMORY_SESSION_ID, originSessionId: "sB" }, "sA")).toBe(true)
+  })
+  it("KEEPS an authored memory hit (no originSessionId)", () => {
+    expect(primerHitEligible({ sessionId: WORKSPACE_MEMORY_SESSION_ID }, "sA")).toBe(true)
+  })
+  it("KEEPS another session's live note", () => {
+    expect(primerHitEligible({ sessionId: "sB" }, "sA")).toBe(true)
+  })
 })
 
 describe("RecallService — union scope + digest (CAPP-87 / U4)", () => {
@@ -611,5 +667,32 @@ describe("RecallService — union scope + digest (CAPP-87 / U4)", () => {
     const svc = buildSvc([session({ id: "s1", workspaceId: "ws-a", notes: [note("x", 1)] })], [])
     const sum = svc.summary("workspace", { workspaceId: "ws-a" })
     expect(sum.workspaceMemory).toEqual({ findings: 0, ruledOut: 0 })
+  })
+
+  it("service path (getIndex → deriveRecallIndex) de-dups a promoted-from-live finding to EXACTLY one hit", () => {
+    const svc = buildSvc(
+      [session({ id: "s1", workspaceId: "ws-a", notes: [note("the shared auth finding", 1, { id: "n1" })] })],
+      [{ workspaceId: "ws-a", findings: [wmFinding({ text: "the shared auth finding", workspaceId: "ws-a", originSessionId: "s1", originNoteId: "n1" })] }],
+    )
+    const matches = svc.recall("shared auth finding", "workspace", { workspaceId: "ws-a" }).filter((h) => h.text === "the shared auth finding")
+    expect(matches).toHaveLength(1)
+    // The memory hit carries the synthetic citation the rail/panel group on.
+    expect(matches[0].source).toBe("workspace-memory")
+    expect(matches[0].sessionId).toBe(WORKSPACE_MEMORY_SESSION_ID)
+    expect(matches[0].sessionName).toBe(WORKSPACE_MEMORY_SESSION_NAME)
+  })
+
+  it("summary('all') aggregates the memory digest across buckets; 'workspace' scopes to the caller's", () => {
+    const svc = buildSvc(
+      [],
+      [
+        { workspaceId: "ws-a", findings: [wmFinding({ text: "a1", workspaceId: "ws-a", source: "user" })] },
+        { workspaceId: "ws-b", findings: [wmFinding({ text: "b1", workspaceId: "ws-b", source: "user" }), wmFinding({ text: "b2", workspaceId: "ws-b", source: "user" })] },
+      ],
+    )
+    // 'all' → both buckets aggregate (1 + 2 = 3).
+    expect(svc.summary("all", { workspaceId: "ws-a" }).workspaceMemory).toEqual({ findings: 3, ruledOut: 0 })
+    // 'workspace' → only the caller's own bucket (ws-a → 1).
+    expect(svc.summary("workspace", { workspaceId: "ws-a" }).workspaceMemory).toEqual({ findings: 1, ruledOut: 0 })
   })
 })
