@@ -9,6 +9,7 @@ import {
 import type { RenderingEngine } from "../config"
 import { logWarn } from "../log"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
+import type { PromoteEntry } from "./workspaceMemory"
 
 /**
  * BO-11 (CAPP-50) — the deny message {@link SessionService.interruptAgent} settles a
@@ -1181,6 +1182,49 @@ export class SessionService {
       provisionalFindings: s.provisionalFindings,
       terminals: s.terminals.map((t) => ({ ...t, activity: this.effectiveActivity(s.id, t.id) })),
     }
+  }
+
+  /**
+   * Map a session's confirmed `notes` (CAPP-87 / U2) into `PromoteEntry[]` — the
+   * candidate list the workspace-memory promote path (U1's `promoteFindings`)
+   * consumes. Carries BOTH active AND ruled-out (superseded) notes: ruled-out
+   * findings are the highest-value rescue, so they are promotable too.
+   *
+   * Active-vs-superseded and the corrector linkage are determined EXACTLY the way
+   * {@link SessionService.getOverview} / {@link SessionService.getContext} already
+   * do it — off the note's `status` field (`getOverview` filters ruled-out by
+   * `n.status === "superseded"`), and `supersededBy` is the SESSION note id of the
+   * corrector (the same value `getOverview` resolves a correction text from). We
+   * pass that origin note id straight through: U1's `promoteFindings` rewrites the
+   * supersede graph over the freshly-minted workspace twin ids, so it needs the
+   * corrector's ORIGIN note id here, NOT a workspace id.
+   *
+   * `provisionalFindings` (the observer seam — unconfirmed) are EXCLUDED in v1:
+   * only confirmed `notes` are promotable.
+   *
+   * Unknown `sessionId` → `[]`.
+   */
+  getPromotableFindings(sessionId: string): PromoteEntry[] {
+    const s = this.sessions.get(sessionId)
+    if (!s) return []
+    return s.notes.map((n) => ({
+      text: n.text,
+      originSessionId: sessionId,
+      originNoteId: n.id,
+      createdAt: n.createdAt,
+      // status carried verbatim — "superseded" === ruled-out (getOverview:1167-1168).
+      status: n.status,
+      // corrector linkage: n.supersededBy is the corrector's ORIGIN note id
+      // (getOverview:1172 / getContext:1202 resolve the correction off this id).
+      ...(n.supersededBy != null ? { supersededBy: n.supersededBy } : {}),
+      source: n.source,
+    }))
+  }
+
+  /** The single promote candidate matching `noteId` (by `originNoteId === noteId`),
+   *  or undefined if the session/note isn't found. See {@link getPromotableFindings}. */
+  getPromotableFinding(sessionId: string, noteId: string): PromoteEntry | undefined {
+    return this.getPromotableFindings(sessionId).find((e) => e.originNoteId === noteId)
   }
 
   /** The primer a terminal pulls: summary, then active notes, then ruled-out (with corrections). */

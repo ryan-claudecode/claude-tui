@@ -1717,3 +1717,90 @@ describe("SessionService.renameSession (CAPP-82 — container rename)", () => {
     expect(svc.renameSession("nope", "X")).toBe(false)
   })
 })
+
+describe("SessionService.getPromotableFindings (CAPP-90 / U2)", () => {
+  it("maps BOTH active and ruled-out notes into PromoteEntry[] with status + provenance + createdAt + source", () => {
+    let clock = 1000
+    const svc = new SessionService({ dir, now: () => clock })
+    const s = svc.create()
+    clock = 1100
+    const active = svc.addNote(s.id, "root cause is the N+1 query")! // self-sourced, active
+    clock = 1200
+    const wrong = svc.addNote(s.id, "bug is in auth")! // will be superseded below
+    clock = 1300
+    const corrector = svc.addNote(s.id, "actually it's the list endpoint", { corrects: wrong.id })!
+
+    const entries = svc.getPromotableFindings(s.id)
+    // ALL three confirmed notes are promotable (active + ruled-out), in note order.
+    expect(entries).toHaveLength(3)
+
+    const byOrigin = (id: string) => entries.find((e) => e.originNoteId === id)!
+
+    const a = byOrigin(active.id)
+    expect(a.text).toBe("root cause is the N+1 query")
+    expect(a.status).toBe("active")
+    expect(a.originSessionId).toBe(s.id)
+    expect(a.originNoteId).toBe(active.id)
+    expect(a.createdAt).toBe(1100)
+    expect(a.source).toBe("self")
+    expect(a.supersededBy).toBeUndefined()
+
+    // The superseded note carries the ruled-out status + the createdAt of its origin.
+    const w = byOrigin(wrong.id)
+    expect(w.status).toBe("superseded")
+    expect(w.createdAt).toBe(1200)
+    expect(w.source).toBe("self")
+
+    // The corrector itself is an ordinary active note, also promotable.
+    const c = byOrigin(corrector.id)
+    expect(c.status).toBe("active")
+    expect(c.createdAt).toBe(1300)
+  })
+
+  it("a superseded note carries supersededBy = its corrector's ORIGIN note id (not the workspace twin)", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    const wrong = svc.addNote(s.id, "first theory")!
+    const corrector = svc.addNote(s.id, "corrected theory", { corrects: wrong.id })!
+
+    const entry = svc.getPromotableFinding(s.id, wrong.id)!
+    expect(entry.status).toBe("superseded")
+    // The id rewrite to the workspace twin happens later in U1's promoteFindings; at
+    // this tier supersededBy is still the corrector's SESSION (origin) note id.
+    expect(entry.supersededBy).toBe(corrector.id)
+  })
+
+  it("EXCLUDES provisionalFindings (observer seam, unconfirmed) — only confirmed notes are promotable", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    const confirmed = svc.addNote(s.id, "a confirmed finding")!
+    // Seed an observer-seam provisional finding directly (no public mutator for it).
+    svc.get(s.id)!.provisionalFindings.push({
+      id: "prov-1",
+      text: "an unconfirmed observation",
+      createdAt: 1000,
+      source: "observer",
+      status: "active",
+    })
+
+    const entries = svc.getPromotableFindings(s.id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].originNoteId).toBe(confirmed.id)
+    expect(entries.some((e) => e.originNoteId === "prov-1")).toBe(false)
+    expect(entries.some((e) => e.text === "an unconfirmed observation")).toBe(false)
+  })
+
+  it("getPromotableFinding resolves a known note id and returns undefined for an unknown one", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    const n = svc.addNote(s.id, "a finding")!
+    expect(svc.getPromotableFinding(s.id, n.id)?.text).toBe("a finding")
+    expect(svc.getPromotableFinding(s.id, "no-such-note")).toBeUndefined()
+  })
+
+  it("unknown sessionId → getPromotableFindings returns [] and getPromotableFinding returns undefined", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    expect(svc.getPromotableFindings("nope")).toEqual([])
+    expect(svc.getPromotableFinding("nope", "whatever")).toBeUndefined()
+  })
+})
