@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { homedir } from "node:os"
-import { unlinkSync } from "node:fs"
+import { readdirSync, unlinkSync } from "node:fs"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
 import { logWarn } from "../log"
 
@@ -109,6 +109,35 @@ export class WorkspaceMemoryService {
   constructor(opts: { dir?: string; now?: () => number } = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "workspace-memory")
     this.now = opts.now ?? (() => Date.now())
+    this.loadAll()
+  }
+
+  /**
+   * Warm the in-memory cache from disk at construction — read EVERY bucket file in
+   * `this.dir` into the cache. Without this, `listWorkspaceMemory()` (cache-only, by
+   * design) would return nothing after an app restart until some bucket was touched,
+   * so persisted workspace memory would be invisible to RecallService / the rail —
+   * breaking the "durable, always present" promise. Mirrors how `SessionService`
+   * loads all sessions on startup so `list()` is complete. Per-file failures are
+   * isolated so one corrupt file can't break startup.
+   */
+  private loadAll(): void {
+    let files: string[]
+    try {
+      files = readdirSync(this.dir)
+    } catch {
+      return // dir doesn't exist yet → nothing persisted
+    }
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue
+      const stem = f.slice(0, -".json".length)
+      const key: BucketKey = stem === UNTAGGED_STEM ? UNTAGGED : stem
+      try {
+        this.loadOrCreate(key)
+      } catch (err) {
+        logWarn("workspaceMemory", `failed to load ${f}: ${String(err)}`)
+      }
+    }
   }
 
   // ── key/file mapping ────────────────────────────────────────────────────────

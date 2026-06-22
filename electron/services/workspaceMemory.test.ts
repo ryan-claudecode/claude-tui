@@ -304,6 +304,22 @@ describe("WorkspaceMemoryService — listWorkspaceMemory", () => {
   })
 })
 
+describe("WorkspaceMemoryService — cold-start cache warming (loadAll)", () => {
+  it("a fresh service loads ALL existing bucket files (recall sees memory after restart, no touch needed)", () => {
+    // Seed two buckets via one service instance...
+    const a = new WorkspaceMemoryService({ dir, now: () => 1000 })
+    a.addFinding("ws-1", "real ws finding", "user")
+    a.addFinding(null, "global finding", "agent")
+
+    // ...then a FRESH service over the same dir. Without loadAll, listWorkspaceMemory
+    // would be empty until a bucket is touched — here nothing is touched on `b`.
+    const b = new WorkspaceMemoryService({ dir, now: () => 2000 })
+    const byId = new Map(b.listWorkspaceMemory().map((m) => [m.workspaceId, m.findings]))
+    expect(byId.get("ws-1")?.map((f) => f.text)).toEqual(["real ws finding"])
+    expect(byId.get("__untagged__")?.map((f) => f.text)).toEqual(["global finding"])
+  })
+})
+
 describe("WorkspaceMemoryService — sentinel safety", () => {
   it("rejects a literal '__untagged__' workspaceId at every public method", () => {
     const svc = new WorkspaceMemoryService({ dir, now: () => 1000 })
