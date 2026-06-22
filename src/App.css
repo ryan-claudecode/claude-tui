@@ -589,6 +589,23 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* CAPP-84 — in the MAIN window the controls are pinned to the app's TRUE top-right
+   corner (a direct .app child, absolute), so the Agent Rail (a flex sibling that would
+   otherwise push .main-area + the controls inward) can't displace the close button.
+   z-index above the rail (.app > * is z-index:1). Scoped to .app so the companion
+   window's own controls are untouched. */
+.app > .window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 50;
+}
+/* Zen/focus mode hides the chrome — the controls used to live inside the (hidden)
+   tab bar, so preserve that. */
+.app.zen > .window-controls {
+  display: none;
+}
+
 .window-control {
   display: flex;
   align-items: center;
@@ -3829,6 +3846,27 @@ body {
 .agent-rail-collapse:hover {
   color: var(--text-0);
   background: var(--bg-3);
+}
+
+/* CAPP-84 — the window controls (138x32) are pinned to the app's true top-right
+   corner ABOVE the rail. Reserve that rectangle so nothing sits under them: the rail
+   header's collapse chevron (open), the spine's reopen content (collapsed), and the
+   tab bar's right edge (collapsed, where the controls overlap it by 138 - 32px spine). */
+.app.rail-open .agent-rail-header {
+  padding-right: calc(138px + var(--s-2));
+}
+.agent-rail.collapsed .agent-rail-spine {
+  padding-top: calc(32px + var(--s-2));
+}
+.app.rail-collapsed .tab-bar {
+  padding-right: calc(106px + var(--s-2));
+}
+/* Keyboard focus-ring parity with the app's curated :focus-visible allowlist. */
+.agent-rail-spine:focus-visible,
+.agent-rail-collapse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--r-sm);
 }
 
 /* BODY — the scrollable middle (NOW + later-phase sections + empty state). */

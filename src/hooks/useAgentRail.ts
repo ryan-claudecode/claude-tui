@@ -57,12 +57,16 @@ export function useAgentRail() {
   }, [])
 
   const toggle = useCallback(() => {
+    // Below the width floor the rail is force-collapsed by width regardless of the
+    // pref (effectiveRailOpen returns false), so a toggle has no visible effect — and
+    // it must NOT persist, or it would silently corrupt the saved choice. No-op there.
+    if (width < RAIL_WIDTH_FLOOR) return
     setCollapsed((c) => {
       const next = !c
       void window.api.setAgentRailOpen?.(!next) // !next === the new OPEN state
       return next
     })
-  }, [])
+  }, [width])
 
   const open = effectiveRailOpen({ collapsed, width })
 

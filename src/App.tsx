@@ -12,6 +12,7 @@ import TabBar from "./components/TabBar"
 import TerminalPane from "./components/TerminalPane"
 import AgentSurface from "./components/AgentSurface"
 import AgentRail from "./components/AgentRail"
+import WindowControls from "./components/WindowControls"
 import type { TranscriptCache } from "./components/AgentView"
 import PermissionPrompt from "./components/PermissionPrompt"
 import SplitView from "./components/SplitView"
@@ -882,6 +883,10 @@ export default function App() {
     >
       <DropZone active={dragActive} />
       <ToastHost />
+      {/* CAPP-84 — frameless window controls hoisted out of the tab bar to a direct
+          .app child, so they pin to the window's true top-right corner ABOVE the Agent
+          Rail (which would otherwise push them inward). Hidden in zen via .app.zen. */}
+      <WindowControls />
       {/* BO-4b — the permission gate fires ONLY on the structured engine (xterm
           spawns with --dangerously-skip-permissions, so no approve_tool gate ever
           fires). Gate on a pending request rather than a global engine flag: a
@@ -1073,6 +1078,7 @@ export default function App() {
         open={railOpen}
         onToggle={toggleRail}
         hasTerminal={activeTerminalId != null}
+        terminalId={activeTerminalId}
         busy={railBusy}
         activity={activeTerminalForRail?.activity}
         blocks={railBlocks}

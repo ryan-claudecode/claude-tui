@@ -1,6 +1,5 @@
 import { useState, useCallback } from "react"
 import { commitRenameValue } from "../lib/renameValue"
-import WindowControls from "./WindowControls"
 
 interface Props {
   terminals: Array<{ id: string; name: string; lastState: string; activity?: string }>
@@ -108,7 +107,6 @@ export default function TabBar({
           <span className="panel-presence-count">{panelCount}</span>
         </button>
       )}
-      <WindowControls />
     </div>
   )
 }

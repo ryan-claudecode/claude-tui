@@ -10,6 +10,10 @@ interface Props {
   onToggle: () => void
   /** Whether there is an active terminal at all (drives the NOW rest copy + COST). */
   hasTerminal: boolean
+  /** The ACTIVE terminal's id — used to re-anchor the elapsed clock on a terminal
+   *  switch, so switching between two concurrently-busy terminals doesn't show one
+   *  terminal's accumulated elapsed under another. */
+  terminalId?: string | null
   /** The active terminal is generating a turn or parked on a permission prompt — the
    *  App's `isTerminalBusy(activeTerminalId)`. Drives the NOW pulse + the elapsed timer. */
   busy: boolean
@@ -41,6 +45,7 @@ export default function AgentRail({
   open,
   onToggle,
   hasTerminal,
+  terminalId,
   busy,
   activity,
   blocks,
@@ -49,8 +54,12 @@ export default function AgentRail({
   const cost = sumCost(blocks)
   const costLabel = formatCost(cost)
 
-  // Live elapsed clock for the NOW line — runs ONLY while busy. The clock starts at
-  // the rising edge of `busy` (the start of the current turn) and ticks once a second.
+  // Live elapsed clock for the NOW line — runs ONLY while busy. Re-anchors on the
+  // busy rising edge AND on an active-terminal switch (the `terminalId` dep): without
+  // that, switching from busy terminal A to busy terminal B keeps `busy === true`, so
+  // the effect wouldn't re-run and B would show A's accumulated, ever-growing elapsed.
+  // (It resets to 0:00 on switch — it does not recover B's true earlier turn start,
+  // which would need a backend per-terminal turn-start timestamp.)
   const [elapsedMs, setElapsedMs] = useState(0)
   const startRef = useRef<number | null>(null)
   useEffect(() => {
@@ -59,14 +68,14 @@ export default function AgentRail({
       setElapsedMs(0)
       return
     }
-    // Rising edge: anchor the start, paint 0:00 immediately, then tick.
+    // (Re)anchor the start, paint 0:00 immediately, then tick.
     startRef.current = Date.now()
     setElapsedMs(0)
     const id = setInterval(() => {
       if (startRef.current != null) setElapsedMs(Date.now() - startRef.current)
     }, 1000)
     return () => clearInterval(id)
-  }, [busy])
+  }, [busy, terminalId])
 
   // COLLAPSED — the 32px spine. Always-visible reopen affordance (the whole spine is
   // the click target + an explicit chevron), a rotated "Agent Rail" label, and a calm
@@ -80,6 +89,7 @@ export default function AgentRail({
           onClick={onToggle}
           title="Open Agent Rail"
           aria-label="Open Agent Rail"
+          aria-expanded={false}
         >
           <span className="agent-rail-spine-chevron" aria-hidden="true">‹</span>
           <span className="agent-rail-spine-label">AGENT RAIL</span>
@@ -102,6 +112,7 @@ export default function AgentRail({
           onClick={onToggle}
           title="Collapse Agent Rail"
           aria-label="Collapse Agent Rail"
+          aria-expanded={true}
         >
           <span aria-hidden="true">›</span>
         </button>
