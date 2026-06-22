@@ -4081,6 +4081,118 @@ body {
   color: var(--text-3);
 }
 
+/* KNOWS — the context digest (Phase 3). Two grouped sub-sections (this-session +
+   cross-session recall), each with an always-visible "Open …→" link (no hover-reveal).
+   Warm Sand & Stone tokens; works light/dark/cold-dark via the custom-property scale. */
+.agent-rail-knows {
+  gap: var(--s-3);
+}
+.agent-rail-knows-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.agent-rail-knows-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+.agent-rail-knows-scope {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The "Open context →" / "Open Recall →" link — ALWAYS visible (hover only tints). */
+.agent-rail-knows-open {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: color var(--fast) var(--ease);
+}
+.agent-rail-knows-open:hover {
+  color: var(--accent-bright);
+}
+.agent-rail-knows-open:disabled {
+  color: var(--text-4);
+  cursor: default;
+}
+.agent-rail-knows-open:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Count chips — small pills; findings/ruled-out/(provisional) each color-keyed. */
+.agent-rail-knows-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+.agent-rail-knows-chip {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--text-2);
+  background: var(--bg-2);
+}
+.agent-rail-knows-chip.findings {
+  color: var(--green);
+  background: var(--green-soft);
+}
+.agent-rail-knows-chip.ruled-out {
+  color: var(--red);
+  background: var(--red-soft);
+}
+.agent-rail-knows-chip.provisional {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 1-line summary — clamped to two lines so a long blurb never bloats the calm rail. */
+.agent-rail-knows-summary {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-1);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The most-recent ruled-out one-liner — `~~old~~ → new` (matches SessionOverview). */
+.agent-rail-knows-ruled {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.agent-rail-knows-struck {
+  text-decoration: line-through;
+  color: var(--text-3);
+}
+.agent-rail-knows-correction {
+  color: var(--text-1);
+}
+.agent-rail-knows-from {
+  color: var(--text-3);
+  font-style: italic;
+}
+
 /* COST — session-cumulative spend, pinned to the footer with a top divider. */
 .agent-rail-footer {
   flex-shrink: 0;

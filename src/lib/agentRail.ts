@@ -173,3 +173,162 @@ export function effectiveRailOpen(input: { collapsed: boolean; width: number }):
   if (input.width < RAIL_WIDTH_FLOOR) return false
   return true
 }
+
+// ---------------------------------------------------------------------------
+// KNOWS — the context digest (Agent Rail Phase 3 / CAPP-84 × CAPP-86 v1.5).
+// ---------------------------------------------------------------------------
+//
+// Two digests for the ACTIVE session/workspace, sourced from EXISTING accessors —
+// NO new backend:
+//   • This session  ← getSessionOverview (the SAME shape the ⊕ Session Overview
+//     panel reads): summary + active findings + ruled-out (with corrections) +
+//     provisional findings.
+//   • Across sessions ← RecallService.summary() via window.api.recallSummary,
+//     scoped to the active session's WORKSPACE (default — no cross-workspace leak).
+//
+// This module shapes the COUNTS + the one-liners the rail renders, and decides when
+// the section has nothing to show (so the calm rail isn't cluttered when empty). It
+// is the one KNOWS decision worth proving — kept pure so it is fully unit-testable.
+
+/** The minimal slice of a SessionOverview that the KNOWS per-session digest reads.
+ *  Structurally compatible with electron's SessionOverview (no import — this module
+ *  stays React/Electron-free, mirroring sumCost reading only TranscriptBlock fields). */
+export interface KnowsOverviewInput {
+  summary?: string
+  /** Active findings (the overview's `notes`, already filtered to status:active). */
+  notes?: Array<{ text: string }>
+  /** Ruled-out findings with their forward correction (the `~~old~~ → new` pair). */
+  ruledOut?: Array<{ text: string; correction?: string }>
+  /** Provisional findings (observer seam) — counted when present, else absent. */
+  provisionalFindings?: Array<{ text: string }>
+}
+
+/** The minimal slice of RecallService.summary() the cross-session digest reads.
+ *  NOTE: v1 RecallService.summary() counts EVERY session in scope (it has no
+ *  exclude-self mechanism), so `sessions` is "contributing sessions in the workspace"
+ *  — it MAY include the active session. We do not add backend to subtract it; the
+ *  component frames the digest as a workspace recall, not strictly "other" sessions. */
+export interface KnowsRecallInput {
+  /** Sessions that contributed at least one entry within scope (workspace by default). */
+  sessions: number
+  findings: number
+  ruledOut: number
+  recentRuledOut?: { text: string; correction?: string; sessionName: string }
+}
+
+/** A ruled-out one-liner the rail renders as `~~text~~ → correction`. */
+export interface RuledOutLine {
+  text: string
+  correction?: string
+}
+
+/** The per-session ("This session") digest the KNOWS section renders. */
+export interface KnowsSession {
+  /** Count of active findings (the overview's notes). */
+  findings: number
+  /** Count of ruled-out (superseded) findings. */
+  ruledOut: number
+  /** Count of provisional findings, or undefined when the seam is empty/absent
+   *  (so the chip is simply not rendered rather than showing a misleading 0). */
+  provisional?: number
+  /** The 1-line summary, trimmed; undefined when the session has none yet. */
+  summary?: string
+  /** The most-recent ruled-out one-liner (newest is last in the overview's array),
+   *  with its correction; undefined when nothing has been ruled out. */
+  recentRuledOut?: RuledOutLine
+}
+
+/** The cross-session ("Across sessions") recall digest the KNOWS section renders. */
+export interface KnowsRecall {
+  /** Contributing sessions in scope (workspace). MAY include the active session —
+   *  the v1 RecallService.summary() has no exclude-self; see KnowsRecallInput. */
+  sessions: number
+  findings: number
+  ruledOut: number
+  /** The most-recent cross-session ruled-out one-liner (+ its owning session name). */
+  recentRuledOut?: RuledOutLine & { sessionName: string }
+}
+
+/** The shaped KNOWS view-model — both digests + whether the section renders at all. */
+export interface RailKnows {
+  /** True IFF either digest has something worth showing. When false the rail OMITS
+   *  the whole KNOWS section so an empty session never clutters the calm column. */
+  hasContent: boolean
+  /** The per-session digest, or null when the active session has no context yet. */
+  session: KnowsSession | null
+  /** The cross-session recall digest, or null when no OTHER sessions have hits. */
+  recall: KnowsRecall | null
+}
+
+/**
+ * Shape the KNOWS section's two digests from the EXISTING accessors. Pure + tolerant:
+ * a missing overview (no active session) yields `session: null`; a missing/empty
+ * recall summary yields `recall: null`; and `hasContent` is false only when BOTH are
+ * empty — that's the signal the component uses to OMIT the section entirely.
+ *
+ * Per-session ("This session"): findings = active notes; ruledOut = superseded; the
+ * most-recent ruled-out is the LAST entry of the overview's `ruledOut` array (the
+ * overview preserves note order, so newest-superseded is last). A session counts as
+ * having content if it has any summary, finding, ruled-out, or provisional.
+ *
+ * Cross-session ("Across sessions"): straight from RecallService.summary() (already
+ * scoped to the caller's workspace by the IPC default). It counts as content only
+ * when there is at least one contributing session AND at least one finding or
+ * ruled-out — a lone empty digest (0/0 across 0 sessions) is treated as nothing to
+ * show. (The v1 digest does not exclude the active session — see KnowsRecallInput.)
+ */
+export function deriveKnows(
+  overview: KnowsOverviewInput | null | undefined,
+  recallSummary: KnowsRecallInput | null | undefined,
+): RailKnows {
+  const session = deriveKnowsSession(overview)
+  const recall = deriveKnowsRecall(recallSummary)
+  return { hasContent: session != null || recall != null, session, recall }
+}
+
+function deriveKnowsSession(ov: KnowsOverviewInput | null | undefined): KnowsSession | null {
+  if (!ov) return null
+  const summary = ov.summary?.trim() || undefined
+  const findings = ov.notes?.length ?? 0
+  const ruled = ov.ruledOut ?? []
+  const ruledOut = ruled.length
+  const provisionalCount = ov.provisionalFindings?.length ?? 0
+  const provisional = provisionalCount > 0 ? provisionalCount : undefined
+
+  // Nothing accumulated yet → no per-session digest (so the section can hide).
+  if (!summary && findings === 0 && ruledOut === 0 && provisional == null) return null
+
+  // Newest-superseded is the LAST ruled-out entry (the overview keeps note order).
+  const last = ruled.length ? ruled[ruled.length - 1] : undefined
+  const recentRuledOut = last
+    ? { text: last.text, ...(last.correction ? { correction: last.correction } : {}) }
+    : undefined
+
+  return {
+    findings,
+    ruledOut,
+    ...(provisional != null ? { provisional } : {}),
+    ...(summary ? { summary } : {}),
+    ...(recentRuledOut ? { recentRuledOut } : {}),
+  }
+}
+
+function deriveKnowsRecall(rs: KnowsRecallInput | null | undefined): KnowsRecall | null {
+  if (!rs) return null
+  // A digest with no other sessions OR no findings/ruled-out is nothing to show.
+  if (rs.sessions <= 0 || (rs.findings === 0 && rs.ruledOut === 0)) return null
+  const recent = rs.recentRuledOut
+  const recentRuledOut = recent
+    ? {
+        text: recent.text,
+        sessionName: recent.sessionName,
+        ...(recent.correction ? { correction: recent.correction } : {}),
+      }
+    : undefined
+  return {
+    sessions: rs.sessions,
+    findings: rs.findings,
+    ruledOut: rs.ruledOut,
+    ...(recentRuledOut ? { recentRuledOut } : {}),
+  }
+}

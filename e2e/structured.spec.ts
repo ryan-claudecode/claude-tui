@@ -101,6 +101,68 @@ async function seedRestorableSession(
 }
 
 /**
+ * Agent Rail KNOWS (CAPP-84 Phase 3 × CAPP-86 v1.5) — seed a persisted structured
+ * session that ALREADY carries accumulated context (a summary + two active findings +
+ * one ruled-out/corrected finding), bound to an on-disk transcript so the app
+ * auto-restores it as the active session. On restore the rail's KNOWS section has
+ * real content to render (the per-session overview digest), and — since v1 recall
+ * counts the workspace's sessions including this one — the cross-session recall
+ * digest renders too. Hermetic: the fake stream stays silent on restore (no real
+ * claude), so the ONLY KNOWS content is the seeded ledger.
+ */
+async function seedSessionWithContext(
+  home: string,
+  ccId: string,
+  cwd: string,
+): Promise<void> {
+  const sessionsDir = join(home, ".claude-tui", "sessions")
+  await mkdir(sessionsDir, { recursive: true })
+  const session = {
+    id: "session-knows-seed",
+    name: "Engine migration",
+    status: "active",
+    summary: "Migrating the structured engine to the stream-json transport.",
+    notes: [
+      { id: "n1", text: "Headless loads skills by default", createdAt: 10, source: "self", status: "active" },
+      { id: "n2", text: "init arrives after the first user message", createdAt: 20, source: "self", status: "active" },
+      // A ruled-out note (n3) superseded by its correction (n4) — the `~~old~~ → new` pair.
+      { id: "n3", text: "init carries the catalog immediately", createdAt: 30, source: "self", status: "superseded", supersededBy: "n4" },
+      { id: "n4", text: "the catalog is empty until the first turn", createdAt: 40, source: "self", status: "active" },
+    ],
+    provisionalFindings: [],
+    terminals: [
+      {
+        id: "term-knows-old",
+        name: "Restored term",
+        cwd,
+        ccConversationId: ccId,
+        lastState: "idle",
+        engine: "structured",
+        model: "opus",
+      },
+    ],
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  await writeFile(join(sessionsDir, `${session.id}.json`), JSON.stringify(session), "utf-8")
+
+  // A minimal on-disk transcript so reopenTerminal --resume has something to land on
+  // (the same shape seedRestorableSession uses); the rail doesn't need it but the
+  // restore path watches for it.
+  const projDir = join(home, ".claude", "projects", encodeProjectDir(cwd))
+  await mkdir(projDir, { recursive: true })
+  await writeFile(
+    join(projDir, `${ccId}.jsonl`),
+    JSON.stringify({
+      type: "assistant",
+      isSidechain: false,
+      message: { role: "assistant", content: [{ type: "text", text: "Resumed." }] },
+    }) + "\n",
+    "utf-8",
+  )
+}
+
+/**
  * Shared setup for the split-pane tests: launch a hermetic structured app, open a
  * session, add a second structured terminal, and engage the split. Returns the page
  * (and the pageErrors sink the caller asserts empty at the end). Mirrors the engage
@@ -370,6 +432,79 @@ test("Agent Rail (v1): renders, toggles open/closed, and the COST footer sums a 
     expect(text).not.toBe("—")
   }).toPass({ timeout: 15_000 })
   await expect(cost).toContainText("tok")
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
+test("Agent Rail KNOWS (Phase 3): renders both digests + always-visible Open controls; Open Recall opens the panel", async () => {
+  // CAPP-84 Phase 3 × CAPP-86 v1.5 — the KNOWS context digest. Seed a restorable
+  // session carrying real context (summary + 2 findings + 1 ruled-out/corrected),
+  // so on auto-restore the rail's KNOWS section has content. Assert: the section +
+  // its "This session" / "Across …" labels render, the count chips show the seeded
+  // numbers, the ruled-out one-liner surfaces the `~~old~~ → new` correction, BOTH
+  // "Open context →" and "Open Recall →" controls are always visible (no hover-
+  // reveal), and clicking "Open Recall →" opens the companion RecallPanel.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-knows-"))
+  await seedStructuredConfig(tempHome)
+  const ccId = "know5cafe-0000-4000-8000-000000000abc"
+  const cwd = join(tempHome, "work")
+  await seedSessionWithContext(tempHome, ccId, cwd)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  // The seeded session auto-restores into a structured surface (NOT an xterm).
+  await expect(win.locator(".agent-composer textarea")).toBeVisible({ timeout: 30_000 })
+
+  // The KNOWS section renders (it only appears when there's content) with its label.
+  const knows = win.locator(".agent-rail-knows")
+  await expect(knows).toBeVisible({ timeout: 20_000 })
+  await expect(knows.locator(".agent-rail-section-label")).toHaveText("KNOWS")
+
+  // "This session" digest: the scope label, the seeded counts, the summary, and the
+  // most-recent ruled-out one-liner with its correction. Active findings = 3 (n1, n2,
+  // AND n4 — the correction note is itself an active finding); ruled out = 1 (n3).
+  await expect(knows).toContainText("This session")
+  const sessionGroup = knows.locator(".agent-rail-knows-group").first()
+  await expect(sessionGroup.locator(".agent-rail-knows-chip.findings")).toContainText("3 findings")
+  await expect(sessionGroup.locator(".agent-rail-knows-chip.ruled-out")).toContainText("1 ruled out")
+  await expect(sessionGroup.locator(".agent-rail-knows-summary")).toContainText(
+    "Migrating the structured engine",
+  )
+  await expect(sessionGroup.locator(".agent-rail-knows-struck")).toContainText(
+    "init carries the catalog immediately",
+  )
+  await expect(sessionGroup.locator(".agent-rail-knows-correction")).toContainText(
+    "the catalog is empty until the first turn",
+  )
+
+  // BOTH Open controls are ALWAYS visible (no hover-reveal) and enabled.
+  const openContext = knows.locator(".agent-rail-knows-open", { hasText: "Open context" })
+  const openRecall = knows.locator(".agent-rail-knows-open", { hasText: "Open Recall" })
+  await expect(openContext).toBeVisible()
+  await expect(openContext).toBeEnabled()
+  await expect(openRecall).toBeVisible()
+  await expect(openRecall).toBeEnabled()
+
+  // The cross-session digest renders too (v1 recall counts this workspace's session).
+  await expect(knows).toContainText(/Across \d+ session/)
+
+  // Clicking "Open Recall →" opens the companion RecallPanel — which renders in a
+  // SEPARATE companion BrowserWindow, so capture that new window and assert the panel
+  // (its always-visible search box) mounts there.
+  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  await openRecall.click()
+  const companion = await companionPromise
+  await expect(companion.locator(".recall-panel .recall-search")).toBeVisible({ timeout: 15_000 })
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })

@@ -39,6 +39,7 @@ import { useSplitView } from "./hooks/useSplitView"
 import { useOverlays } from "./hooks/useOverlays"
 import { useTheme } from "./hooks/useTheme"
 import { useAgentRail } from "./hooks/useAgentRail"
+import { useAgentRailKnows } from "./hooks/useAgentRailKnows"
 import { useAgentCost } from "./hooks/useAgentCost"
 import { usePanels, type PanelState } from "./hooks/usePanels"
 
@@ -539,6 +540,49 @@ export default function App() {
     openTimeline,
     createMission,
   } = usePanels(refreshOverviewsRef, activeSession, missionsListOpen, allMissions)
+
+  // Agent Rail KNOWS (Phase 3 — CAPP-84 × CAPP-86 v1.5) — the two context digests
+  // (this-session overview + cross-session recall) for the rail's KNOWS section. A
+  // pure lens over the EXISTING getSessionOverview + recallSummary accessors; no new
+  // backend. It refreshes LIVE off the SAME `worksession:updated` push the rest of
+  // the app consumes (useSessions owns that listener and replaces `activeSession` on
+  // each push): rather than register a duplicate listener, we derive a `refreshKey`
+  // from the live session's note/summary signature so the digest re-fetches whenever
+  // a finding/summary lands — AND when the active session/workspace changes. The
+  // `notes`/`summary` ride the live payload (the service spreads the full WorkSession)
+  // even though the renderer's typed WorkSession declares only a subset.
+  const knowsRefreshKey = useMemo(() => {
+    const s = activeSession as
+      | { id?: string; summary?: string; notes?: Array<{ id: string; status: string }> }
+      | null
+    if (!s?.id) return ""
+    // A compact signature: summary length + a per-note id:status fold. Changes on a
+    // new note, a correction (status flip), or a summary edit — exactly the KNOWS
+    // inputs — without re-fetching on unrelated terminal-activity pushes.
+    const noteSig = (s.notes ?? []).map((n) => `${n.id}:${n.status}`).join(",")
+    return `${s.id}|${s.summary?.length ?? 0}|${noteSig}`
+  }, [activeSession])
+
+  const railKnows = useAgentRailKnows({
+    sessionId: activeSessionId,
+    workspaceId: activeWorkspaceId ?? undefined,
+    refreshKey: knowsRefreshKey,
+  })
+
+  // KNOWS "Open context →" — reuse the EXISTING openOverview path (the ⊕ sidebar
+  // button → SessionOverview companion panel) for the active session.
+  const handleOpenRailContext = useCallback(() => {
+    if (activeSessionId) void openOverview(activeSessionId).catch(() => {})
+  }, [activeSessionId, openOverview])
+
+  // KNOWS "Open Recall →" — reuse the EXISTING `show_panel` "recall" type (CAPP-86
+  // v1 RecallPanel), scoped to the active session's workspace (the panel's read-side
+  // default). No new panel type, no new backend.
+  const handleOpenRailRecall = useCallback(() => {
+    void window.api
+      .showPanel("recall", { scope: "workspace", sessionId: activeSessionId ?? undefined }, "right")
+      .catch((err) => toast("error", `Couldn't open Recall: ${errMsg(err)}`))
+  }, [activeSessionId])
 
   // MS-2: wire the mission-dashboard opener into the attention-jump ref so that
   // attention entries carrying missionId route to the panel (not a terminal).
@@ -1085,6 +1129,9 @@ export default function App() {
         busy={railBusy}
         activity={activeTerminalForRail?.activity}
         blocks={railBlocks}
+        knows={railKnows}
+        onOpenContext={activeSessionId ? handleOpenRailContext : undefined}
+        onOpenRecall={handleOpenRailRecall}
       />
     </div>
   )
