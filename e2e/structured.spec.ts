@@ -1313,6 +1313,19 @@ test("CAPP-94 / U6: the workspace-memory editor opens from the switcher, renders
   // The new finding row appears (4 total).
   await expect(panel.locator(".wmem-finding")).toHaveCount(4, { timeout: 10_000 })
 
+  // CROSS-WINDOW LIVE-REFRESH (CAPP-94 review fix): mutate the SAME bucket from the MAIN
+  // window. The open companion editor must update via the `workspace:memory-changed` push
+  // forwarded to the companion window — NOT an in-panel optimistic update (this add did
+  // not originate in the panel). Before the fix the push only reached the main window, so
+  // the editor stayed stale; this asserts it now refreshes cross-window.
+  await win.evaluate(() =>
+    (window as any).api.addWorkspaceFinding(null, "added from the main window", "user"),
+  )
+  await expect(
+    panel.locator(".wmem-finding", { hasText: "added from the main window" }),
+  ).toHaveCount(1, { timeout: 15_000 })
+  await expect(panel.locator(".wmem-finding")).toHaveCount(5, { timeout: 15_000 })
+
   // Read back through the MAIN-window accessor (addressing the same untagged bucket via
   // null): both the edited instructions and the new finding landed in the PINNED bucket.
   await expect(async () => {

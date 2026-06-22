@@ -157,50 +157,17 @@ export default function CompanionApp() {
       window.companionApi.closeWindow()
     })
 
-    // CAPP-94 / U6 — keep any open workspace-memory editor panel fresh. The
-    // `workspace:memory-changed` push carries the CHANGED workspaceId (the untagged
-    // bucket's id is the sentinel stem "__untagged__"). We match the open panel on
-    // its PINNED `props.workspaceId` — NOT `props.id` (a memory record has no `id`,
-    // and panels carry auto-generated `panel-N` ids) — then re-fetch its record and
-    // replace its props. A tagged panel matches an exact id; an untagged panel
-    // (props.workspaceId == null) matches the null-equivalent push (null / the
-    // sentinel stem). The panel ALSO self-refreshes off this same push; this seam
-    // keeps the props (and the tab) authoritative for the matched panel.
-    const offMemory = window.companionApi.onWorkspaceMemoryChanged((changedId) => {
-      setPanels((prev) => {
-        const matches = prev.filter((p) => {
-          if (p.type !== "workspace-memory") return false
-          const pinned = (p.props as { workspaceId?: string | null })?.workspaceId ?? null
-          if (pinned === null) return changedId == null || changedId === "__untagged__"
-          return pinned === changedId
-        })
-        if (matches.length === 0) return prev
-        for (const m of matches) {
-          const pinned = (m.props as { workspaceId?: string | null })?.workspaceId ?? null
-          void window.companionApi.getWorkspaceMemory(pinned).then((rec) => {
-            setPanels((cur) =>
-              cur.map((p) =>
-                p.id === m.id
-                  ? {
-                      ...p,
-                      props: {
-                        ...p.props,
-                        instructions: rec.instructions,
-                        findings: rec.findings,
-                      },
-                    }
-                  : p,
-              ),
-            )
-          })
-        }
-        return prev
-      })
-    })
+    // CAPP-94 / U6 — workspace-memory editor live-refresh is owned ENTIRELY by the
+    // WorkspaceMemoryPanel itself: it subscribes to `workspace:memory-changed`, matches
+    // its own pinned workspaceId, and re-fetches its authoritative record. CompanionApp
+    // deliberately does NOT also push fresh props here — that was a redundant second
+    // refresh path the panel ignored after mount (it seeds `record` from props once),
+    // and doing the async fetch inside a setPanels updater is a React anti-pattern.
+    // Single source of truth = the panel. (The backend push reaches this window via
+    // companionService.sendToCompanion in ipc.ts's onMemoryChanged.)
 
     return () => {
       window.companionApi.removeAllListeners("theme:changed")
-      offMemory?.()
     }
   }, [])
 

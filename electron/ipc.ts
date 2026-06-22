@@ -182,6 +182,13 @@ export async function setupIpc(win: BrowserWindow) {
   workspaceMemoryService.onMemoryChanged((workspaceId) => {
     recallService.invalidate()
     if (!win.isDestroyed()) win.webContents.send("workspace:memory-changed", workspaceId)
+    // The editor panel (U6) lives in the COMPANION window, NOT the main window — so the
+    // change must also reach there or an open editor goes stale when another surface
+    // (Keep-modal promote, SessionOverview push, an agent's MCP write) mutates the same
+    // workspace. Guarded by isOpen() so a memory change never SPAWNS a closed companion.
+    if (companionService.isOpen()) {
+      companionService.sendToCompanion("workspace:memory-changed", workspaceId)
+    }
   })
 
   sessionService.setMainWindow(win)

@@ -103,19 +103,17 @@ export default function WorkspaceMemoryPanel(props: Props) {
   useEffect(() => {
     void refresh()
     const off = window.companionApi.onWorkspaceMemoryChanged((changedId) => {
-      const myId = isUntagged ? recordIdRef.current : pinnedId
-      if (changedId === myId) void refresh()
+      // Match the pinned target. Untagged matches the null-equivalent push (null OR the
+      // sentinel stem) DIRECTLY — not via record state — so there is no mount-race window
+      // where the first push could arrive before the record is populated.
+      const matches = isUntagged
+        ? changedId == null || changedId === "__untagged__"
+        : changedId === pinnedId
+      if (matches) void refresh()
     })
     return off
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinnedId, isUntagged])
-
-  // A ref to the current record's stored workspaceId (the untagged stem for the
-  // untagged bucket) so the live-match closure stays current without re-subscribing.
-  const recordIdRef = useRef<string | null>(record?.workspaceId ?? null)
-  useEffect(() => {
-    recordIdRef.current = record?.workspaceId ?? null
-  }, [record])
 
   const rows = useMemo(() => deriveFindingRows(record?.findings ?? []), [record])
 

@@ -93,6 +93,46 @@ describe("worksession-handlers — CAPP-87 / U3 promote + kill-with-promote", ()
     expect(out).toBe(entries)
   })
 
+  it("promote-to-workspace (SessionOverview Push) resolves the OWNING workspace, promotes, returns {ok,count,workspaceId}", () => {
+    const fake = {
+      get: vi.fn(() => ({ workspaceId: "ws-A" })),
+      getPromotableFindings: vi.fn(() => entries),
+    } as unknown as SessionService
+    const mem = {
+      promoteFindings: vi.fn((_ws: string | null, e: PromoteEntry[]) => e), // echo → count = entries.length
+    } as unknown as WorkspaceMemoryService
+    registerWorkSessionHandlers({
+      workSessionService: fake,
+      recallService: fakeRecall,
+      workspaceMemoryService: mem,
+    })
+
+    const out = call("worksession:promote-to-workspace", "s1")
+    expect((fake.getPromotableFindings as any)).toHaveBeenCalledWith("s1")
+    // Promote into the OWNING session's workspace (ws-A) — NOT the active selection.
+    expect((mem.promoteFindings as any)).toHaveBeenCalledWith("ws-A", entries)
+    expect(out).toEqual({ ok: true, count: entries.length, workspaceId: "ws-A" })
+  })
+
+  it("promote-to-workspace falls back to the untagged bucket (null) when the session has no workspace", () => {
+    const fake = {
+      get: vi.fn(() => ({})), // no workspaceId
+      getPromotableFindings: vi.fn(() => entries),
+    } as unknown as SessionService
+    const mem = {
+      promoteFindings: vi.fn((_ws: string | null, e: PromoteEntry[]) => e),
+    } as unknown as WorkspaceMemoryService
+    registerWorkSessionHandlers({
+      workSessionService: fake,
+      recallService: fakeRecall,
+      workspaceMemoryService: mem,
+    })
+
+    const out = call("worksession:promote-to-workspace", "s1")
+    expect((mem.promoteFindings as any)).toHaveBeenCalledWith(null, entries)
+    expect(out).toMatchObject({ ok: true, workspaceId: null })
+  })
+
   it("kill-with-promote resolves the OWNING session's workspace, promotes-THEN-kills", () => {
     const order: string[] = []
     const fake = {
