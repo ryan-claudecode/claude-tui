@@ -163,6 +163,67 @@ async function seedSessionWithContext(
 }
 
 /**
+ * CAPP-88 — seed a SECOND restorable session in the SAME (untagged) workspace bucket
+ * carrying its own active finding + one ruled-out/corrected finding, so the rail's
+ * cross-session ("Across N sessions") recall digest has OTHER-session content to
+ * aggregate (recall.summary() now EXCLUDES the caller's own session). The file is
+ * named `…seed2` so it sorts AFTER `session-knows-seed.json` in `readdirSync` order —
+ * keeping `session-knows-seed` the alphabetically-first → auto-restored ACTIVE session
+ * (its "This session" digest counts stay deterministic). Untagged like the first seed,
+ * so both share the default "All" workspace bucket and the cross-session scope spans
+ * them. The fake stream stays silent on restore (hermetic — no real claude).
+ */
+async function seedSecondSessionWithFinding(
+  home: string,
+  ccId: string,
+  cwd: string,
+): Promise<void> {
+  const sessionsDir = join(home, ".claude-tui", "sessions")
+  await mkdir(sessionsDir, { recursive: true })
+  const session = {
+    id: "session-knows-seed2",
+    name: "Permissions rework",
+    status: "active",
+    summary: "Re-approaching the structured permission gate.",
+    notes: [
+      { id: "m1", text: "approve_tool blocks until Allow or Deny", createdAt: 11, source: "self", status: "active" },
+      // A ruled-out note (m2) superseded by its correction (m3).
+      { id: "m2", text: "a bare allow is accepted", createdAt: 21, source: "self", status: "superseded", supersededBy: "m3" },
+      { id: "m3", text: "allow MUST return updatedInput or it is rejected", createdAt: 22, source: "self", status: "active" },
+    ],
+    provisionalFindings: [],
+    terminals: [
+      {
+        id: "term-knows-old2",
+        name: "Restored term 2",
+        cwd,
+        ccConversationId: ccId,
+        lastState: "idle",
+        engine: "structured",
+        model: "opus",
+      },
+    ],
+    createdAt: 3,
+    updatedAt: 4,
+  }
+  await writeFile(join(sessionsDir, `${session.id}.json`), JSON.stringify(session), "utf-8")
+
+  // A minimal on-disk transcript so this session's restore --resume has something to
+  // land on (same pattern as the other seeds; the rail doesn't need it).
+  const projDir = join(home, ".claude", "projects", encodeProjectDir(cwd))
+  await mkdir(projDir, { recursive: true })
+  await writeFile(
+    join(projDir, `${ccId}.jsonl`),
+    JSON.stringify({
+      type: "assistant",
+      isSidechain: false,
+      message: { role: "assistant", content: [{ type: "text", text: "Resumed two." }] },
+    }) + "\n",
+    "utf-8",
+  )
+}
+
+/**
  * Shared setup for the split-pane tests: launch a hermetic structured app, open a
  * session, add a second structured terminal, and engage the split. Returns the page
  * (and the pageErrors sink the caller asserts empty at the end). Mirrors the engage
@@ -449,6 +510,15 @@ test("Agent Rail KNOWS (Phase 3): renders both digests + always-visible Open con
   const ccId = "know5cafe-0000-4000-8000-000000000abc"
   const cwd = join(tempHome, "work")
   await seedSessionWithContext(tempHome, ccId, cwd)
+  // CAPP-88 — seed a SECOND untagged session (its own findings) in the same workspace
+  // bucket so the cross-session recall digest has OTHER-session content to aggregate.
+  // recall.summary() now EXCLUDES the active session itself; a lone session would
+  // (correctly) hide the cross-session group. Distinct ccId + cwd so its transcript
+  // doesn't collide; the `…seed2` filename sorts after `session-knows-seed` so the
+  // FIRST seed stays the auto-restored ACTIVE session (deterministic "This session").
+  const ccId2 = "know5cafe-0000-4000-8000-000000000def"
+  const cwd2 = join(tempHome, "work2")
+  await seedSecondSessionWithFinding(tempHome, ccId2, cwd2)
 
   app = await _electron.launch({
     args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
@@ -495,8 +565,22 @@ test("Agent Rail KNOWS (Phase 3): renders both digests + always-visible Open con
   await expect(openRecall).toBeVisible()
   await expect(openRecall).toBeEnabled()
 
-  // The cross-session digest renders too (v1 recall counts this workspace's session).
-  await expect(knows).toContainText(/Across \d+ session/)
+  // The cross-session digest renders too — and (CAPP-88) it counts only the OTHER
+  // session, NOT the active one (whose findings already show in "This session" above).
+  // With exactly one other untagged session it reads "Across 1 session" and its chips
+  // reflect seed2's ledger: 2 active findings (m1, m3) + 1 ruled out (m2), with the
+  // correcting one-liner attributed to "Permissions rework".
+  await expect(knows).toContainText("Across 1 session")
+  const crossGroup = knows.locator(".agent-rail-knows-group").nth(1)
+  await expect(crossGroup.locator(".agent-rail-knows-scope")).toHaveText("Across 1 session")
+  await expect(crossGroup.locator(".agent-rail-knows-chip.findings")).toContainText("2 findings")
+  await expect(crossGroup.locator(".agent-rail-knows-chip.ruled-out")).toContainText("1 ruled out")
+  // The cross-session ruled-out one-liner is seed2's (NOT the active session's n3),
+  // proving the digest sources OTHER sessions' knowledge after exclude-self.
+  await expect(crossGroup.locator(".agent-rail-knows-struck")).toContainText("a bare allow is accepted")
+  await expect(crossGroup.locator(".agent-rail-knows-correction")).toContainText(
+    "allow MUST return updatedInput",
+  )
 
   // Clicking "Open Recall →" opens the companion RecallPanel — which renders in a
   // SEPARATE companion BrowserWindow, so capture that new window and assert the panel

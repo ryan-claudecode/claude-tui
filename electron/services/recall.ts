@@ -232,8 +232,13 @@ export class RecallService {
 
   /**
    * Cross-session digest for the Rail KNOWS section: counts of findings / ruled-out
-   * across the contributing sessions in scope, plus the most-recent ruled-out
-   * one-liner (with its correction). 'workspace' is the natural default for the rail.
+   * across OTHER sessions in scope (the caller's OWN session is EXCLUDED — its
+   * findings already show in the rail's "This session" digest, so counting them here
+   * would double-count). The result is the caller's most-recent ruled-out one-liner
+   * across those other sessions (with its correction). 'workspace' is the natural
+   * default for the rail. NB: when the workspace has only the caller's session, this
+   * yields sessions:0 / findings:0, and `deriveKnowsRecall` correctly HIDES the
+   * cross-session group (no "Across N sessions" line for a lone session).
    */
   summary(
     scope: RecallScope = "workspace",
@@ -245,6 +250,9 @@ export class RecallService {
     let ruledOut = 0
     let recent: RecallSummary["recentRuledOut"] | undefined
     for (const e of scoped) {
+      // Exclude the caller's own session — its knowledge already appears in the
+      // rail's "This session" digest; counting it here would double-count.
+      if (caller.sessionId && e.sessionId === caller.sessionId) continue
       sessionIds.add(e.sessionId)
       if (e.source === "note" && e.status === "active") findings++
       else if (e.status === "ruled-out") {

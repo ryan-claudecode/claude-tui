@@ -272,6 +272,64 @@ describe("RecallService.summary", () => {
     const svc = new RecallService(() => [])
     expect(svc.summary("all", {})).toEqual({ sessions: 0, findings: 0, ruledOut: 0 })
   })
+
+  it("EXCLUDES the caller's own session so the cross-session digest reflects only OTHER sessions", () => {
+    const svc = new RecallService(() => [
+      session({
+        id: "sA",
+        name: "Caller session",
+        workspaceId: "ws-a",
+        summary: "the caller's own running summary",
+        notes: [
+          note("caller active finding", 10),
+          note("caller wrong path", 5, { id: "wA", status: "superseded", supersededBy: "fA" }),
+          note("caller fix", 6, { id: "fA" }),
+        ],
+      }),
+      session({
+        id: "sB",
+        name: "Other session",
+        workspaceId: "ws-a",
+        notes: [
+          note("other active finding", 20),
+          note("other wrong path", 99, { id: "wB", status: "superseded", supersededBy: "fB" }),
+          note("other fix", 100, { id: "fB" }),
+        ],
+      }),
+    ])
+    // Caller is sA → only sB's knowledge should be counted.
+    const sum = svc.summary("workspace", { sessionId: "sA", workspaceId: "ws-a" })
+    expect(sum.sessions).toBe(1) // only the OTHER session contributes
+    // sB active notes: "other active finding", "other fix" = 2 (NONE of sA's)
+    expect(sum.findings).toBe(2)
+    // sB ruled-out: "other wrong path" = 1 (NOT sA's "caller wrong path")
+    expect(sum.ruledOut).toBe(1)
+    // most-recent ruled-out is sB's, with its correction + session name
+    expect(sum.recentRuledOut?.text).toBe("other wrong path")
+    expect(sum.recentRuledOut?.correction).toBe("other fix")
+    expect(sum.recentRuledOut?.sessionName).toBe("Other session")
+  })
+
+  it("yields sessions:0 / findings:0 when the caller is the ONLY session in scope (cross-session group hides)", () => {
+    const svc = new RecallService(() => [
+      session({
+        id: "sOnly",
+        name: "Lone session",
+        workspaceId: "ws-a",
+        summary: "lone summary",
+        notes: [
+          note("lone active finding", 10),
+          note("lone wrong path", 5, { id: "wL", status: "superseded", supersededBy: "fL" }),
+          note("lone fix", 6, { id: "fL" }),
+        ],
+      }),
+    ])
+    const sum = svc.summary("workspace", { sessionId: "sOnly", workspaceId: "ws-a" })
+    expect(sum.sessions).toBe(0)
+    expect(sum.findings).toBe(0)
+    expect(sum.ruledOut).toBe(0)
+    expect(sum.recentRuledOut).toBeUndefined()
+  })
 })
 
 describe("RecallService.workspaceIdOf", () => {
