@@ -378,4 +378,103 @@ describe("CAPP-87 / U3 workspace memory MCP tools", () => {
     expect(memory.getMemory(owner.id).findings).toHaveLength(0)
     expect(memory.getMemory(other.id).findings).toHaveLength(0)
   })
+
+  it("promote_finding rejects an explicit workspace_id when the OWNING session is UNTAGGED (no re-home of untagged findings)", async () => {
+    // The `?? undefined` branch of the cross-workspace guard: an untagged owner
+    // (workspaceId === undefined) + a concrete workspace_id MUST be rejected.
+    const ws = svc()
+    const target = ws.create("Target", "/t")
+    const memory = mem()
+    const sessions = fakeSessions({
+      workspaceOf: { "owner-sess": undefined }, // untagged owner
+      notes: { "owner-sess": { "note-1": { text: "x", originNoteId: "note-1" } } },
+    })
+    const h = registerMem(ws, sessions, memory, { sessionId: "owner-sess" })
+
+    const res = await h.promote_finding({
+      note_id: "note-1",
+      session_id: "owner-sess",
+      workspace_id: target.id,
+    })
+    expect(res.content[0].text).toMatch(/cross-workspace|refus/i)
+    // Neither the untagged bucket nor the asserted target received it.
+    expect(memory.getMemory(null).findings).toHaveLength(0)
+    expect(memory.getMemory(target.id).findings).toHaveLength(0)
+  })
+
+  it("promote_finding HONORS an explicit workspace_id that MATCHES the owning session's workspace (positive branch)", async () => {
+    const ws = svc()
+    const owner = ws.create("Owner", "/owner")
+    const memory = mem()
+    const sessions = fakeSessions({
+      workspaceOf: { "owner-sess": owner.id },
+      notes: { "owner-sess": { "note-1": { text: "matched", originNoteId: "note-1" } } },
+    })
+    const h = registerMem(ws, sessions, memory, { sessionId: "owner-sess" })
+
+    await h.promote_finding({ note_id: "note-1", session_id: "owner-sess", workspace_id: owner.id })
+    // An asserted-correct workspace_id is honored, not rejected.
+    expect(memory.getMemory(owner.id).findings.map((f) => f.text)).toEqual(["matched"])
+  })
+
+  it("promote_finding rejects an UNKNOWN explicit workspace_id with a 'not found' error", async () => {
+    const ws = svc()
+    const a = ws.create("A", "/a")
+    const memory = mem()
+    const sessions = fakeSessions({
+      workspaceOf: { "sess-1": a.id },
+      notes: { "sess-1": { "note-1": { text: "x", originNoteId: "note-1" } } },
+    })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    expect(
+      (await h.promote_finding({ note_id: "note-1", workspace_id: "ghost" })).content[0].text,
+    ).toMatch(/not found/i)
+    expect(memory.getMemory(a.id).findings).toHaveLength(0)
+  })
+
+  it("add / set-context HONOR an explicit KNOWN workspace_id (targeted write to B; caller bound to A untouched)", async () => {
+    const ws = svc()
+    const a = ws.create("A", "/a")
+    const b = ws.create("B", "/b")
+    const memory = mem()
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": a.id } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    await h.add_workspace_memory({ text: "for B", workspace_id: b.id })
+    await h.set_workspace_memory_context({ context: "B ctx", workspace_id: b.id })
+    // Landed in the targeted workspace B...
+    expect(memory.getMemory(b.id).findings.map((f) => f.text)).toEqual(["for B"])
+    expect(memory.getMemory(b.id).instructions).toBe("B ctx")
+    // ...NOT the caller's own workspace A.
+    expect(memory.getMemory(a.id).findings).toHaveLength(0)
+    expect(memory.getMemory(a.id).instructions).toBe("")
+  })
+
+  it("get_workspace_memory with an OMITTED id reads the CALLER's workspace (never getActiveId)", async () => {
+    const ws = svc()
+    const a = ws.create("A", "/a")
+    const b = ws.create("B", "/b")
+    ws.setActive(b.id) // active selection must be ignored
+    const memory = mem()
+    memory.addFinding(a.id, "in A", "user")
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": a.id } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    const rec = parse<{ findings: Array<{ text: string }> }>(await h.get_workspace_memory({}))
+    expect(rec.findings.map((f) => f.text)).toEqual(["in A"])
+  })
+
+  it("get_workspace_memory with an OMITTED id reads the UNTAGGED bucket for an untagged caller", async () => {
+    const ws = svc()
+    const active = ws.create("Active", "/x")
+    ws.setActive(active.id) // active selection must be ignored
+    const memory = mem()
+    memory.addFinding(null, "global", "agent")
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": undefined } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    const rec = parse<{ findings: Array<{ text: string }> }>(await h.get_workspace_memory({}))
+    expect(rec.findings.map((f) => f.text)).toEqual(["global"])
+  })
 })

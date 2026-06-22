@@ -202,6 +202,14 @@ export function registerWorkspaceTools(
   //     and a not-found note is rejected. An explicit `workspace_id` that DIFFERS from
   //     the owner's workspace is rejected (no silent cross-workspace re-homing).
   //
+  // ASYMMETRY (intentional): get/add/set-context ALLOW an explicit, registry-validated
+  // workspace_id to target ANY workspace — the SAFE DEFAULT (omitted id) uses the
+  // caller's own session workspace with NO getActiveId fallback, and the known-uuid
+  // path is a deliberate cross-workspace escape hatch. promote_finding is the exception
+  // (it rejects a workspace_id that differs from the note's owner). Consequence:
+  // workspace memory is NOT a confidentiality boundary between sessions (knowing a
+  // workspace's uuid grants read+write) — acceptable for this single-user app.
+  //
   // `identity.sessionId` is the work-session container id (see server.ts identity
   // binding), so `workSessions.get()` resolves the caller's session directly.
 
@@ -288,6 +296,13 @@ export function registerWorkspaceTools(
 
       const entry = workSessions.getPromotableFinding(owner, note_id)
       if (!entry) return text(`Finding not found: note ${note_id} in session ${owner}`)
+
+      // Validate an explicit destination assertion against the registry first, for a
+      // crisper "not found" error than the cross-workspace rejection below (the actual
+      // write target is always the OWNING session's workspace, never workspace_id).
+      if (workspace_id !== undefined && !isKnownWorkspace(workspace_id)) {
+        return text(`Workspace not found: ${workspace_id}`)
+      }
 
       const ownerWorkspaceId = workSessions.get(owner)?.workspaceId ?? null
       // Reject a silent cross-workspace re-home: an explicit workspace_id MUST match
