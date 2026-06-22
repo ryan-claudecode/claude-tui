@@ -20,6 +20,7 @@ import type { MissionService } from "../services/mission"
 import type { SessionService } from "../services/sessions"
 import type { RecallService } from "../services/recall"
 import type { AttentionService } from "../services/attention"
+import type { WorkspaceMemoryService } from "../services/workspaceMemory"
 import { registerTools, type TerminalIdentity } from "./tools"
 
 // Injected into every connecting session's context via the MCP initialize
@@ -34,6 +35,7 @@ PILLAR 1 — CONTINUITY (work outlives any single context window):
 - Work sessions (the context engine) — create_work_session / list_work_sessions / work_session_status build a durable *container* that groups many terminals and accumulates knowledge across restarts and context exhaustion. set_terminal_activity reports what a terminal is doing now; session_note records authoritative findings (pass 'corrects' to supersede a wrong one); set_session_summary sets the running summary; get_session_context pulls the primer (summary + findings + ruled-out) a fresh terminal reads to inherit what the session knows. recall searches every finding + summary ACROSS sessions ("have we learned this before?") — call it BEFORE re-exploring; scope defaults to your workspace, ruled-out hits surface what was disproven (with the fix) so you don't re-walk dead ends. session_timeline renders the session's durable life-history (spawns/retires/notes/corrections/summaries/handoffs) as a timeline panel — the "what did my agents do while I was away?" view. list_folder_conversations + restore_conversation discover and reopen ANY past Claude Code conversation for a folder (including ones started outside this app) — claude --resume in that folder as a new work session.
 - Session history — get_session_output / search_session_output (review what a background session did while you were away), get_session_activity (which sessions are active vs idle), wait_for_session_idle (delegate a task to another session and block until it finishes).
 - Durable notes & setups — save_note / list_notes / get_note / delete_note / show_notes (a cross-session scratchpad on disk for the next session); list_session_templates / create_session_from_template (seed a purpose-built session); list_layouts / save_layout / restore_layout / delete_layout (snapshot and recreate a working set of sessions).
+- Workspace memory (the durable, workspace-level knowledge tier — survives ALL session deletion, distinct from per-session findings) — get_workspace_memory (read a workspace's standing context + findings), add_workspace_memory (record a workspace-wide finding), set_workspace_memory_context (set the workspace's standing instructions), promote_finding (graduate a session note up to its OWNING session's workspace so it outlives the session). Destination is always YOUR bound session's workspace (or the owning session's, for promote) — never the global active selection.
 
 PILLAR 2 — AGENT-RENDERED UI (you drive the app back, routing the user's attention):
 - Panels — show_panel renders a rich panel in the companion window: diff, image, markdown, table, test, chart, heatmap, tree, timeline, git, kanban, notes, stat, log, progress, code, mission. show_form shows an interactive form and waits for the user's submission. Plus update_panel / hide_panel / hide_all_panels / list_panels. diff_files opens an interactive, review-enabled diff of two files (or a proposed rewrite).
@@ -97,6 +99,7 @@ export async function startMcpServer(
   workSessionService: SessionService,
   recallService: RecallService,
   attentionService: AttentionService,
+  workspaceMemoryService: WorkspaceMemoryService,
 ): Promise<{ port: number; configPath: string }> {
   // A single McpServer can only be bound to one transport at a time, so we
   // build a fresh server (with all tools registered) PER SSE connection. The
@@ -132,6 +135,7 @@ export async function startMcpServer(
       workSessionService,
       recallService,
       attentionService,
+      workspaceMemoryService,
       identity,
     )
     return server

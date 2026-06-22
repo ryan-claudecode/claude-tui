@@ -18,6 +18,7 @@ import type { MissionService } from "../services/mission"
 import type { SessionService } from "../services/sessions"
 import type { RecallService } from "../services/recall"
 import type { AttentionService } from "../services/attention"
+import type { WorkspaceMemoryService } from "../services/workspaceMemory"
 import { registerSessionTools } from "./tools/sessions"
 import { registerWorkSessionTools } from "./tools/worksessions"
 import { registerMissionTools } from "./tools/missions"
@@ -58,6 +59,7 @@ export function registerTools(
   workSessions: SessionService,
   recall: RecallService,
   attention: AttentionService,
+  workspaceMemory: WorkspaceMemoryService,
   identity: TerminalIdentity = {},
 ) {
   registerSessionTools(server, sessions, broadcast, attention, workSessions, workspaces, identity)
@@ -66,7 +68,7 @@ export function registerTools(
   registerPanelTools(server, panels, notes, files, sessions, identity)
   registerPermissionTools(server, sessions, identity, (m, l, t) => notifications.notify(m, l, t))
   registerGitTools(server, git, sessions)
-  registerWorkspaceTools(server, workspaces, workSessions, identity)
+  registerWorkspaceTools(server, workspaces, workSessions, workspaceMemory, identity)
   registerAppTools(
     server,
     sessions,

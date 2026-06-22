@@ -120,6 +120,40 @@ contextBridge.exposeInMainWorld("api", {
   onWorkspaceActiveChanged: (callback: (workspace: any | null) => void) =>
     ipcRenderer.on("workspace:active-changed", (_e, workspace) => callback(workspace)),
 
+  // CAPP-87 / U3 — workspace memory (the durable, workspace-level knowledge tier).
+  // A `null` workspaceId addresses the untagged "All" bucket. Every mutator triggers
+  // the main process's onMemoryChanged seam (invalidates recall + pushes
+  // `workspace:memory-changed`). getPromotableFindings + killWorkSessionWithPromote
+  // back the delete-time Keep flow (U5); the editor panel (U6) consumes the rest.
+  getWorkspaceMemory: (workspaceId: string | null) =>
+    ipcRenderer.invoke("workspace:get-memory", workspaceId),
+  setWorkspaceInstructions: (workspaceId: string | null, text: string) =>
+    ipcRenderer.invoke("workspace:set-instructions", workspaceId, text),
+  addWorkspaceFinding: (workspaceId: string | null, text: string, source: "user" | "agent") =>
+    ipcRenderer.invoke("workspace:add-finding", workspaceId, text, source),
+  editWorkspaceFinding: (workspaceId: string | null, findingId: string, text: string) =>
+    ipcRenderer.invoke("workspace:edit-finding", workspaceId, findingId, text),
+  deleteWorkspaceFinding: (workspaceId: string | null, findingId: string) =>
+    ipcRenderer.invoke("workspace:delete-finding", workspaceId, findingId),
+  promoteWorkspaceFindings: (workspaceId: string | null, entries: any[]) =>
+    ipcRenderer.invoke("workspace:promote-findings", workspaceId, entries),
+  // The Keep modal's editable candidate list (the dying session's promotable notes).
+  getPromotableFindings: (sessionId: string) =>
+    ipcRenderer.invoke("worksession:promotable-findings", sessionId),
+  // Atomic promote-then-kill ("Keep & delete"): promotes the edited findings into the
+  // OWNING session's workspace FIRST, then kills the session (kill is skipped if
+  // promote throws). Distinct from `killWorkSession` (the "Delete everything" path).
+  killWorkSessionWithPromote: (sessionId: string, editedEntries: any[]) =>
+    ipcRenderer.invoke("worksession:kill-with-promote", sessionId, editedEntries),
+  // Memory-change push from main (payload = the changed workspaceId). The U6 editor
+  // panel live-refreshes on it. Per-instance unsubscribe (mirrors onStreamEvent) so a
+  // subscriber can tear down without a removeAllListeners clobbering siblings.
+  onWorkspaceMemoryChanged: (callback: (workspaceId: string) => void) => {
+    const handler = (_e: unknown, workspaceId: string) => callback(workspaceId)
+    ipcRenderer.on("workspace:memory-changed", handler)
+    return () => ipcRenderer.removeListener("workspace:memory-changed", handler)
+  },
+
   // Session rename
   renameSession: (id: string, newName: string) => ipcRenderer.invoke("terminal:rename", id, newName),
 

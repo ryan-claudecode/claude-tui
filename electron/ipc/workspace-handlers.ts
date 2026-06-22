@@ -1,5 +1,6 @@
 import { ipcMain, dialog, BrowserWindow } from "electron"
 import type { WorkspaceService } from "../services/workspaces"
+import type { WorkspaceMemoryService, PromoteEntry } from "../services/workspaceMemory"
 
 /**
  * WS-B — id-based workspace IPC handlers.
@@ -37,9 +38,10 @@ import type { WorkspaceService } from "../services/workspaces"
  */
 export function registerWorkspaceHandlers(deps: {
   workspaceService: WorkspaceService
+  workspaceMemoryService: WorkspaceMemoryService
   getScanPaths: () => string[]
 }) {
-  const { workspaceService, getScanPaths } = deps
+  const { workspaceService, workspaceMemoryService, getScanPaths } = deps
 
   // Re-project a single id through the public projection so a handler never has
   // to hand-build (and risk drifting from) the no-leak shape.
@@ -77,6 +79,38 @@ export function registerWorkspaceHandlers(deps: {
   // the seed-once discovery → return the updated PUBLIC list. Idempotent: seeds new
   // manifests, never duplicates a seeded workspace, never reverts user edits.
   ipcMain.handle("workspace:rescan", () => workspaceService.rescan(getScanPaths()))
+
+  // ── Workspace memory (CAPP-87 / U3) ──────────────────────────────────────────
+  // Thin wrappers over WorkspaceMemoryService — the durable, workspace-level
+  // knowledge tier. A `null` workspaceId addresses the untagged "All" bucket. Every
+  // mutator fires the service's `onMemoryChanged` seam (wired in ipc.ts to invalidate
+  // recall + push `workspace:memory-changed` to the renderer).
+  ipcMain.handle("workspace:get-memory", (_e, workspaceId: string | null) =>
+    workspaceMemoryService.getMemory(workspaceId),
+  )
+  ipcMain.handle("workspace:set-instructions", (_e, workspaceId: string | null, text: string) =>
+    workspaceMemoryService.setInstructions(workspaceId, text),
+  )
+  ipcMain.handle(
+    "workspace:add-finding",
+    (_e, workspaceId: string | null, text: string, source: "user" | "agent") =>
+      workspaceMemoryService.addFinding(workspaceId, text, source),
+  )
+  ipcMain.handle(
+    "workspace:edit-finding",
+    (_e, workspaceId: string | null, findingId: string, text: string) =>
+      workspaceMemoryService.editFinding(workspaceId, findingId, text),
+  )
+  ipcMain.handle(
+    "workspace:delete-finding",
+    (_e, workspaceId: string | null, findingId: string) =>
+      workspaceMemoryService.deleteFinding(workspaceId, findingId),
+  )
+  ipcMain.handle(
+    "workspace:promote-findings",
+    (_e, workspaceId: string | null, entries: PromoteEntry[]) =>
+      workspaceMemoryService.promoteFindings(workspaceId, entries),
+  )
 
   // ── Native folder picker (WS-D/H) ────────────────────────────────────────────
   // The create-workspace modal's "Choose folder" and the selected-workspace

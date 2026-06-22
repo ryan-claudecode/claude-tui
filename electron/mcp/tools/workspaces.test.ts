@@ -4,8 +4,10 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { registerWorkspaceTools } from "./workspaces"
 import { WorkspaceService } from "../../services/workspaces"
+import { WorkspaceMemoryService } from "../../services/workspaceMemory"
 import type { TerminalService, TerminalInfo } from "../../services/terminals"
 import type { SessionService } from "../../services/sessions"
+import type { TerminalIdentity } from "./shared"
 
 /**
  * WS-E — MCP workspace-tool round-trip. A fake McpServer captures each registered
@@ -46,12 +48,21 @@ function svc(): WorkspaceService {
 }
 
 /** Register the workspace tools against a fresh service; return the handler map.
- *  workSessions/identity are unused by the CRUD tools, so a bare cast suffices.
- *  WS-F — `getScanPaths` is injected so the rescan tool can be driven against a
- *  temp scan dir (defaults to none, which keeps the CRUD tests off the real config). */
+ *  workSessions/workspaceMemory/identity are unused by the registry CRUD tools, so a
+ *  bare cast suffices for those (the CAPP-87 memory tools have their own test below
+ *  that drives real instances). WS-F — `getScanPaths` is injected so the rescan tool
+ *  can be driven against a temp scan dir (defaults to none, which keeps the CRUD
+ *  tests off the real config). */
 function register(workspaceService: WorkspaceService, getScanPaths: () => string[] = () => []) {
   const { server, handlers } = fakeServer()
-  registerWorkspaceTools(server as any, workspaceService, {} as unknown as SessionService, {}, getScanPaths)
+  registerWorkspaceTools(
+    server as any,
+    workspaceService,
+    {} as unknown as SessionService,
+    {} as unknown as WorkspaceMemoryService,
+    {},
+    getScanPaths,
+  )
   return handlers
 }
 
@@ -191,5 +202,180 @@ describe("WS-E/H workspace MCP tools", () => {
     // Idempotent: a second rescan of the same dir does NOT duplicate the entry.
     const again = parse<unknown[]>(await h.rescan_workspaces({}))
     expect(again).toHaveLength(1)
+  })
+})
+
+/**
+ * CAPP-87 / U3 — the workspace-memory MCP tools. The SECURITY blockers:
+ *   • add/set-context destination = the caller's bound session's workspace ONLY
+ *     (NEVER getActiveId); an untagged session writes to the untagged bucket.
+ *   • an explicit unknown workspace_id is rejected.
+ *   • promote_finding lands in the OWNING session's workspace even when the
+ *     caller's identity is a DIFFERENT workspace; a not-found note is rejected; a
+ *     mismatched explicit workspace_id is rejected.
+ */
+describe("CAPP-87 / U3 workspace memory MCP tools", () => {
+  let memDir: string
+
+  /** A real WorkspaceMemoryService over a per-test temp dir. */
+  function mem(): WorkspaceMemoryService {
+    return new WorkspaceMemoryService({ dir: memDir })
+  }
+
+  /** A fake SessionService that maps session id → workspaceId, and resolves a
+   *  single canned promotable finding per (sessionId, noteId). */
+  function fakeSessions(opts: {
+    workspaceOf: Record<string, string | undefined>
+    notes?: Record<string, Record<string, { text: string; originNoteId: string }>>
+  }): SessionService {
+    return {
+      get: (id: string) =>
+        id in opts.workspaceOf ? { workspaceId: opts.workspaceOf[id] } : undefined,
+      getPromotableFinding: (sessionId: string, noteId: string) =>
+        opts.notes?.[sessionId]?.[noteId],
+    } as unknown as SessionService
+  }
+
+  /** Register the memory tools with a concrete identity + memory + sessions. */
+  function registerMem(
+    workspaceService: WorkspaceService,
+    sessions: SessionService,
+    memory: WorkspaceMemoryService,
+    identity: TerminalIdentity,
+  ) {
+    const { server, handlers } = fakeServer()
+    registerWorkspaceTools(server as any, workspaceService, sessions, memory, identity, () => [])
+    return handlers
+  }
+
+  beforeEach(() => {
+    memDir = join(root, "workspace-memory")
+  })
+
+  it("add_workspace_memory writes to the CALLER's bound session's workspace (never getActiveId)", async () => {
+    const ws = svc()
+    const a = ws.create("A", "/a")
+    // Make a DIFFERENT workspace the globally-active one — the write must NOT use it.
+    const b = ws.create("B", "/b")
+    ws.setActive(b.id)
+
+    const memory = mem()
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": a.id } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    await h.add_workspace_memory({ text: "convention X" })
+    // Landed in the caller's session workspace (A), NOT the active selection (B).
+    expect(memory.getMemory(a.id).findings.map((f) => f.text)).toEqual(["convention X"])
+    expect(memory.getMemory(b.id).findings).toHaveLength(0)
+    // Source is "agent".
+    expect(memory.getMemory(a.id).findings[0].source).toBe("agent")
+  })
+
+  it("add_workspace_memory writes to the UNTAGGED bucket when the caller's session has no workspace", async () => {
+    const ws = svc()
+    const active = ws.create("Active", "/x")
+    ws.setActive(active.id) // active selection must be ignored
+
+    const memory = mem()
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": undefined } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    await h.add_workspace_memory({ text: "global note" })
+    // Untagged bucket (null), NOT the active workspace.
+    expect(memory.getMemory(null).findings.map((f) => f.text)).toEqual(["global note"])
+    expect(memory.getMemory(active.id).findings).toHaveLength(0)
+  })
+
+  it("set_workspace_memory_context writes the standing context to the caller's workspace", async () => {
+    const ws = svc()
+    const a = ws.create("A", "/a")
+    const memory = mem()
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": a.id } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    await h.set_workspace_memory_context({ context: "use TDD" })
+    expect(memory.getMemory(a.id).instructions).toBe("use TDD")
+  })
+
+  it("an explicit UNKNOWN workspace_id is rejected (add + set-context + get)", async () => {
+    const ws = svc()
+    const memory = mem()
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": undefined } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    expect((await h.add_workspace_memory({ text: "x", workspace_id: "ghost" })).content[0].text).toMatch(
+      /not found/i,
+    )
+    expect(
+      (await h.set_workspace_memory_context({ context: "x", workspace_id: "ghost" })).content[0].text,
+    ).toMatch(/not found/i)
+    expect((await h.get_workspace_memory({ workspace_id: "ghost" })).content[0].text).toMatch(/not found/i)
+    // Nothing was written.
+    expect(memory.getMemory(null).findings).toHaveLength(0)
+  })
+
+  it("promote_finding lands in the OWNING session's workspace even when the caller is in a DIFFERENT workspace", async () => {
+    const ws = svc()
+    const owner = ws.create("Owner", "/owner")
+    const caller = ws.create("Caller", "/caller")
+    ws.setActive(caller.id) // active selection must be ignored
+
+    const memory = mem()
+    const sessions = fakeSessions({
+      workspaceOf: { "owner-sess": owner.id, "caller-sess": caller.id },
+      notes: { "owner-sess": { "note-1": { text: "the bug", originNoteId: "note-1" } } },
+    })
+    // Caller identity is in the CALLER workspace; the note belongs to OWNER's session.
+    const h = registerMem(ws, sessions, memory, { sessionId: "caller-sess" })
+
+    const res = await h.promote_finding({ note_id: "note-1", session_id: "owner-sess" })
+    const promoted = JSON.parse(res.content[0].text) as Array<{ text: string }>
+    expect(promoted.map((p) => p.text)).toEqual(["the bug"])
+    // Landed in the OWNER's workspace, NOT the caller's and NOT the active selection.
+    expect(memory.getMemory(owner.id).findings.map((f) => f.text)).toEqual(["the bug"])
+    expect(memory.getMemory(caller.id).findings).toHaveLength(0)
+  })
+
+  it("promote_finding defaults the owning session to the caller's identity", async () => {
+    const ws = svc()
+    const a = ws.create("A", "/a")
+    const memory = mem()
+    const sessions = fakeSessions({
+      workspaceOf: { "sess-1": a.id },
+      notes: { "sess-1": { "note-1": { text: "fact", originNoteId: "note-1" } } },
+    })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    await h.promote_finding({ note_id: "note-1" }) // no session_id → caller's own
+    expect(memory.getMemory(a.id).findings.map((f) => f.text)).toEqual(["fact"])
+  })
+
+  it("promote_finding rejects a not-found note_id", async () => {
+    const ws = svc()
+    const a = ws.create("A", "/a")
+    const memory = mem()
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": a.id }, notes: { "sess-1": {} } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    expect((await h.promote_finding({ note_id: "ghost" })).content[0].text).toMatch(/not found/i)
+    expect(memory.getMemory(a.id).findings).toHaveLength(0)
+  })
+
+  it("promote_finding rejects a mismatched explicit workspace_id (no silent cross-workspace re-home)", async () => {
+    const ws = svc()
+    const owner = ws.create("Owner", "/owner")
+    const other = ws.create("Other", "/other")
+    const memory = mem()
+    const sessions = fakeSessions({
+      workspaceOf: { "owner-sess": owner.id },
+      notes: { "owner-sess": { "note-1": { text: "x", originNoteId: "note-1" } } },
+    })
+    const h = registerMem(ws, sessions, memory, { sessionId: "owner-sess" })
+
+    const res = await h.promote_finding({ note_id: "note-1", workspace_id: other.id })
+    expect(res.content[0].text).toMatch(/cross-workspace|refus/i)
+    // Nothing promoted into either workspace.
+    expect(memory.getMemory(owner.id).findings).toHaveLength(0)
+    expect(memory.getMemory(other.id).findings).toHaveLength(0)
   })
 })

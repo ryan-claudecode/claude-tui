@@ -18,6 +18,7 @@ import { UiService } from "./services/ui"
 import { MissionService } from "./services/mission"
 import { SessionService } from "./services/sessions"
 import { RecallService } from "./services/recall"
+import { WorkspaceMemoryService } from "./services/workspaceMemory"
 import { CompanionService } from "./services/companion"
 import { AttentionService } from "./services/attention"
 import { Notification } from "electron"
@@ -47,6 +48,11 @@ export const notesService = new NotesService()
 export const fileService = new FileService()
 export const uiService = new UiService()
 export const companionService = new CompanionService()
+// CAPP-87 / U3 — the durable, workspace-level knowledge tier. BrowserWindow-free,
+// so it's safe to construct at module scope, and it's placed BEFORE the
+// recallService block below (a later unit injects listWorkspaceMemory() into
+// RecallService; this unit just needs the change seam to call recallService.invalidate()).
+export const workspaceMemoryService = new WorkspaceMemoryService()
 export const missionService = new MissionService(sessionService, {
   notify: (text, level) => notificationService.notify(text, level as any),
   // WS-C — stamp the active workspace onto each freshly-minted mission. A getter
@@ -156,6 +162,16 @@ export async function setupIpc(win: BrowserWindow) {
     win.webContents.send("workspace:active-changed", e.active)
   })
 
+  // CAPP-87 / U3 — the workspace-memory change seam. Every memory mutation (direct
+  // edit, finding add/edit/delete, or promote-on-kill) invalidates the recall index
+  // (so the derived cross-session view stays fresh) and pushes the changed
+  // workspaceId to the renderer (U5/U6's editor panel live-refreshes on it). The
+  // RecallService union itself is U4 — here we only call the EXISTING invalidate().
+  workspaceMemoryService.onMemoryChanged((workspaceId) => {
+    recallService.invalidate()
+    if (!win.isDestroyed()) win.webContents.send("workspace:memory-changed", workspaceId)
+  })
+
   sessionService.setMainWindow(win)
   sessionService.setDefaults(
     config.defaultCommand ?? "claude",
@@ -261,6 +277,7 @@ export async function setupIpc(win: BrowserWindow) {
       workSessionService,
       recallService,
       attentionService,
+      workspaceMemoryService,
     )
     sessionService.setMcpConfigPath(configPath)
     sessionService.setMcpServerUrl(`http://127.0.0.1:${port}/sse`)
@@ -276,7 +293,7 @@ export async function setupIpc(win: BrowserWindow) {
 
   // Register IPC handlers by domain (MOVE, not rewrite — see ipc/*-handlers.ts)
   registerTerminalHandlers({ sessionService, win })
-  registerWorkSessionHandlers({ workSessionService, recallService })
+  registerWorkSessionHandlers({ workSessionService, recallService, workspaceMemoryService })
   registerPanelHandlers({
     panelService,
     notificationService,
@@ -294,6 +311,7 @@ export async function setupIpc(win: BrowserWindow) {
   // loadConfig() re-read) so a config edit since launch is honored on a re-scan.
   registerWorkspaceHandlers({
     workspaceService,
+    workspaceMemoryService,
     getScanPaths: () => loadConfig().workspaceScanPaths,
   })
   registerAppHandlers({

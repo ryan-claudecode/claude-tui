@@ -1,12 +1,14 @@
 import { ipcMain } from "electron"
 import type { SessionService } from "../services/sessions"
 import type { RecallService, RecallScope } from "../services/recall"
+import type { WorkspaceMemoryService, PromoteEntry } from "../services/workspaceMemory"
 
 export function registerWorkSessionHandlers(deps: {
   workSessionService: SessionService
   recallService: RecallService
+  workspaceMemoryService: WorkspaceMemoryService
 }) {
-  const { workSessionService, recallService } = deps
+  const { workSessionService, recallService, workspaceMemoryService } = deps
 
   // Work-session (container) IPC -- the durable session tier above terminals
   ipcMain.handle("worksession:list", () => workSessionService.list())
@@ -34,6 +36,24 @@ export function registerWorkSessionHandlers(deps: {
   )
   ipcMain.handle("worksession:kill", (_e, sessionId: string) =>
     workSessionService.killSession(sessionId),
+  )
+  // CAPP-87 / U3 — the Keep modal's editable candidate list: the dying session's
+  // confirmed notes (active + ruled-out) mapped into PromoteEntry[]. Pure read.
+  ipcMain.handle("worksession:promotable-findings", (_e, sessionId: string) =>
+    workSessionService.getPromotableFindings(sessionId),
+  )
+  // CAPP-87 / U3 — atomic promote-then-kill ("Keep & delete"). Resolve the OWNING
+  // session's workspace (NOT the active selection), promote its (edited) findings
+  // into that workspace's memory FIRST, then kill the session. If promote throws,
+  // the kill below NEVER runs (fail-safe: the session survives with findings intact).
+  // The existing worksession:kill above stays as the "Delete everything" path.
+  ipcMain.handle(
+    "worksession:kill-with-promote",
+    (_e, sessionId: string, editedEntries: PromoteEntry[]) => {
+      const wsId = workSessionService.get(sessionId)?.workspaceId ?? null
+      workspaceMemoryService.promoteFindings(wsId, editedEntries)
+      workSessionService.killSession(sessionId)
+    },
   )
   // CAPP-82 — rename the durable work-session container (the sidebar row). Distinct
   // from `terminal:rename` (the terminal-tier rename); returns whether it applied.
