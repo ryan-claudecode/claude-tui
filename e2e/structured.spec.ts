@@ -224,6 +224,59 @@ async function seedSecondSessionWithFinding(
 }
 
 /**
+ * CAPP-93 / U5 — seed a single restorable structured session that carries promotable
+ * findings (two active notes + one ruled-out/corrected note), bound to an on-disk
+ * transcript so the app auto-restores it as the ACTIVE session. Killing it (Ctrl+K /
+ * sidebar ✕) opens the KillSessionModal whose editable list is sourced from these
+ * notes via getPromotableFindings. Untagged → its findings promote to the untagged
+ * ("All") workspace-memory bucket (addressed by `null`), which the test reads back.
+ */
+async function seedSessionForKill(home: string, ccId: string, cwd: string): Promise<void> {
+  const sessionsDir = join(home, ".claude-tui", "sessions")
+  await mkdir(sessionsDir, { recursive: true })
+  const session = {
+    id: "session-kill-seed",
+    name: "Doomed session",
+    status: "active",
+    summary: "A session about to be deleted.",
+    notes: [
+      { id: "k1", text: "the bug is a race in reopenTerminal", createdAt: 10, source: "self", status: "active" },
+      { id: "k2", text: "structured engine is the default", createdAt: 20, source: "self", status: "active" },
+      // A ruled-out note (k3) superseded by its correction (k4) — promotable too.
+      { id: "k3", text: "init carries the catalog immediately", createdAt: 30, source: "self", status: "superseded", supersededBy: "k4" },
+      { id: "k4", text: "the catalog is empty until the first turn", createdAt: 40, source: "self", status: "active" },
+    ],
+    provisionalFindings: [],
+    terminals: [
+      {
+        id: "term-kill-old",
+        name: "Doomed term",
+        cwd,
+        ccConversationId: ccId,
+        lastState: "idle",
+        engine: "structured",
+        model: "opus",
+      },
+    ],
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  await writeFile(join(sessionsDir, `${session.id}.json`), JSON.stringify(session), "utf-8")
+
+  const projDir = join(home, ".claude", "projects", encodeProjectDir(cwd))
+  await mkdir(projDir, { recursive: true })
+  await writeFile(
+    join(projDir, `${ccId}.jsonl`),
+    JSON.stringify({
+      type: "assistant",
+      isSidechain: false,
+      message: { role: "assistant", content: [{ type: "text", text: "Resumed." }] },
+    }) + "\n",
+    "utf-8",
+  )
+}
+
+/**
  * Shared setup for the split-pane tests: launch a hermetic structured app, open a
  * session, add a second structured terminal, and engage the split. Returns the page
  * (and the pageErrors sink the caller asserts empty at the end). Mirrors the engage
@@ -978,6 +1031,144 @@ test("structured engine: a terminal tab rename accepts multi-character typing (n
   // terminal rename path — CAPP-81's service-layer fix — end to end).
   await input.press("Enter")
   await expect(win.locator(".tab")).toContainText(newName, { timeout: 10_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
+test("CAPP-93 / U5: killing a session opens the Keep modal (pre-checked editable rows, statically-visible Remove); Keep & delete promotes to workspace memory", async () => {
+  // Seed a session that HAS promotable findings, auto-restore it, kill it (Ctrl+K),
+  // and assert the KillSessionModal renders: three visible buttons, one PRE-CHECKED
+  // editable row per finding, and the per-row Remove control STATICALLY visible (no
+  // hover). Then drive "Keep & delete" and assert the session is gone AND a (possibly
+  // edited) finding landed in the untagged workspace-memory bucket.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-kill-keep-"))
+  await seedStructuredConfig(tempHome)
+  const ccId = "k111cafe-0000-4000-8000-000000000abc"
+  const cwd = join(tempHome, "work")
+  await seedSessionForKill(tempHome, ccId, cwd)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  // The seeded session auto-restores into a structured surface (NOT an xterm) and is
+  // the active session.
+  await expect(win.locator(".agent-composer textarea")).toBeVisible({ timeout: 30_000 })
+
+  // Kill the active session via Ctrl+K — this now OPENS the modal (no window.confirm).
+  await win.keyboard.press("Control+k")
+
+  const modal = win.locator(".kill-modal-panel")
+  await expect(modal).toBeVisible({ timeout: 15_000 })
+  await expect(modal.locator(".kill-modal-title")).toContainText("Doomed session")
+
+  // One editable row per promotable note (all 4 notes — active AND ruled-out — are
+  // promotable). Every row is PRE-CHECKED (default = promote ALL).
+  const rows = modal.locator(".kill-modal-finding")
+  await expect(rows).toHaveCount(4, { timeout: 10_000 })
+  const checks = modal.locator(".kill-modal-check")
+  await expect(checks).toHaveCount(4)
+  for (let i = 0; i < 4; i++) await expect(checks.nth(i)).toBeChecked()
+
+  // The findings text is editable (a controlled <input> seeded with the note text).
+  const inputs = modal.locator(".kill-modal-finding-input")
+  await expect(inputs.first()).toHaveValue("the bug is a race in reopenTerminal")
+
+  // The per-row Remove control is STATICALLY visible WITHOUT hovering (no hover-reveal).
+  // Assert visibility on every row before any pointer interaction.
+  const removeBtns = modal.locator(".kill-modal-remove")
+  await expect(removeBtns).toHaveCount(4)
+  for (let i = 0; i < 4; i++) await expect(removeBtns.nth(i)).toBeVisible()
+
+  // All three footer buttons are visible.
+  await expect(modal.locator(".kill-modal-keep")).toBeVisible()
+  await expect(modal.locator(".kill-modal-delete")).toBeVisible()
+  await expect(modal.locator(".kill-modal-cancel")).toBeVisible()
+
+  // Edit the first finding's text (pressSequentially — real per-keystroke typing, NOT
+  // fill) so we can prove the EDITED text is what gets promoted. Clear it first.
+  await inputs.first().click()
+  await inputs.first().press("Control+a")
+  await inputs.first().press("Delete")
+  await inputs.first().pressSequentially("edited race finding", { delay: 10 })
+  await expect(inputs.first()).toHaveValue("edited race finding")
+
+  // Trim one row out of the keep list via its Remove control (proves trimming works).
+  await removeBtns.nth(1).click()
+  await expect(modal.locator(".kill-modal-finding")).toHaveCount(3)
+
+  // Keep & delete → promote the checked/edited findings into the OWNING (untagged)
+  // workspace memory, THEN kill. The modal closes and the session row disappears.
+  await modal.locator(".kill-modal-keep").click()
+  await expect(win.locator(".kill-modal-panel")).toHaveCount(0, { timeout: 15_000 })
+  await expect(win.locator(".session-name", { hasText: "Doomed session" })).toHaveCount(0, {
+    timeout: 15_000,
+  })
+
+  // The edited finding landed in the untagged workspace-memory bucket (addressed by
+  // null). Read it back through the same preload accessor the editor uses.
+  await expect(async () => {
+    const mem = await win.evaluate(() => (window as any).api.getWorkspaceMemory(null))
+    const texts: string[] = (mem?.findings ?? []).map((f: any) => f.text)
+    expect(texts).toContain("edited race finding")
+    // The trimmed (removed) finding did NOT promote.
+    expect(texts).not.toContain("structured engine is the default")
+  }).toPass({ timeout: 15_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
+test("CAPP-93 / U5: Delete everything kills WITHOUT promoting; Cancel keeps the session", async () => {
+  // The negative control: "Delete everything" deletes the session but promotes NOTHING
+  // (workspace memory stays empty). Also verifies Cancel is non-destructive.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-kill-delete-"))
+  await seedStructuredConfig(tempHome)
+  const ccId = "k222cafe-0000-4000-8000-000000000abc"
+  const cwd = join(tempHome, "work")
+  await seedSessionForKill(tempHome, ccId, cwd)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+  await expect(win.locator(".agent-composer textarea")).toBeVisible({ timeout: 30_000 })
+
+  // Open the modal, then CANCEL — the session must still exist (non-destructive).
+  await win.keyboard.press("Control+k")
+  await expect(win.locator(".kill-modal-panel")).toBeVisible({ timeout: 15_000 })
+  await win.locator(".kill-modal-cancel").click()
+  await expect(win.locator(".kill-modal-panel")).toHaveCount(0, { timeout: 10_000 })
+  await expect(win.locator(".session-name", { hasText: "Doomed session" })).toHaveCount(1)
+
+  // Re-open and choose "Delete everything" — kills WITHOUT promoting.
+  await win.keyboard.press("Control+k")
+  await expect(win.locator(".kill-modal-panel")).toBeVisible({ timeout: 15_000 })
+  await win.locator(".kill-modal-delete").click()
+  await expect(win.locator(".kill-modal-panel")).toHaveCount(0, { timeout: 15_000 })
+  await expect(win.locator(".session-name", { hasText: "Doomed session" })).toHaveCount(0, {
+    timeout: 15_000,
+  })
+
+  // Nothing was promoted — the untagged workspace-memory bucket has no findings.
+  await expect(async () => {
+    const mem = await win.evaluate(() => (window as any).api.getWorkspaceMemory(null))
+    expect((mem?.findings ?? []).length).toBe(0)
+  }).toPass({ timeout: 15_000 })
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })

@@ -7,6 +7,7 @@ import type {
   AgentCatalog,
   StreamEvent,
 } from "../electron/services/streamProtocol"
+import type { PromoteEntry } from "./lib/killSessionPromote"
 import Sidebar from "./components/Sidebar"
 import TabBar from "./components/TabBar"
 import TerminalPane from "./components/TerminalPane"
@@ -15,6 +16,7 @@ import AgentRail from "./components/AgentRail"
 import WindowControls from "./components/WindowControls"
 import type { TranscriptCache } from "./components/AgentView"
 import PermissionPrompt from "./components/PermissionPrompt"
+import KillSessionModal from "./components/KillSessionModal"
 import SplitView from "./components/SplitView"
 import DropZone from "./components/DropZone"
 import { usePermissions } from "./hooks/usePermissions"
@@ -102,6 +104,17 @@ declare global {
       reopenTerminal: (sessionId: string, terminalId: string) => Promise<{ terminalId: string } | undefined>
       closeTerminal: (sessionId: string, terminalId: string) => Promise<void>
       killWorkSession: (sessionId: string) => Promise<void>
+      // CAPP-93 / U5 — delete-time Keep flow. getPromotableFindings returns the dying
+      // session's confirmed notes (active + ruled-out) mapped to PromoteEntry[] (the
+      // editable candidate list). killWorkSessionWithPromote promotes the edited
+      // findings into the OWNING session's workspace FIRST, then kills (atomic,
+      // handler-side; kill is skipped if promote throws). U3 added the preload
+      // accessors; these are their Window.api types.
+      getPromotableFindings: (sessionId: string) => Promise<PromoteEntry[]>
+      killWorkSessionWithPromote: (
+        sessionId: string,
+        editedEntries: PromoteEntry[],
+      ) => Promise<void>
       // CAPP-82 — rename the durable work-session container (the sidebar row).
       renameWorkSession: (id: string, name: string) => Promise<boolean>
       getWorkSessionContext: (sessionId: string) => Promise<string | undefined>
@@ -229,6 +242,17 @@ export default function App() {
   // closure within a single hook).
   const refreshOverviewsRef = useRef<(() => void) | null>(null)
 
+  // CAPP-93 / U5 — the session pending deletion (drives the KillSessionModal). All
+  // kill entry points (Ctrl+K, sidebar ✕, palette) route through useSessions'
+  // handleKillSessionById, which calls requestKillRef.current(id) instead of
+  // window.confirm. The modal owns the actual kill. `requestKillRef` is a ref so the
+  // hook's stable callback always sees the latest setter without re-subscribing.
+  const [pendingKillId, setPendingKillId] = useState<string | null>(null)
+  const requestKillRef = useRef<((id: string) => void) | null>(null)
+  useEffect(() => {
+    requestKillRef.current = (id: string) => setPendingKillId(id)
+  }, [])
+
   const {
     sessions,
     activeSessionId,
@@ -251,7 +275,24 @@ export default function App() {
     resumingSeeds,
     resumingLiveIds,
     clearResuming,
-  } = useSessions(refreshOverviewsRef)
+  } = useSessions(refreshOverviewsRef, requestKillRef)
+
+  // CAPP-93 / U5 — race self-heal: if the session pending deletion is removed out from
+  // under the modal (killed elsewhere, or its kill resolved via onWorkSessionRemoved),
+  // auto-close the modal so it never lingers over a dead id. Promotion (if any) was
+  // fired from the opened-time snapshot, so closing here is safe. A toast notes the
+  // out-of-band removal so the user isn't surprised the dialog vanished.
+  useEffect(() => {
+    if (pendingKillId && !sessions.some((s) => s.id === pendingKillId)) {
+      setPendingKillId(null)
+    }
+  }, [sessions, pendingKillId])
+
+  // The pending session's display name for the modal's honest copy.
+  const pendingKillName = useMemo(
+    () => sessions.find((s) => s.id === pendingKillId)?.name,
+    [sessions, pendingKillId],
+  )
 
   // BO-12 (CAPP-51) — the shared, cross-pane transcript cache (folded TranscriptState
   // keyed by the STABLE Claude Code conversation id). Held in a ref so the Map
@@ -901,7 +942,8 @@ export default function App() {
         setHelpOpen(false)
       } else if (
         e.key === "Escape" &&
-        !paletteOpen && !historyOpen && !missionPromptOpen && !missionsListOpen
+        !paletteOpen && !historyOpen && !missionPromptOpen && !missionsListOpen &&
+        pendingKillId === null
       ) {
         // BO-10 — Esc stops a structured terminal mid-turn (generating OR awaiting a
         // permission): kill + resume the conversation. escInterruptRef returns false
@@ -910,6 +952,8 @@ export default function App() {
         // Guarded on the nav overlays so an open palette/history/mission overlay closes
         // via its OWN Esc handler instead of being hijacked into an interrupt — this
         // capture-phase handler would otherwise stopPropagation and suppress that close.
+        // CAPP-93 / U5 — also guard on the KillSessionModal: Esc must cancel that modal
+        // (via its own handler), NOT hijack into a terminal interrupt.
         // (helpOpen is handled by the arm above; the permission prompt is intentionally
         // NOT guarded — Esc-to-stop while awaiting a permission is the whole point.)
         if (escInterruptRef.current()) {
@@ -929,7 +973,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, helpOpen, paletteOpen, historyOpen, missionPromptOpen, missionsListOpen, setActiveTerminalId, setPaletteOpen, setHistoryOpen, setZenMode, setHelpOpen, scopedAttention, jumpToAttention, toggleRail])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, helpOpen, paletteOpen, historyOpen, missionPromptOpen, missionsListOpen, pendingKillId, setActiveTerminalId, setPaletteOpen, setHistoryOpen, setZenMode, setHelpOpen, scopedAttention, jumpToAttention, toggleRail])
 
   return (
     <div
@@ -955,6 +999,13 @@ export default function App() {
       {activePermissionRequests.length > 0 && (
         <PermissionPrompt requests={activePermissionRequests} onResolve={handlePermissionResolve} />
       )}
+      {/* CAPP-93 / U5 — the delete-time Keep/trim/edit gate. Renders off pendingKillId
+          (set by any kill entry point); the modal owns the actual kill. */}
+      <KillSessionModal
+        sessionId={pendingKillId}
+        sessionName={pendingKillName}
+        onClose={() => setPendingKillId(null)}
+      />
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
       <HistorySearch

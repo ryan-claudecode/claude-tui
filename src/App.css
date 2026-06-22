@@ -5845,6 +5845,207 @@ body {
 }
 
 /* ============================================================
+   CAPP-93 / U5 — Delete-time Keep/trim/edit modal (main window)
+   Blocking tier-1 gate. Clones the mission-prompt full-screen overlay
+   idiom: dimmed backdrop, centered warm card. The editable findings
+   list models WorktreeReviewPanel's captured-list + per-row controls;
+   every control (checkbox, edit input, Remove, footer buttons) is
+   STATICALLY visible — no hover-reveal (hard project UI rule).
+   ============================================================ */
+.kill-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-5);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: drop-fade 0.12s var(--ease-out);
+}
+
+.kill-modal-panel {
+  width: 560px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), 0 0 0 1px var(--red-soft);
+  animation: cmdk-pop 0.16s var(--ease-out);
+}
+
+.kill-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kill-modal-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-0);
+  letter-spacing: 0.01em;
+}
+
+.kill-modal-explain {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.kill-modal-list-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  font-weight: 650;
+  margin-top: var(--s-2);
+}
+
+.kill-modal-findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  overflow-y: auto;
+  max-height: 38vh;
+}
+
+.kill-modal-finding {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2);
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  transition: opacity var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.kill-modal-finding.unchecked {
+  opacity: 0.5;
+}
+.kill-modal-finding.ruled-out .kill-modal-finding-input {
+  font-style: italic;
+}
+
+.kill-modal-check {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.kill-modal-finding-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--s-1) var(--s-2);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-0);
+  background: var(--bg-0);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  outline: none;
+  transition: border-color var(--fast) var(--ease);
+}
+.kill-modal-finding-input:focus { border-color: var(--accent); }
+
+.kill-modal-ruled-out-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  background: var(--bg-3);
+  border-radius: var(--r-sm);
+  padding: 2px 6px;
+}
+
+.kill-modal-remove {
+  flex: 0 0 auto;
+  padding: var(--s-1) var(--s-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.kill-modal-remove:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+.kill-modal-remove:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.kill-modal-empty {
+  font-size: 13px;
+  color: var(--text-2);
+  padding: var(--s-2) 0;
+}
+
+.kill-modal-note {
+  margin: var(--s-2) 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.kill-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.kill-modal-btn {
+  padding: var(--s-2) var(--s-4);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    filter var(--fast) var(--ease);
+}
+.kill-modal-btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+
+.kill-modal-cancel {
+  background: transparent;
+  color: var(--text-2);
+}
+.kill-modal-cancel:hover:not(:disabled) { color: var(--text-0); border-color: var(--text-3); }
+
+.kill-modal-keep {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-0);
+}
+.kill-modal-keep:hover:not(:disabled) { filter: brightness(1.08); }
+
+.kill-modal-delete {
+  background: var(--red-soft);
+  border-color: var(--red);
+  color: var(--red);
+}
+.kill-modal-delete:hover:not(:disabled) { background: var(--red); color: #fff; }
+
+/* ============================================================
    WS-D — Create-workspace modal (main window)
    Mirrors the mission-prompt overlay idiom: dimmed backdrop, warm
    rounded soft-shadowed panel, name input + folder chips + actions.

@@ -64,8 +64,16 @@ function errMsg(err: unknown): string {
 // the Session Overview live-refresh without registering a second listener on that
 // channel (the overview/panel logic stays in App.tsx). It is passed as a ref so
 // this mount-once effect always calls the latest callback.
+//
+// CAPP-93 / U5 — `requestKill` is supplied by App.tsx (sets `pendingKillId`, which
+// opens the KillSessionModal). The hook no longer kills directly from
+// handleKillSessionById; it just routes every kill entry point (Ctrl+K, sidebar ✕,
+// palette) into the modal. Passed as a ref so the mount-once handlers always call the
+// latest closure. The actual kill (Delete everything / Keep & delete) is fired by the
+// modal via window.api, so handleKillSessionById is now fire-and-forget (it opens UI).
 export function useSessions(
   refreshOverviews: MutableRefObject<(() => void) | null>,
+  requestKill: MutableRefObject<((id: string) => void) | null>,
 ) {
   const [sessions, setSessions] = useState<WorkSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
@@ -258,24 +266,22 @@ export function useSessions(
     }
   }, [activeSessionId, activeTerminalId])
 
-  // Kill a SPECIFIC session by id (the sidebar row ✕). Shares the exact confirm +
-  // killWorkSession semantics with Ctrl+K so the two entry points stay in lockstep.
-  const handleKillSessionById = useCallback(async (id: string) => {
+  // Kill a SPECIFIC session by id (the sidebar row ✕). CAPP-93 / U5: this no longer
+  // kills directly via window.confirm — it OPENS the KillSessionModal (Keep/trim/edit
+  // vs Delete-everything vs Cancel) by asking App to set `pendingKillId`. The modal
+  // owns the actual kill (window.api.killWorkSession / killWorkSessionWithPromote), so
+  // this is fire-and-forget (it merely raises UI). The signature stays `(id) => void`
+  // so all callers (Ctrl+K, sidebar ✕, palette) are unaffected.
+  const handleKillSessionById = useCallback((id: string) => {
     if (!id) return
-    if (window.confirm("Kill this session and all its terminals? This deletes its record.")) {
-      try {
-        await window.api.killWorkSession(id)
-      } catch (err) {
-        toast("error", `Couldn't kill the session: ${errMsg(err)}`)
-      }
-    }
-  }, [])
+    requestKill.current?.(id)
+  }, [requestKill])
 
   // Ctrl+K / the sidebar "Kill session" action — kills the ACTIVE session via the
-  // shared by-id path above.
-  const handleKillSession = useCallback(async () => {
+  // shared by-id path above (which opens the modal).
+  const handleKillSession = useCallback(() => {
     if (!activeSessionId) return
-    await handleKillSessionById(activeSessionId)
+    handleKillSessionById(activeSessionId)
   }, [activeSessionId, handleKillSessionById])
 
   // Rename a TERMINAL (the tab). Optimistically reflect the new name locally so the
