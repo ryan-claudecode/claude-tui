@@ -20,6 +20,11 @@ import MissionPanel from "../components/panels/MissionPanel"
 import SessionOverviewPanel from "../components/panels/SessionOverviewPanel"
 import RecallPanel from "../components/panels/RecallPanel"
 import WorktreeReviewPanel, { type ReviewActionResult } from "../components/panels/WorktreeReviewPanel"
+import WorkspaceMemoryPanel from "../components/panels/WorkspaceMemoryPanel"
+import type {
+  WorkspaceMemoryRecord,
+  WorkspaceFinding,
+} from "../lib/workspaceMemoryView"
 
 interface PanelState {
   id: string
@@ -35,7 +40,7 @@ const PANEL_LABELS: Record<string, string> = {
   timeline: "Timeline", git: "Git", kanban: "Kanban", notes: "Notes",
   stat: "Stats", log: "Log", progress: "Progress", code: "Code",
   heatmap: "Heatmap", mission: "Mission", "session-overview": "Overview",
-  "worktree-review": "Review", recall: "Recall",
+  "worktree-review": "Review", recall: "Recall", "workspace-memory": "Memory",
 }
 
 function tabLabel(p: PanelState): string {
@@ -45,6 +50,9 @@ function tabLabel(p: PanelState): string {
   }
   if (p.type === "worktree-review" && typeof p.props?.title === "string" && p.props.title) {
     return `Review: ${p.props.title}`
+  }
+  if (p.type === "workspace-memory" && typeof p.props?.workspaceName === "string" && p.props.workspaceName) {
+    return `Memory: ${p.props.workspaceName}`
   }
   return base
 }
@@ -66,6 +74,36 @@ declare global {
       recall: (query: string, scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any[]>
       recallSummary: (scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any>
       openSessionOverview: (sessionId: string) => Promise<any>
+      // CAPP-94 / U6 — workspace-memory editor accessors. A `null` workspaceId
+      // addresses the untagged "All" bucket. The WorkspaceMemoryPanel (which runs in
+      // THIS companion window) calls these directly (NOT window.api). Live-refresh via
+      // onWorkspaceMemoryChanged (per-instance unsubscribe).
+      getWorkspaceMemory: (workspaceId: string | null) => Promise<WorkspaceMemoryRecord>
+      setWorkspaceInstructions: (
+        workspaceId: string | null,
+        text: string,
+      ) => Promise<WorkspaceMemoryRecord>
+      addWorkspaceFinding: (
+        workspaceId: string | null,
+        text: string,
+        source: "user" | "agent",
+      ) => Promise<WorkspaceFinding>
+      editWorkspaceFinding: (
+        workspaceId: string | null,
+        findingId: string,
+        text: string,
+      ) => Promise<boolean>
+      deleteWorkspaceFinding: (
+        workspaceId: string | null,
+        findingId: string,
+      ) => Promise<boolean>
+      onWorkspaceMemoryChanged: (cb: (workspaceId: string) => void) => () => void
+      // CAPP-94 / U6 — promote a session's findings into its OWNING workspace memory
+      // (the SessionOverviewPanel "Push context to workspace" button). The owning
+      // workspace is resolved main-side; the panel only needs the session id.
+      promoteSessionToWorkspace: (
+        sessionId: string,
+      ) => Promise<{ ok: boolean; count: number; workspaceId: string | null }>
       getTheme: () => Promise<string>
       onThemeChanged: (cb: (mode: string) => void) => void
       removeAllListeners: (channel: string) => void
@@ -119,8 +157,50 @@ export default function CompanionApp() {
       window.companionApi.closeWindow()
     })
 
+    // CAPP-94 / U6 — keep any open workspace-memory editor panel fresh. The
+    // `workspace:memory-changed` push carries the CHANGED workspaceId (the untagged
+    // bucket's id is the sentinel stem "__untagged__"). We match the open panel on
+    // its PINNED `props.workspaceId` — NOT `props.id` (a memory record has no `id`,
+    // and panels carry auto-generated `panel-N` ids) — then re-fetch its record and
+    // replace its props. A tagged panel matches an exact id; an untagged panel
+    // (props.workspaceId == null) matches the null-equivalent push (null / the
+    // sentinel stem). The panel ALSO self-refreshes off this same push; this seam
+    // keeps the props (and the tab) authoritative for the matched panel.
+    const offMemory = window.companionApi.onWorkspaceMemoryChanged((changedId) => {
+      setPanels((prev) => {
+        const matches = prev.filter((p) => {
+          if (p.type !== "workspace-memory") return false
+          const pinned = (p.props as { workspaceId?: string | null })?.workspaceId ?? null
+          if (pinned === null) return changedId == null || changedId === "__untagged__"
+          return pinned === changedId
+        })
+        if (matches.length === 0) return prev
+        for (const m of matches) {
+          const pinned = (m.props as { workspaceId?: string | null })?.workspaceId ?? null
+          void window.companionApi.getWorkspaceMemory(pinned).then((rec) => {
+            setPanels((cur) =>
+              cur.map((p) =>
+                p.id === m.id
+                  ? {
+                      ...p,
+                      props: {
+                        ...p.props,
+                        instructions: rec.instructions,
+                        findings: rec.findings,
+                      },
+                    }
+                  : p,
+              ),
+            )
+          })
+        }
+        return prev
+      })
+    })
+
     return () => {
       window.companionApi.removeAllListeners("theme:changed")
+      offMemory?.()
     }
   }, [])
 
@@ -224,6 +304,7 @@ function PanelContent({
     case "mission": return <MissionPanel {...panel.props} onStop={onMissionStop} onPause={onMissionPause} />
     case "session-overview": return <SessionOverviewPanel {...(panel.props as any)} />
     case "recall": return <RecallPanel {...(panel.props as any)} />
+    case "workspace-memory": return <WorkspaceMemoryPanel {...(panel.props as any)} />
     case "worktree-review": return (
       <WorktreeReviewPanel
         {...panel.props}

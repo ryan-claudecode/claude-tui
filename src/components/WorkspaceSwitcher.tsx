@@ -20,6 +20,9 @@ interface Props {
    *  folder. Only relevant when the active workspace HAS a folder (the button is
    *  hidden otherwise). */
   onRestoreConversation: () => void
+  /** CAPP-94 — open the workspace-memory editor (companion panel) for the active
+   *  workspace, or the untagged "All" bucket when none is selected. Always-visible. */
+  onOpenWorkspaceMemory: () => void
 }
 
 /**
@@ -60,6 +63,7 @@ export default function WorkspaceSwitcher({
   onDeleteWorkspace,
   onSetWorkspaceDir,
   onRestoreConversation,
+  onOpenWorkspaceMemory,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [highlight, setHighlight] = useState(0)
@@ -272,6 +276,27 @@ export default function WorkspaceSwitcher({
         </div>
       )}
       </div>
+
+      {/* CAPP-94 — open the workspace-memory editor. ALWAYS VISIBLE (no hover-reveal),
+          in BOTH "All" and specific-workspace modes (the untagged "All" bucket has its
+          own durable memory too). Opens the companion panel pinned to the active
+          workspace (or the untagged bucket). */}
+      <button
+        type="button"
+        className="workspace-memory-btn"
+        title={
+          isAllActive
+            ? "Edit the shared (All workspaces) memory"
+            : `Edit ${active!.name} memory`
+        }
+        aria-label="Open workspace memory"
+        onClick={onOpenWorkspaceMemory}
+      >
+        <span className="workspace-memory-icon" aria-hidden="true">
+          🧠
+        </span>
+        <span>Workspace memory</span>
+      </button>
 
       {/* WS-H — the active-workspace controls, ALWAYS VISIBLE (no hover-reveal).
           Only shown for a SPECIFIC active workspace (nothing to edit under "All"). */}

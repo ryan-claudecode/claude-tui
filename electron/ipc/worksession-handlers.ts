@@ -55,6 +55,19 @@ export function registerWorkSessionHandlers(deps: {
       workSessionService.killSession(sessionId)
     },
   )
+  // CAPP-94 / U6 — "Push context to workspace" (the SessionOverviewPanel button):
+  // promote a LIVE session's confirmed findings into its OWNING workspace's memory,
+  // WITHOUT killing the session. The destination is the OWNING session's workspaceId
+  // (NOT the active selection) — same resolution rule as kill-with-promote — so a
+  // finding never re-homes across workspaces. Idempotent on (originSessionId,
+  // originNoteId): re-pushing the same session updates the existing twins in place
+  // rather than duplicating. Returns the resolved workspace + count for the caller.
+  ipcMain.handle("worksession:promote-to-workspace", (_e, sessionId: string) => {
+    const wsId = workSessionService.get(sessionId)?.workspaceId ?? null
+    const entries = workSessionService.getPromotableFindings(sessionId)
+    const promoted = workspaceMemoryService.promoteFindings(wsId, entries)
+    return { ok: true, count: promoted.length, workspaceId: wsId }
+  })
   // CAPP-82 — rename the durable work-session container (the sidebar row). Distinct
   // from `terminal:rename` (the terminal-tier rename); returns whether it applied.
   ipcMain.handle("worksession:rename", (_e, sessionId: string, newName: string) =>

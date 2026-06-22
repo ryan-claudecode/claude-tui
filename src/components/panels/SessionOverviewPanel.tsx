@@ -1,3 +1,4 @@
+import { useState, useCallback } from "react"
 import ReactMarkdown from "react-markdown"
 
 interface RuledOut { id: string; text: string; correction?: string }
@@ -17,7 +18,32 @@ export interface OverviewProps {
 }
 
 export default function SessionOverviewPanel(props: OverviewProps) {
-  const { name, summary, notes, ruledOut, provisionalFindings, terminals } = props
+  const { id, name, summary, notes, ruledOut, provisionalFindings, terminals } = props
+
+  // CAPP-94 / U6 — "Push context to workspace": promote THIS session's findings into
+  // its OWNING workspace memory (resolved main-side, never the active selection). The
+  // panel runs in the companion window, so it calls companionApi. Inline status reflects
+  // the result; no toast surface here. Disabled while in flight / after a successful push.
+  const [pushState, setPushState] = useState<"idle" | "busy" | "done" | "error">("idle")
+  const [pushedCount, setPushedCount] = useState(0)
+  const handlePush = useCallback(async () => {
+    if (pushState === "busy" || pushState === "done") return
+    setPushState("busy")
+    try {
+      const res = await window.companionApi.promoteSessionToWorkspace(id)
+      if (res?.ok) {
+        setPushedCount(res.count)
+        setPushState("done")
+      } else {
+        setPushState("error")
+      }
+    } catch {
+      setPushState("error")
+    }
+  }, [id, pushState])
+
+  const hasFindings = notes.length > 0 || ruledOut.length > 0
+
   return (
     <div className="overview-panel">
       <h2 className="overview-title">{name}</h2>
@@ -91,9 +117,32 @@ export default function SessionOverviewPanel(props: OverviewProps) {
         </ul>
       </section>
 
-      <button className="overview-push" disabled title="Available once workspaces exist">
-        Push context to workspace
-      </button>
+      <div className="overview-push-row">
+        <button
+          className="overview-push"
+          onClick={() => void handlePush()}
+          disabled={pushState === "busy" || pushState === "done" || !hasFindings}
+          title={
+            hasFindings
+              ? "Promote this session's findings into its workspace memory"
+              : "No findings to push yet"
+          }
+        >
+          {pushState === "busy"
+            ? "Pushing…"
+            : pushState === "done"
+              ? "Pushed to workspace ✓"
+              : "Push context to workspace"}
+        </button>
+        {pushState === "done" && (
+          <span className="overview-push-status">
+            {pushedCount} {pushedCount === 1 ? "finding" : "findings"} kept in workspace memory
+          </span>
+        )}
+        {pushState === "error" && (
+          <span className="overview-push-status error">Couldn't push — try again</span>
+        )}
+      </div>
     </div>
   )
 }

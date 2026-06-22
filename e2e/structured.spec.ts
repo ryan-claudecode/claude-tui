@@ -277,6 +277,55 @@ async function seedSessionForKill(home: string, ccId: string, cwd: string): Prom
 }
 
 /**
+ * CAPP-94 / U6 — seed a workspace-memory file for the UNTAGGED ("All") bucket so the
+ * editor panel has standing instructions + a finding (with a resolvable corrector,
+ * so the strikethrough/correction path renders) to display on open. The untagged
+ * bucket lives at `~/.claude-tui/workspace-memory/__untagged__.json` and carries the
+ * sentinel stem in its `workspaceId`. Envelope-less v0 is read-repaired to v1 on load.
+ */
+async function seedUntaggedWorkspaceMemory(home: string): Promise<void> {
+  const dir = join(home, ".claude-tui", "workspace-memory")
+  await mkdir(dir, { recursive: true })
+  const record = {
+    workspaceId: "__untagged__",
+    instructions: "Prefer snake_case for all new modules.",
+    findings: [
+      {
+        id: "wf-1",
+        text: "the build externalizes node-pty",
+        createdAt: 100,
+        source: "agent",
+        status: "active",
+        promotedAt: 100,
+      },
+      // A ruled-out finding superseded by its corrector twin (renders the strike + arrow).
+      {
+        id: "wf-2",
+        text: "init carries the catalog immediately",
+        createdAt: 90,
+        source: "self",
+        status: "superseded",
+        supersededBy: "wf-3",
+        originSessionId: "s-old",
+        originNoteId: "n-old",
+        promotedAt: 95,
+      },
+      {
+        id: "wf-3",
+        text: "the catalog is empty until the first turn",
+        createdAt: 96,
+        source: "self",
+        status: "active",
+        promotedAt: 96,
+      },
+    ],
+    createdAt: 100,
+    updatedAt: 100,
+  }
+  await writeFile(join(dir, "__untagged__.json"), JSON.stringify(record), "utf-8")
+}
+
+/**
  * Shared setup for the split-pane tests: launch a hermetic structured app, open a
  * session, add a second structured terminal, and engage the split. Returns the page
  * (and the pageErrors sink the caller asserts empty at the end). Mirrors the engage
@@ -1178,6 +1227,99 @@ test("CAPP-93 / U5: Delete everything kills WITHOUT promoting; Cancel keeps the 
   await expect(async () => {
     const mem = await win.evaluate(() => (window as any).api.getWorkspaceMemory(null))
     expect((mem?.findings ?? []).length).toBe(0)
+  }).toPass({ timeout: 15_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
+test("CAPP-94 / U6: the workspace-memory editor opens from the switcher, renders sections + statically-visible controls, and Save/Add persist to the PINNED bucket", async () => {
+  // Seed the untagged ("All") workspace-memory bucket so the editor has standing
+  // instructions + findings (incl. a ruled-out/corrected one) to display. With no
+  // workspace selected, the "Workspace memory" switcher button pins the editor to the
+  // untagged bucket (addressed by null). Assert: the companion panel renders the
+  // Instructions textarea + Save, the Add control, and a finding row with its Edit +
+  // Delete controls STATICALLY visible (no hover). Then drive Save + Add and assert via
+  // getWorkspaceMemory(null) that they persisted to the PINNED (untagged) bucket.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-wmem-"))
+  await seedStructuredConfig(tempHome)
+  await seedUntaggedWorkspaceMemory(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  // The "Workspace memory" button is ALWAYS VISIBLE in the switcher (no hover-reveal),
+  // even in "All" mode (the untagged bucket has its own memory). Click it.
+  const memBtn = win.locator(".workspace-memory-btn")
+  await expect(memBtn).toBeVisible({ timeout: 15_000 })
+
+  // It opens the editor in the SEPARATE companion BrowserWindow — capture that window.
+  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  await memBtn.click()
+  const companion = await companionPromise
+
+  const panel = companion.locator(".workspace-memory-panel")
+  await expect(panel).toBeVisible({ timeout: 15_000 })
+
+  // Instructions section: a textarea seeded from the record + an explicit Save button.
+  const instr = panel.locator(".wmem-instructions")
+  await expect(instr).toBeVisible()
+  await expect(instr).toHaveValue("Prefer snake_case for all new modules.", { timeout: 10_000 })
+  await expect(panel.locator(".wmem-save-btn")).toBeVisible()
+
+  // The Add-finding control is statically visible.
+  await expect(panel.locator(".wmem-add-input")).toBeVisible()
+  await expect(panel.locator(".wmem-add-btn")).toBeVisible()
+
+  // A finding row renders with its per-row Edit + Delete controls STATICALLY visible
+  // (no hover). Assert on every row before any pointer interaction.
+  const findingRows = panel.locator(".wmem-finding")
+  await expect(findingRows).toHaveCount(3, { timeout: 10_000 })
+  const editBtns = panel.locator(".wmem-finding .wmem-mini", { hasText: "Edit" })
+  const deleteBtns = panel.locator(".wmem-finding .wmem-delete")
+  await expect(editBtns).toHaveCount(3)
+  await expect(deleteBtns).toHaveCount(3)
+  for (let i = 0; i < 3; i++) {
+    await expect(editBtns.nth(i)).toBeVisible()
+    await expect(deleteBtns.nth(i)).toBeVisible()
+  }
+
+  // The ruled-out finding renders a strikethrough + its correction (the supersede graph).
+  await expect(panel.locator(".wmem-struck")).toContainText("init carries the catalog immediately")
+  await expect(panel.locator(".wmem-correction")).toContainText(
+    "the catalog is empty until the first turn",
+  )
+
+  // EDIT the instructions and Save → persists to the PINNED (untagged) bucket.
+  await instr.click()
+  await instr.press("Control+a")
+  await instr.press("Delete")
+  await instr.pressSequentially("Always run npm test before committing.", { delay: 5 })
+  await panel.locator(".wmem-save-btn").click()
+
+  // ADD a new finding → persists too.
+  const addInput = panel.locator(".wmem-add-input")
+  await addInput.click()
+  await addInput.pressSequentially("workspace memory is durable", { delay: 5 })
+  await panel.locator(".wmem-add-btn").click()
+  // The new finding row appears (4 total).
+  await expect(panel.locator(".wmem-finding")).toHaveCount(4, { timeout: 10_000 })
+
+  // Read back through the MAIN-window accessor (addressing the same untagged bucket via
+  // null): both the edited instructions and the new finding landed in the PINNED bucket.
+  await expect(async () => {
+    const mem = await win.evaluate(() => (window as any).api.getWorkspaceMemory(null))
+    expect(mem?.instructions).toBe("Always run npm test before committing.")
+    const texts: string[] = (mem?.findings ?? []).map((f: any) => f.text)
+    expect(texts).toContain("workspace memory is durable")
   }).toPass({ timeout: 15_000 })
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])

@@ -115,6 +115,36 @@ declare global {
         sessionId: string,
         editedEntries: PromoteEntry[],
       ) => Promise<void>
+      // CAPP-94 / U6 — workspace-memory editor accessors (the main-window entry point
+      // opens the companion panel via showPanel; the panel itself uses companionApi).
+      // A `null` workspaceId addresses the untagged "All" bucket. `getWorkspaceMemory`
+      // is consumed by the WorkspaceSwitcher "Workspace memory" open handler.
+      getWorkspaceMemory: (
+        workspaceId: string | null,
+      ) => Promise<{
+        workspaceId: string
+        instructions: string
+        findings: Array<Record<string, unknown>>
+        createdAt: number
+        updatedAt: number
+      }>
+      setWorkspaceInstructions: (workspaceId: string | null, text: string) => Promise<unknown>
+      addWorkspaceFinding: (
+        workspaceId: string | null,
+        text: string,
+        source: "user" | "agent",
+      ) => Promise<unknown>
+      editWorkspaceFinding: (
+        workspaceId: string | null,
+        findingId: string,
+        text: string,
+      ) => Promise<boolean>
+      deleteWorkspaceFinding: (workspaceId: string | null, findingId: string) => Promise<boolean>
+      promoteWorkspaceFindings: (
+        workspaceId: string | null,
+        entries: PromoteEntry[],
+      ) => Promise<unknown>
+      onWorkspaceMemoryChanged: (callback: (workspaceId: string) => void) => () => void
       // CAPP-82 — rename the durable work-session container (the sidebar row).
       renameWorkSession: (id: string, name: string) => Promise<boolean>
       getWorkSessionContext: (sessionId: string) => Promise<string | undefined>
@@ -667,6 +697,31 @@ export default function App() {
     }
   }, [])
 
+  // CAPP-94 / U6 — open the workspace-memory editor for the ACTIVE workspace (or the
+  // untagged "All" bucket when none is selected). Mirrors jumpToReviewRef: fetch the
+  // record main-side, then show the companion panel pinned to that workspaceId so every
+  // edit targets it even if the active workspace changes while the editor is open. The
+  // record fields ride in as panel props (seed); the panel re-fetches live.
+  const handleOpenWorkspaceMemory = useCallback(() => {
+    void (async () => {
+      try {
+        const rec = await window.api.getWorkspaceMemory(activeWorkspaceId ?? null)
+        await window.api.showPanel(
+          "workspace-memory",
+          {
+            workspaceId: activeWorkspaceId ?? null,
+            workspaceName: activeWorkspace?.name,
+            instructions: rec?.instructions ?? "",
+            findings: rec?.findings ?? [],
+          },
+          "right",
+        )
+      } catch (err) {
+        toast("error", `Couldn't open workspace memory: ${errMsg(err)}`)
+      }
+    })()
+  }, [activeWorkspaceId, activeWorkspace])
+
   const [dragActive, setDragActive] = useState(false)
 
   // ui:export-log stays in App.tsx because its handler closes over the active
@@ -1085,6 +1140,7 @@ export default function App() {
         onDeleteWorkspace={(id) => deleteWorkspace_(id)}
         onSetWorkspaceDir={(id, dir) => setWorkspaceDir_(id, dir)}
         onRestoreConversation={() => setRestoreConvoOpen(true)}
+        onOpenWorkspaceMemory={handleOpenWorkspaceMemory}
       />
       <div className="main-area">
         <TabBar
