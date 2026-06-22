@@ -280,8 +280,10 @@ export default function App() {
   // CAPP-93 / U5 — race self-heal: if the session pending deletion is removed out from
   // under the modal (killed elsewhere, or its kill resolved via onWorkSessionRemoved),
   // auto-close the modal so it never lingers over a dead id. Promotion (if any) was
-  // fired from the opened-time snapshot, so closing here is safe. A toast notes the
-  // out-of-band removal so the user isn't surprised the dialog vanished.
+  // fired from the opened-time snapshot, so closing here is safe. No toast is emitted:
+  // this effect ALSO fires on the normal Cancel/Keep/Delete close (those remove the
+  // session too), so toasting here would spam a spurious "removed out from under you"
+  // on every successful delete.
   useEffect(() => {
     if (pendingKillId && !sessions.some((s) => s.id === pendingKillId)) {
       setPendingKillId(null)

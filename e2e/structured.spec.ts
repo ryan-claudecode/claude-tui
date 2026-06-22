@@ -1070,6 +1070,10 @@ test("CAPP-93 / U5: killing a session opens the Keep modal (pre-checked editable
   await expect(modal).toBeVisible({ timeout: 15_000 })
   await expect(modal.locator(".kill-modal-title")).toContainText("Doomed session")
 
+  // BLOCKING contract: merely opening the modal must NOT kill the session — it stays put
+  // until a footer button is pressed (proves there is no silent default delete).
+  await expect(win.locator(".session-name", { hasText: "Doomed session" })).toHaveCount(1)
+
   // One editable row per promotable note (all 4 notes — active AND ruled-out — are
   // promotable). Every row is PRE-CHECKED (default = promote ALL).
   const rows = modal.locator(".kill-modal-finding")
@@ -1151,6 +1155,12 @@ test("CAPP-93 / U5: Delete everything kills WITHOUT promoting; Cancel keeps the 
   // Open the modal, then CANCEL — the session must still exist (non-destructive).
   await win.keyboard.press("Control+k")
   await expect(win.locator(".kill-modal-panel")).toBeVisible({ timeout: 15_000 })
+  // Unchecking every finding disables "Keep & delete" so it can't silently degrade to a
+  // plain delete — the user must pick "Delete everything" explicitly in that case.
+  const cancelChecks = win.locator(".kill-modal-check")
+  await expect(cancelChecks).toHaveCount(4)
+  for (let i = 0; i < 4; i++) await cancelChecks.nth(i).uncheck()
+  await expect(win.locator(".kill-modal-keep")).toBeDisabled()
   await win.locator(".kill-modal-cancel").click()
   await expect(win.locator(".kill-modal-panel")).toHaveCount(0, { timeout: 10_000 })
   await expect(win.locator(".session-name", { hasText: "Doomed session" })).toHaveCount(1)

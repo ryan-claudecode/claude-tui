@@ -41,6 +41,11 @@ export default function KillSessionModal({ sessionId, sessionName, onClose }: Pr
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
+  // Synchronous re-entrancy guard. `busy` (state) only blocks a second submit AFTER the
+  // re-render commits the buttons' `disabled` — a same-tick double-click would slip through
+  // and promote TWICE (duplicating findings in the persistent workspace-memory store). The
+  // ref flips immediately, so the second invocation is rejected before any IPC fires.
+  const submittingRef = useRef(false)
   const open = sessionId !== null
   useFocusTrap(panelRef, open)
 
@@ -51,11 +56,13 @@ export default function KillSessionModal({ sessionId, sessionName, onClose }: Pr
       setRows([])
       setLoaded(false)
       setBusy(false)
+      submittingRef.current = false
       return
     }
     let cancelled = false
     setLoaded(false)
     setBusy(false)
+    submittingRef.current = false
     Promise.resolve(window.api.getPromotableFindings(sessionId))
       .then((entries) => {
         if (cancelled) return
@@ -83,7 +90,8 @@ export default function KillSessionModal({ sessionId, sessionName, onClose }: Pr
   }, [])
 
   const handleKeep = useCallback(async () => {
-    if (!sessionId || busy) return
+    if (!sessionId || submittingRef.current) return
+    submittingRef.current = true
     setBusy(true)
     try {
       const entries = rowsToPromoteEntries(rows)
@@ -96,12 +104,14 @@ export default function KillSessionModal({ sessionId, sessionName, onClose }: Pr
           err instanceof Error ? err.message : String(err)
         }`,
       )
+      submittingRef.current = false
       setBusy(false)
     }
-  }, [sessionId, busy, rows, onClose])
+  }, [sessionId, rows, onClose])
 
   const handleDeleteAll = useCallback(async () => {
-    if (!sessionId || busy) return
+    if (!sessionId || submittingRef.current) return
+    submittingRef.current = true
     setBusy(true)
     try {
       await window.api.killWorkSession(sessionId)
@@ -111,9 +121,10 @@ export default function KillSessionModal({ sessionId, sessionName, onClose }: Pr
         "error",
         `Couldn't delete the session: ${err instanceof Error ? err.message : String(err)}`,
       )
+      submittingRef.current = false
       setBusy(false)
     }
-  }, [sessionId, busy, onClose])
+  }, [sessionId, onClose])
 
   const handleKey = useCallback(
     (e: React.KeyboardEvent) => {
@@ -223,7 +234,10 @@ export default function KillSessionModal({ sessionId, sessionName, onClose }: Pr
               type="button"
               className="kill-modal-btn kill-modal-keep"
               onClick={handleKeep}
-              disabled={busy || !loaded}
+              // Disabled when nothing is actually kept (all rows unchecked / blanked) so the
+              // affirmative "Keep" button never silently degrades to a plain delete — the
+              // user must choose "Delete everything" explicitly in that case.
+              disabled={busy || !loaded || keepCount === 0}
             >
               Keep &amp; delete
             </button>
