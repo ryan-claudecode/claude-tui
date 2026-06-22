@@ -129,6 +129,13 @@ contextBridge.exposeInMainWorld("api", {
   setRenderingEngine: (engine: "xterm" | "structured") =>
     ipcRenderer.invoke("config:set-rendering-engine", engine),
 
+  // Agent Rail (v1) — persist the rail's open/collapsed preference (GLOBAL). The
+  // renderer seeds the rail's collapsed state from config.agentRail on mount and
+  // calls this when the user toggles the rail (chevron / shortcut / palette). The
+  // responsive sub-1400px auto-collapse is renderer-only and never calls this.
+  setAgentRailOpen: (open: boolean) =>
+    ipcRenderer.invoke("config:set-agent-rail-open", open),
+
   // Window controls (frameless)
   windowMinimize: () => ipcRenderer.send("window:minimize"),
   windowMaximize: () => ipcRenderer.send("window:maximize"),

@@ -34,6 +34,7 @@ function buildGroups(mod: string): Group[] {
       items: [
         { keys: [mod, "\\"], desc: "Toggle split panes" },
         { keys: [mod, "Shift", "Z"], desc: "Focus mode (hide chrome)" },
+        { keys: [mod, "Alt", "A"], desc: "Toggle Agent Rail" },
         { keys: ["Esc"], desc: "Close overlay" },
       ],
     },

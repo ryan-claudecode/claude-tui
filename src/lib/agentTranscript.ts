@@ -192,8 +192,10 @@ function lastAssistantText(blocks: TranscriptBlock[]): string | undefined {
   return undefined
 }
 
-/** Pull token / cost / duration off a `result` event's raw payload (best-effort). */
-function extractCost(raw: unknown): ResultCost {
+/** Pull token / cost / duration off a `result` event's raw payload (best-effort).
+ *  Exported so the Agent Rail's per-terminal cost accumulator (useAgentCost) folds
+ *  the EXACT same ResultCost the transcript reducer does — no divergent token math. */
+export function extractCost(raw: unknown): ResultCost {
   const r = isObj(raw) ? raw : {}
   const usage = isObj(r.usage) ? r.usage : {}
   const inputTokens = num(usage.input_tokens)

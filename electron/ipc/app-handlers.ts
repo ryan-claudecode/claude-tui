@@ -10,6 +10,7 @@ import {
   getThemeMode,
   setThemeMode,
   setRenderingEngine,
+  setAgentRailOpen,
   type TuiConfig,
   type ThemeMode,
   type RenderingEngine,
@@ -65,6 +66,13 @@ export function registerAppHandlers(deps: {
   ipcMain.handle("config:set-rendering-engine", (_e, engine: RenderingEngine) => {
     setRenderingEngine(engine)
     sessionService.setEngine(engine)
+  })
+  // Agent Rail (v1) — persist the rail's open/collapsed preference. A renderer-only
+  // UI pref (no service owns it), so unlike set-rendering-engine there is NO live
+  // service call: the renderer holds the rail state and re-reads this on the next
+  // mount. Mirrors the setThemeMode write-path otherwise.
+  ipcMain.handle("config:set-agent-rail-open", (_e, open: boolean) => {
+    setAgentRailOpen(open)
   })
 
   // App testing tools

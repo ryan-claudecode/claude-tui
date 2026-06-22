@@ -11,6 +11,7 @@ import Sidebar from "./components/Sidebar"
 import TabBar from "./components/TabBar"
 import TerminalPane from "./components/TerminalPane"
 import AgentSurface from "./components/AgentSurface"
+import AgentRail from "./components/AgentRail"
 import type { TranscriptCache } from "./components/AgentView"
 import PermissionPrompt from "./components/PermissionPrompt"
 import SplitView from "./components/SplitView"
@@ -36,6 +37,8 @@ import { deriveResumingRows } from "./lib/resumingList"
 import { useSplitView } from "./hooks/useSplitView"
 import { useOverlays } from "./hooks/useOverlays"
 import { useTheme } from "./hooks/useTheme"
+import { useAgentRail } from "./hooks/useAgentRail"
+import { useAgentCost } from "./hooks/useAgentCost"
 import { usePanels, type PanelState } from "./hooks/usePanels"
 
 // Normalize an unknown thrown value into a human-readable message for toasts.
@@ -200,6 +203,8 @@ declare global {
       onThemeChanged: (callback: (mode: string) => void) => void
       // CAPP-39 gate ④ — set the DEFAULT engine for NEW terminals (rollback write-path)
       setRenderingEngine: (engine: "xterm" | "structured") => Promise<void>
+      // Agent Rail (v1) — persist the rail's open/collapsed pref (GLOBAL).
+      setAgentRailOpen: (open: boolean) => Promise<void>
       // Window controls (frameless)
       windowMinimize: () => void
       windowMaximize: () => void
@@ -349,6 +354,20 @@ export default function App() {
     [generatingTerminals, permissionRequests],
   )
 
+  // Agent Rail (v1) — derive the rail's live inputs from the ACTIVE terminal,
+  // mirroring how the surface picks it. All are lenses over EXISTING seams.
+  const activeTerminalForRail = useMemo(
+    () => activeTerminals.find((t) => t.id === activeTerminalId) ?? null,
+    [activeTerminals, activeTerminalId],
+  )
+  const railBusy = isTerminalBusy(activeTerminalId)
+  // COST source: a per-terminal accumulator of turn-complete `result` blocks (folded
+  // from the SAME stream events, keyed by terminal id so it's robust from the first
+  // turn with no convo-id dependency). `sumCost` (the tested helper) sums it in the
+  // rail. Accepted v1 limitation (design doc Q5): renderer-side, resets on respawn /
+  // misses scrolled-out turns — a glance number, not an audit.
+  const railBlocks = useAgentCost(activeTerminalId)
+
   // BO-10 — the stop/interrupt handbrake: kill + resume the SAME conversation. The
   // respawn mints a new terminal id, so re-point the active selection at it (like
   // the model switch). Used by both the Esc key (App) and the composer Stop button.
@@ -428,6 +447,11 @@ export default function App() {
   } = useOverlays()
 
   const { themeMode } = useTheme()
+
+  // Agent Rail (v1) — the right-edge agent-state column's open/collapsed state
+  // (persisted pref + responsive sub-1400px auto-collapse). Effective `railOpen`
+  // drives both the rail render and the `.app` layout class (so the center reflows).
+  const { open: railOpen, toggle: toggleRail } = useAgentRail()
 
   // useMissions must come before usePanels so allMissions can be passed for panel refresh.
   const {
@@ -680,6 +704,7 @@ export default function App() {
       { id: "history", label: "Search Session History", hint: "Ctrl+Shift+F", keywords: "find output log scrollback", run: () => setHistoryOpen(true) },
       { id: "export-log", label: "Export Active Terminal Log", keywords: "save download output history file", run: () => handleExportLog() },
       { id: "zen", label: zenMode ? "Exit Focus Mode" : "Enter Focus Mode", hint: "Ctrl+Shift+Z", keywords: "zen distraction free hide sidebar fullscreen", run: () => setZenMode((z) => !z) },
+      { id: "agent-rail", label: railOpen ? "Collapse Agent Rail" : "Open Agent Rail", hint: "Ctrl+Alt+A", keywords: "agent rail right column now cost beacon sidebar collapse", run: toggleRail },
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
       { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: () => setMissionPromptOpen(true) },
       { id: "missions", label: "View Missions", keywords: "orchestrate conductor list dashboard status", run: () => setMissionsListOpen(true) },
@@ -743,7 +768,7 @@ export default function App() {
       run: () => handleSelectSession(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, openTimeline, activeSessionId, activeTerminals, activeTerminalId, handleToggleEngine, themeMode, cycleTheme, setPaletteOpen, setHelpOpen, setHistoryOpen, setMissionPromptOpen, setMissionsListOpen, setZenMode])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, openTimeline, activeSessionId, activeTerminals, activeTerminalId, handleToggleEngine, themeMode, cycleTheme, railOpen, toggleRail, setPaletteOpen, setHelpOpen, setHistoryOpen, setMissionPromptOpen, setMissionsListOpen, setZenMode])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
@@ -759,6 +784,12 @@ export default function App() {
       } else if (mod && e.shiftKey && e.key.toLowerCase() === "z") {
         e.preventDefault(); e.stopPropagation()
         setZenMode((z) => !z)
+      } else if (mod && e.altKey && !e.shiftKey && e.key.toLowerCase() === "a") {
+        // Ctrl+Alt+A / Cmd+Alt+A — toggle the Agent Rail (the right-edge agent-state
+        // column). Ctrl+Alt is free: the existing Ctrl+letter binds all require
+        // `!e.altKey`, and Alt+1-9 requires `!mod`, so this collides with nothing.
+        e.preventDefault(); e.stopPropagation()
+        toggleRail()
       } else if (mod && e.key === "/") {
         e.preventDefault(); e.stopPropagation()
         setHelpOpen((o) => !o)
@@ -840,11 +871,11 @@ export default function App() {
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, helpOpen, paletteOpen, historyOpen, missionPromptOpen, missionsListOpen, setActiveTerminalId, setPaletteOpen, setHistoryOpen, setZenMode, setHelpOpen, scopedAttention, jumpToAttention])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, helpOpen, paletteOpen, historyOpen, missionPromptOpen, missionsListOpen, setActiveTerminalId, setPaletteOpen, setHistoryOpen, setZenMode, setHelpOpen, scopedAttention, jumpToAttention, toggleRail])
 
   return (
     <div
-      className={`app${zenMode ? " zen" : ""}`}
+      className={`app${zenMode ? " zen" : ""}${railOpen ? " rail-open" : " rail-collapsed"}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1035,6 +1066,17 @@ export default function App() {
           )}
         </div>
       </div>
+      {/* Agent Rail (v1) — the third flex sibling of .sidebar + .main-area, on the
+          RIGHT. A lens over existing seams (NOW + COST); collapses to a 32px spine so
+          the center transcript reflows. Hidden in zen/focus mode (the .app.zen rule). */}
+      <AgentRail
+        open={railOpen}
+        onToggle={toggleRail}
+        hasTerminal={activeTerminalId != null}
+        busy={railBusy}
+        activity={activeTerminalForRail?.activity}
+        blocks={railBlocks}
+      />
     </div>
   )
 }

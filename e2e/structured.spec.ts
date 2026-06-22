@@ -309,6 +309,71 @@ test("structured engine: composer is usable and a streamed reply renders", async
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
 
+test("Agent Rail (v1): renders, toggles open/closed, and the COST footer sums a turn", async () => {
+  // Agent Rail Phase 1 — the right-edge agent-state column. Assert: it renders open
+  // by default (no seeded agentRail pref → resolveAgentRailOpen defaults open), the
+  // Ctrl+Alt+A shortcut collapses it to the spine + the command palette re-opens it,
+  // and after a fakeStream turn the COST footer shows a NON-ZERO session total (the
+  // fake result carries total_cost_usd + usage). All existing structured selectors
+  // (.agent-composer etc.) stay intact — the rail is purely additive.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-agentrail-"))
+  await seedStructuredConfig(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  // The rail renders open by default: the full column with its "Agent Rail" header +
+  // the always-visible collapse control (no hover-reveal).
+  const rail = win.locator(".agent-rail")
+  await expect(rail).toBeVisible({ timeout: 15_000 })
+  await expect(rail.locator(".agent-rail-title")).toHaveText("Agent Rail")
+  await expect(rail.locator(".agent-rail-collapse")).toBeVisible()
+  // Not yet collapsed (no spine).
+  await expect(win.locator(".agent-rail.collapsed")).toHaveCount(0)
+
+  // Ctrl+Alt+A collapses it to the 32px spine (the reopen control stays visible).
+  await win.keyboard.press("Control+Alt+a")
+  await expect(win.locator(".agent-rail.collapsed")).toBeVisible({ timeout: 10_000 })
+  await expect(win.locator(".agent-rail-spine")).toBeVisible()
+  await expect(win.locator(".agent-rail-header")).toHaveCount(0)
+
+  // The command palette re-opens it (the bidirectional toggle entry).
+  await win.keyboard.press("Control+Shift+P")
+  await expect(win.locator(".cmdk-panel")).toBeVisible({ timeout: 10_000 })
+  await win.locator(".cmdk-input").fill("agent rail")
+  await win.locator(".cmdk-item .cmdk-label", { hasText: "Open Agent Rail" }).click()
+  await expect(win.locator(".agent-rail.collapsed")).toHaveCount(0, { timeout: 10_000 })
+  await expect(rail.locator(".agent-rail-header")).toBeVisible()
+
+  // Open a structured session and drive a turn so a `result` (with cost) lands.
+  await win.locator(".sidebar-action", { hasText: "+ New session" }).click()
+  const composer = win.locator(".agent-composer textarea")
+  await expect(composer).toBeVisible({ timeout: 15_000 })
+  await composer.fill("hi")
+  await composer.press("Enter")
+  await expect(win.locator(".agent-result")).toContainText(/turn complete/i, { timeout: 15_000 })
+
+  // The COST footer sums the turn to a non-zero session total ("$0.0123 · … tok · 1 turn").
+  const cost = win.locator(".agent-rail-cost")
+  await expect(async () => {
+    const text = await cost.textContent()
+    expect(text).toMatch(/\$0\.\d+/) // a real dollar amount, not the "—" resting dash
+    expect(text).not.toBe("—")
+  }).toPass({ timeout: 15_000 })
+  await expect(cost).toContainText("tok")
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
 test("structured engine: both split panes render a usable composer (not blank xterm)", async () => {
   tempHome = await mkdtemp(join(tmpdir(), "claudetui-structured-split-"))
   await seedStructuredConfig(tempHome)

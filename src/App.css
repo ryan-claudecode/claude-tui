@@ -3718,8 +3718,251 @@ body {
    Focus mode (Ctrl+Shift+Z) — hide chrome for a distraction-free terminal
    ============================================================ */
 .app.zen .sidebar,
-.app.zen .tab-bar {
+.app.zen .tab-bar,
+.app.zen .agent-rail {
   display: none;
+}
+
+/* ============================================================
+   Agent Rail (v1) — the persistent, narrow, collapsible RIGHT-edge column for
+   agent-initiated, present-tense state (NOW + COST). A third flex sibling of
+   .sidebar + .main-area. Warm Sand & Stone tokens only; NO hover-reveal (every
+   control is always visible — hover only tints). Collapses to a 32px spine; the
+   center transcript reflows (.main-area is flex:1, so it simply takes the freed
+   width). See docs/roadmap/agent-rail-design.md §3.
+   ============================================================ */
+.agent-rail {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+  /* Mirror the sidebar's seam highlight, but on the LEFT edge (the rail is on the
+     right, so its inner highlight faces the canvas). */
+  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--text-0) 6%, transparent);
+  user-select: none;
+  position: relative;
+  /* The width animates so open/collapse eases rather than snapping. */
+  transition: width var(--ease) 0.15s;
+}
+.agent-rail.collapsed {
+  width: 32px;
+  min-width: 32px;
+}
+.app.rail-open .agent-rail {
+  width: 300px;
+  min-width: 300px;
+}
+/* On very wide windows the column gets a touch more room (design doc §3). */
+@media (min-width: 1921px) {
+  .app.rail-open .agent-rail {
+    width: 320px;
+    min-width: 320px;
+  }
+}
+
+/* COLLAPSED — the 32px spine. The WHOLE spine is the always-visible reopen target
+   (a button), with a chevron + a vertically-stacked label. */
+.agent-rail-spine {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) 0;
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.agent-rail-spine:hover {
+  color: var(--text-1);
+  background: var(--accent-soft);
+}
+.agent-rail-spine-chevron {
+  font-size: 16px;
+  line-height: 1;
+}
+.agent-rail-spine-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+/* HEADER — title + always-visible collapse chevron. */
+.agent-rail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-4) var(--s-3) var(--s-3) var(--s-4);
+  -webkit-app-region: drag;
+}
+.agent-rail-title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-0);
+  letter-spacing: -0.2px;
+}
+.agent-rail-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.agent-rail-collapse:hover {
+  color: var(--text-0);
+  background: var(--bg-3);
+}
+
+/* BODY — the scrollable middle (NOW + later-phase sections + empty state). */
+.agent-rail-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: 0 var(--s-4) var(--s-4);
+  scrollbar-width: thin;
+}
+
+.agent-rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.agent-rail-section-label {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* NOW — one live line: a dot + the action, plus the running elapsed while busy. */
+.agent-rail-now-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: 13px;
+  color: var(--text-1);
+  min-width: 0;
+}
+.agent-rail-now-line.idle {
+  color: var(--text-2);
+}
+.agent-rail-now-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-4);
+}
+.agent-rail-now-line.busy .agent-rail-now-dot {
+  background: var(--green);
+}
+.agent-rail-now-dot.pulsing {
+  animation: agent-rail-now-pulse 1.4s var(--ease) infinite;
+}
+@keyframes agent-rail-now-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--accent-glow); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 4px transparent; }
+}
+.agent-rail-now-action {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-rail-now-elapsed {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A thin, calm pulse bar UNDER the NOW line while generating (never a strobe). */
+.agent-rail-now-pulsebar {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border);
+  overflow: hidden;
+}
+.agent-rail-now-pulsebar-fill {
+  display: block;
+  height: 100%;
+  width: 40%;
+  border-radius: 1px;
+  background: var(--accent);
+  animation: agent-rail-pulsebar-slide 1.6s var(--ease) infinite;
+}
+@keyframes agent-rail-pulsebar-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+/* EMPTY STATE — calm resting copy (in our voice, never a spinner). */
+.agent-rail-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-3) 0;
+}
+.agent-rail-empty-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.agent-rail-empty-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* COST — session-cumulative spend, pinned to the footer with a top divider. */
+.agent-rail-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-3) var(--s-4) var(--s-4);
+  border-top: 1px solid var(--border-subtle);
+}
+.agent-rail-cost {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reduced-motion: kill the rail's pulse animations (the dot + bar) — the state is
+   still legible from the dot color + the static bar. */
+@media (prefers-reduced-motion: reduce) {
+  .agent-rail-now-dot.pulsing,
+  .agent-rail-now-pulsebar-fill,
+  .agent-rail {
+    animation: none;
+    transition: none;
+  }
 }
 
 /* ============================================================

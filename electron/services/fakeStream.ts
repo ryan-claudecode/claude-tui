@@ -123,9 +123,25 @@ export const fakeStreamProc: SpawnProc = (
         }) + "\n",
       )
     }
-    // 3) result — turn complete (parks the terminal idle).
+    // 3) result — turn complete (parks the terminal idle). Carries a cost/usage block
+    //    (real `claude -p` results do) so the Agent Rail v1 COST footer can sum a
+    //    non-zero session total in the e2e — the rail reads ResultCost off this shape.
     emit(
-      line({ type: "result", subtype: "success", is_error: false, result: REPLY_TEXT }) + "\n",
+      line({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: REPLY_TEXT,
+        total_cost_usd: 0.0123,
+        duration_ms: 1234,
+        num_turns: 1,
+        usage: {
+          input_tokens: 1200,
+          output_tokens: 340,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 5000,
+        },
+      }) + "\n",
     )
   }
 

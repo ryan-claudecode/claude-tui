@@ -3,11 +3,13 @@ import {
   getThemeMode,
   setThemeMode,
   setRenderingEngine,
+  setAgentRailOpen,
   loadConfig,
   resolveRenderingEngine,
   resolveRenderingModel,
   resolveRenderingEffort,
   resolveSkipApproval,
+  resolveAgentRailOpen,
   claudeDefaultModel,
   claudeDefaultEffort,
   type ThemeMode,
@@ -145,6 +147,50 @@ describe("rendering.engine config (BO-4a)", () => {
     expect(written.data.rendering.engine).toBe("structured")
     // unrelated fields are untouched
     expect(written.data.theme.mode).toBe("dark")
+  })
+})
+
+describe("agentRail config (Agent Rail v1)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.resetAllMocks()
+  })
+
+  it("resolveAgentRailOpen defaults to open (true) when absent", () => {
+    expect(resolveAgentRailOpen(undefined)).toBe(true)
+    expect(resolveAgentRailOpen(null)).toBe(true)
+    expect(resolveAgentRailOpen({})).toBe(true)
+    expect(resolveAgentRailOpen({ agentRail: {} })).toBe(true)
+  })
+
+  it("resolveAgentRailOpen returns false only when explicitly false", () => {
+    expect(resolveAgentRailOpen({ agentRail: { open: false } })).toBe(false)
+    expect(resolveAgentRailOpen({ agentRail: { open: true } })).toBe(true)
+  })
+
+  it("setAgentRailOpen writes agentRail.open in the versioned envelope, preserving other fields", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({ schemaVersion: 1, data: { theme: { mode: "dark" } } }),
+    )
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {})
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined as any)
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {})
+
+    setAgentRailOpen(false)
+
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+    const written = JSON.parse(writeSpy.mock.calls[0][1] as string)
+    expect(written.schemaVersion).toBe(1)
+    expect(written.data.agentRail.open).toBe(false)
+    // unrelated fields are untouched
+    expect(written.data.theme.mode).toBe("dark")
+  })
+
+  it("loadConfig surfaces agentRail so getConfig carries it to the renderer", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({ schemaVersion: 1, data: { agentRail: { open: false } } }),
+    )
+    expect(loadConfig().agentRail).toEqual({ open: false })
   })
 })
 

@@ -94,6 +94,18 @@ export interface PermissionsConfig {
   skipApproval?: boolean
 }
 
+/**
+ * Agent Rail (v1) UI prefs. Additive/optional — no schema version bump (mirrors the
+ * RenderingConfig/AttentionConfig precedent). `open` persists the user's collapse
+ * choice for the right-edge agent-state column GLOBALLY (per-workspace is a later
+ * refinement). Absent resolves to `true` (open) via {@link resolveAgentRailOpen}.
+ * The responsive sub-1400px auto-collapse is a RENDERER-only derivation that never
+ * writes here, so a narrow window can't overwrite the saved preference.
+ */
+export interface AgentRailConfig {
+  open?: boolean
+}
+
 export interface TuiConfig {
   workspaceScanPaths: string[]
   defaultCommand?: string
@@ -102,6 +114,7 @@ export interface TuiConfig {
   attention?: AttentionConfig
   rendering?: RenderingConfig
   permissions?: PermissionsConfig
+  agentRail?: AgentRailConfig
 }
 
 /**
@@ -162,6 +175,16 @@ export function resolveRenderingEffort(
  */
 export function resolveSkipApproval(config?: { permissions?: PermissionsConfig } | null): boolean {
   return config?.permissions?.skipApproval !== false
+}
+
+/**
+ * Agent Rail (v1) — resolve the persisted open/collapsed preference from a (possibly
+ * partial/legacy) config. Returns `true` (open) unless `agentRail.open` is EXPLICITLY
+ * `false`. The single place the default lives, shared by the wiring layer (the
+ * renderer seeds the rail's collapsed state from this on mount). Pure + deterministic.
+ */
+export function resolveAgentRailOpen(config?: { agentRail?: AgentRailConfig } | null): boolean {
+  return config?.agentRail?.open !== false
 }
 
 /**
@@ -254,6 +277,20 @@ export function setRenderingEngine(engine: RenderingEngine): void {
   saveVersioned(CONFIG_FILE, SCHEMA_VERSION, data)
 }
 
+/**
+ * Agent Rail (v1) — persist the rail's open/collapsed preference. Mirrors
+ * {@link setRenderingEngine}/{@link setThemeMode}: read-modify-save through the
+ * versioned envelope, creating `agentRail` if absent and preserving any other fields.
+ * Only the EXPLICIT user collapse is persisted; the responsive sub-1400px
+ * auto-collapse is renderer-only and never calls this.
+ */
+export function setAgentRailOpen(open: boolean): void {
+  const data = readRawConfig()
+  if (!data.agentRail) data.agentRail = {}
+  data.agentRail.open = open
+  saveVersioned(CONFIG_FILE, SCHEMA_VERSION, data)
+}
+
 export function loadConfig(): TuiConfig {
   const data = readRawConfig()
   return {
@@ -270,5 +307,9 @@ export function loadConfig(): TuiConfig {
     // wiring layer (ipc.ts) and any reader see the on-disk override, not just the
     // type. Absent → resolveSkipApproval defaults to skip (true).
     permissions: data.permissions,
+    // Agent Rail (v1) — surface `agentRail` so getConfig() carries the persisted
+    // open/collapsed pref to the renderer (which seeds the rail on mount). Absent →
+    // resolveAgentRailOpen defaults to open (true).
+    agentRail: data.agentRail,
   }
 }
