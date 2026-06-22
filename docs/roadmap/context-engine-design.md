@@ -82,3 +82,55 @@ Additive, dependency-light, gated. ~250 LOC backend + one panel, following the p
 ## 7. Open questions
 
 See the `openQuestions` list — what to index, lexical-vs-vector trigger, cross-session scope default, primer enrichment default + cap, dependency tolerance for Phase 2, capture-automation appetite, graph value, and backup/export.
+
+## 8. v2 — The two-tier brain: Workspace Memory + live session findings (CAPP-87, RATIFIED 2026-06-22)
+
+The owner ratified a second durable tier. Motivation: "brain as a sum of session JSONs" is a
+*view* (RecallService derives the cross-session digest on the fly from live sessions), **not a
+store** — so there is nowhere to assert knowledge that should outlive any session, and killing a
+session removes its findings from the workspace view. Full implementation plan (anchor-verified,
+adversarially reviewed — 22 blocker/major resolved): `docs/roadmap/CAPP-87-workspace-memory-plan.md`.
+
+The brain a fresh agent inherits becomes **workspace memory (always present) ∪ live session
+findings (derived, as today)**.
+
+1. **Workspace Memory** — a NEW first-class tier: durable, workspace-level standing
+   context/instructions plus *promoted findings*, persisted with the **workspace** (one file per
+   workspace under `~/.claude-tui/workspace-memory/<workspaceId>.json`, a sentinel file for the
+   untagged "All" bucket), owned by a NEW `WorkspaceMemoryService`. It survives **all** session
+   deletion. Editable directly by the user; writable by agents via new MCP tools
+   (`get_workspace_memory`, `add_workspace_memory`, `set_workspace_memory_context`, `promote_finding`).
+2. **Live session findings** — the existing per-session `notes[]`/`summary` ledger, unchanged.
+
+**The bridge — promotion.** A session finding can be *promoted* up to workspace memory (a
+structural copy of the origin `Note` + provenance `originSessionId`/`originNoteId`). Promotion does
+NOT remove the origin note; recall de-dups them so each logical finding counts exactly once
+(de-dup key = the **(originSessionId, originNoteId)** pair). Promotion is **workspace-bound to the
+OWNING session** — never the caller's workspace, never the global active selection.
+
+**Delete-time decision (no silent default).** Killing a session opens a blocking main-window modal:
+**Keep & delete** (promote the dying session's findings to its workspace memory — defaults to
+promoting *all*, but presents a reviewable, editable, per-row-deletable list) vs **Delete
+everything** vs **Cancel**. Workspace memory is never at risk in this dialog — only the dying
+session's own findings. "Delete everything" = today's `killSession` semantics (record + PTYs; does
+NOT delete the Claude transcript on disk — worded honestly).
+
+**Scope/privacy.** Workspace memory scopes identically to notes: default `workspace` (no
+cross-workspace leak), invisible under `session`, returnable under explicit `all`. The untagged
+bucket is a **global, cross-project shared scope** (documented). Agent writes from an untagged
+session land in the untagged bucket — never a global-active fallback.
+
+**Workspace-delete (v1 decision):** deleting a workspace does NOT auto-wipe its memory (wiping
+curated memory while the feeding sessions persist on disk would invert "memory is the durable
+tier"); the memory file is left orphaned-but-recoverable. An explicit "delete workspace AND its
+memory" affordance + orphaned-session re-tagging is backlogged.
+
+**Surfaces:** a third Agent Rail KNOWS group ("Workspace memory"), an editable companion panel
+(`workspace-memory`), and the now-enabled SessionOverview "Push context to workspace" button.
+
+**Build order (worktree-isolatable units):** U1 store+promote ∥ U2 SessionService read helpers →
+U3 IPC/MCP/preload → U4 RecallService union+de-dup+rail → (U5 delete-time modal ∥ U6 editor panel).
+U5 is the unit that unblocks the delete-time Keep flow.
+
+**LATER (out of scope, not architected against):** the interactive graph "The Atlas" (Phase 4
+above) visualizes both tiers and becomes the home for promote/edit.
