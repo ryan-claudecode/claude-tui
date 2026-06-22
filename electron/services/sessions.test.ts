@@ -369,6 +369,21 @@ describe("SessionService terminal activity & state", () => {
     expect(() => svc.setTerminalActivity("nope", "t1", "x")).not.toThrow()
   })
 
+  it("setTerminalActivity emits worksession:updated so the renderer refreshes live (CAPP-84 regression)", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const send = vi.fn()
+    svc.setMainWindow({ webContents: { send }, isDestroyed: () => false })
+    const s = svc.create()
+    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "idle" })
+    send.mockClear() // ignore the create/addTerminal pushes — assert on the activity push only
+    svc.setTerminalActivity(s.id, "t1", "Testing the agent rail NOW line")
+    const call = send.mock.calls.find((c) => c[0] === "worksession:updated")
+    // Without the emit (the bug) this is undefined → the renderer never refreshes.
+    expect(call).toBeTruthy()
+    const snapshot = call![1] as { terminals: Array<{ activity?: string }> }
+    expect(snapshot.terminals[0].activity).toBe("Testing the agent rail NOW line")
+  })
+
   it("setTerminalState updates lastState (drives deriveStatus) and persists", () => {
     const svc = new SessionService({ dir, now: () => 1000 })
     const s = svc.create()

@@ -1056,6 +1056,10 @@ export class SessionService {
     t.activity = activity
     t.activityAt = this.now()
     this.persist(s)
+    // CAPP-84 — push so the renderer (Agent Rail NOW line / sidebar activity) reflects a
+    // self-reported activity LIVE. Without this emit the write persisted but the renderer
+    // stayed stale until an unrelated push (every other mutator already emits this).
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
   }
 
   setTerminalState(sessionId: string, terminalId: string, state: "active" | "idle" | "dead"): void {
