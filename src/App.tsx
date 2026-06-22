@@ -104,6 +104,9 @@ declare global {
       // CAPP-82 — rename the durable work-session container (the sidebar row).
       renameWorkSession: (id: string, name: string) => Promise<boolean>
       getWorkSessionContext: (sessionId: string) => Promise<string | undefined>
+      // CAPP-86 — "The Lexicon": read-only cross-session recall + count digest.
+      recall: (query: string, scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any[]>
+      recallSummary: (scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<{ sessions: number; findings: number; ruledOut: number; recentRuledOut?: { text: string; correction?: string; sessionName: string; createdAt: number } }>
       onWorkSessionUpdated: (callback: (session: any) => void) => void
       onWorkSessionRemoved: (callback: (id: string) => void) => void
       // Workspaces / config

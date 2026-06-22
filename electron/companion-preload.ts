@@ -24,6 +24,21 @@ contextBridge.exposeInMainWorld("companionApi", {
     ipcRenderer.invoke("worktree:approve", missionId, taskId),
   rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) =>
     ipcRenderer.invoke("worktree:reject", missionId, taskId, reason),
+  // CAPP-86 — "The Lexicon": read-only cross-session recall, so the RecallPanel
+  // (which lives in THIS companion window) can search every finding + summary. Pure
+  // reads — they cannot mutate any canonical session file.
+  recall: (query: string, scope?: "session" | "workspace" | "all", sessionId?: string) =>
+    ipcRenderer.invoke("worksession:recall", query, scope, sessionId),
+  recallSummary: (scope?: "session" | "workspace" | "all", sessionId?: string) =>
+    ipcRenderer.invoke("worksession:recall-summary", scope, sessionId),
+  // CAPP-86 — open a SessionOverview panel for a recall hit's owning session
+  // (click-to-open). Fetches the overview, then shows it as a panel in this same
+  // companion window via the existing generic panel:show path.
+  openSessionOverview: async (sessionId: string) => {
+    const ov = await ipcRenderer.invoke("worksession:overview", sessionId)
+    if (!ov) return null
+    return ipcRenderer.invoke("panel:show", "session-overview", ov, "right")
+  },
   getTheme: () => ipcRenderer.invoke("config:get-theme"),
   onThemeChanged: (cb: (mode: string) => void) =>
     ipcRenderer.on("theme:changed", (_e, mode) => cb(mode)),

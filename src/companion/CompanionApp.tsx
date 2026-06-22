@@ -18,6 +18,7 @@ import CodePanel from "../components/panels/CodePanel"
 import HeatmapPanel from "../components/panels/HeatmapPanel"
 import MissionPanel from "../components/panels/MissionPanel"
 import SessionOverviewPanel from "../components/panels/SessionOverviewPanel"
+import RecallPanel from "../components/panels/RecallPanel"
 import WorktreeReviewPanel, { type ReviewActionResult } from "../components/panels/WorktreeReviewPanel"
 
 interface PanelState {
@@ -34,7 +35,7 @@ const PANEL_LABELS: Record<string, string> = {
   timeline: "Timeline", git: "Git", kanban: "Kanban", notes: "Notes",
   stat: "Stats", log: "Log", progress: "Progress", code: "Code",
   heatmap: "Heatmap", mission: "Mission", "session-overview": "Overview",
-  "worktree-review": "Review",
+  "worktree-review": "Review", recall: "Recall",
 }
 
 function tabLabel(p: PanelState): string {
@@ -61,6 +62,10 @@ declare global {
       missionPause: (id: string) => void
       approveWorktreeTask: (missionId: string, taskId: string) => Promise<ReviewActionResult | null>
       rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) => Promise<ReviewActionResult | null>
+      // CAPP-86 — read-only cross-session recall + click-to-open SessionOverview.
+      recall: (query: string, scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any[]>
+      recallSummary: (scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any>
+      openSessionOverview: (sessionId: string) => Promise<any>
       getTheme: () => Promise<string>
       onThemeChanged: (cb: (mode: string) => void) => void
       removeAllListeners: (channel: string) => void
@@ -218,6 +223,7 @@ function PanelContent({
     case "heatmap": return <HeatmapPanel {...(panel.props as any)} />
     case "mission": return <MissionPanel {...panel.props} onStop={onMissionStop} onPause={onMissionPause} />
     case "session-overview": return <SessionOverviewPanel {...(panel.props as any)} />
+    case "recall": return <RecallPanel {...(panel.props as any)} />
     case "worktree-review": return (
       <WorktreeReviewPanel
         {...panel.props}

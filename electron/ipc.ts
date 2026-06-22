@@ -17,10 +17,11 @@ import { FileService } from "./services/files"
 import { UiService } from "./services/ui"
 import { MissionService } from "./services/mission"
 import { SessionService } from "./services/sessions"
+import { RecallService } from "./services/recall"
 import { CompanionService } from "./services/companion"
 import { AttentionService } from "./services/attention"
 import { Notification } from "electron"
-import { loadConfig, resolveRenderingEngine, resolveRenderingModel, claudeDefaultModel, resolveRenderingEffort, claudeDefaultEffort, resolveSkipApproval } from "./config"
+import { loadConfig, resolveRenderingEngine, resolveRenderingModel, claudeDefaultModel, resolveRenderingEffort, claudeDefaultEffort, resolveSkipApproval, resolvePrimerRecall } from "./config"
 import { startMcpServer } from "./mcp/server"
 import { registerTerminalHandlers } from "./ipc/terminal-handlers"
 import { registerWorkSessionHandlers } from "./ipc/worksession-handlers"
@@ -53,15 +54,36 @@ export const missionService = new MissionService(sessionService, {
   // workspaceService is constructed above, so this closure is safe.
   getActiveWorkspaceId: () => workspaceService.getActiveId(),
 })
+// CAPP-86 — "The Lexicon": read-only cross-session recall over the per-session
+// knowledge ledger. Declared with a forward `let` so the SessionService primer-
+// enrichment closure below can reference it (the two are mutually referential:
+// recall reads workSessionService.list(); the gated primer reads recall). Assigned
+// immediately after workSessionService is constructed.
+export let recallService: RecallService
+
 // WS-C — scope work sessions to the active workspace: the durable container is
 // stamped at create() time via this getter (undefined in "All" mode). Same
 // callback-injection posture as missionService above.
 // WS-G (G1) — and resolve the active workspace's primary dir as the spawn cwd for
 // a NEW session's first terminal (null in "All" mode / no dir → default cwd).
+// CAPP-86 — the OPTIONAL gated primer-enrichment seam: getContext appends a capped
+// "## Related from other sessions" recall block ONLY when config.context.primerRecall
+// is true (default OFF → byte-identical primer). The flag is re-read FRESH per call
+// (loadConfig()) so a flip is honored without a restart. recallRelated scopes to the
+// session's own workspace and excludes the session's own entries (handled below).
 export const workSessionService = new SessionService({
   getActiveWorkspaceId: () => workspaceService.getActiveId(),
   getActiveWorkspaceDir: () => workspaceService.getActiveWorkspaceDir(),
+  primerRecallEnabled: () => resolvePrimerRecall(loadConfig()),
+  recallRelated: ({ sessionId, workspaceId, query, limit }) =>
+    recallService
+      .recall(query, "workspace", { sessionId, workspaceId }, limit + 5)
+      // Exclude the session's OWN entries — they're already in the primer above.
+      .filter((h) => h.sessionId !== sessionId)
+      .slice(0, limit)
+      .map((h) => ({ text: h.text, sessionName: h.sessionName, status: h.status, correction: h.correction })),
 })
+recallService = new RecallService(() => workSessionService.list())
 
 /**
  * The attention queue (AQ-1). Constructed in setupIpc once the main window
@@ -193,7 +215,23 @@ export async function setupIpc(win: BrowserWindow) {
 
   workspaceService.discover(config.workspaceScanPaths)
   workSessionService.attachTerminals(sessionService)
-  workSessionService.setMainWindow(win)
+  // CAPP-86 — keep the recall index fresh: every worksession mutation pushes
+  // `worksession:updated` / `worksession:removed` to the renderer through this
+  // window proxy, so invalidating the derived index on those channels means a
+  // new/changed/removed note or summary joins (or leaves) the searchable set on its
+  // next query. Wrapping the window (rather than a separate emit) reuses the single
+  // mutation seam SessionService already routes every persist through.
+  workSessionService.setMainWindow({
+    isDestroyed: () => win.isDestroyed(),
+    webContents: {
+      send: (channel: string, ...args: unknown[]) => {
+        if (channel === "worksession:updated" || channel === "worksession:removed") {
+          recallService.invalidate()
+        }
+        if (!win.isDestroyed()) win.webContents.send(channel, ...args)
+      },
+    },
+  })
   workSessionService.load()
 
   // Start MCP server and configure sessions to auto-connect. The MCP connection
@@ -221,6 +259,7 @@ export async function setupIpc(win: BrowserWindow) {
       uiService,
       missionService,
       workSessionService,
+      recallService,
       attentionService,
     )
     sessionService.setMcpConfigPath(configPath)
@@ -237,7 +276,7 @@ export async function setupIpc(win: BrowserWindow) {
 
   // Register IPC handlers by domain (MOVE, not rewrite — see ipc/*-handlers.ts)
   registerTerminalHandlers({ sessionService, win })
-  registerWorkSessionHandlers({ workSessionService })
+  registerWorkSessionHandlers({ workSessionService, recallService })
   registerPanelHandlers({
     panelService,
     notificationService,

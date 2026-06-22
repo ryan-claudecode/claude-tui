@@ -103,7 +103,8 @@ describe.runIf(LIVE)("BO-10 LIVE interrupt (real claude -p) — gated by BO10_LI
       svc,
       stub(), stub(), stub(), stub(), stub(), stub(), stub(), stub(), // 2-9
       stub(), stub(), stub(), stub(), stub(), stub(), stub(), stub(), // 10-17
-      attention, // 18
+      stub(), // 18 recallService (CAPP-86)
+      attention, // 19
     )
     svc.setMcpConfigPath(started.configPath)
     svc.setMcpServerUrl(`http://127.0.0.1:${started.port}/sse`)

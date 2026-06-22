@@ -49,6 +49,14 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("worksession:rename", id, name),
   getWorkSessionContext: (sessionId: string) =>
     ipcRenderer.invoke("worksession:context", sessionId),
+  // CAPP-86 — "The Lexicon": read-only cross-session recall. recall returns ranked
+  // hits for a query (scope defaults to the caller-session's workspace); recallSummary
+  // returns the cross-session count digest (+ most-recent ruled-out one-liner) for the
+  // Rail KNOWS section. Both are pure reads — they never mutate canonical session files.
+  recall: (query: string, scope?: "session" | "workspace" | "all", sessionId?: string) =>
+    ipcRenderer.invoke("worksession:recall", query, scope, sessionId),
+  recallSummary: (scope?: "session" | "workspace" | "all", sessionId?: string) =>
+    ipcRenderer.invoke("worksession:recall-summary", scope, sessionId),
   getSessionOverview: (sessionId: string) =>
     ipcRenderer.invoke("worksession:overview", sessionId),
   getSessionTimeline: (sessionId: string) =>

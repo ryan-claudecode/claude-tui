@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { SessionService, SessionEvent } from "../../services/sessions"
 import type { PanelService } from "../../services/panels"
+import type { RecallService, RecallHit } from "../../services/recall"
 import type { TerminalIdentity } from "./shared"
 
 /** Map a SessionEvent kind to the TimelinePanel step status it should render as. */
@@ -11,10 +12,27 @@ function timelineStatus(kind: SessionEvent["kind"]): "done" | "active" | "error"
   return "done"
 }
 
+/**
+ * CAPP-86 — render a recall hit as one markdown line, reusing getContext's exact
+ * ruled-out rendering (`~~old~~ → new`) so a disproven finding (and its correction)
+ * reads identically across the primer + the recall tool.
+ */
+function renderRecallHit(h: RecallHit): string {
+  const body =
+    h.status === "ruled-out"
+      ? h.correction
+        ? `~~${h.text}~~ → ${h.correction}`
+        : `~~${h.text}~~`
+      : h.text
+  const tag = h.source === "summary" ? "summary" : h.status
+  return `- [${tag}] ${body} _(from "${h.sessionName}")_`
+}
+
 export function registerWorkSessionTools(
   server: McpServer,
   workSessions: SessionService,
   panels: PanelService,
+  recall: RecallService,
   identity: TerminalIdentity = {},
 ) {
   // Work sessions — the durable *container* of many terminals that accumulates
@@ -185,6 +203,46 @@ export function registerWorkSessionTools(
       }))
       panels.show("timeline", { title: `Timeline — ${session?.name ?? sid}`, steps })
       return { content: [{ type: "text" as const, text: `Rendered ${events.length} event(s) in the timeline panel.` }] }
+    },
+  )
+
+  // CAPP-86 — "The Lexicon": read-only cross-session recall. Searches every finding
+  // + summary across past work sessions ("have we learned this before?"), so an agent
+  // self-queries BEFORE re-exploring. Identity-bound: scope DEFAULTS to your own
+  // workspace ('workspace'), so a finding from another project does NOT surface unless
+  // you explicitly ask 'all'. Ruled-out hits surface what was DISPROVEN with the same
+  // `~~old~~ → new` correction-arrow as get_session_context — exactly what stops an
+  // agent re-walking a dead end.
+  server.tool(
+    "recall",
+    "Cross-session recall (read-only): search every finding + summary across past work sessions for relevant knowledge — 'have we learned this before?'. Call this BEFORE re-exploring something. Scope defaults to YOUR workspace (a finding from another project won't surface unless you pass scope:'all'); 'session' limits to your own session. Ruled-out findings are returned with their correction (struck old text → the fix) so you don't re-walk a dead end. Returns ranked hits (best match first).",
+    {
+      query: z.string().describe("What you're looking for, in your own words (lexical match)"),
+      scope: z
+        .enum(["session", "workspace", "all"])
+        .optional()
+        .describe("'session' (yours only) | 'workspace' (default — your project) | 'all' (every workspace)"),
+      session_id: z.string().optional(),
+    },
+    async ({ query, scope, session_id }) => {
+      const sid = session_id ?? identity.sessionId
+      const workspaceId = recall.workspaceIdOf(sid)
+      const effectiveScope = scope ?? "workspace"
+      const hits = recall.recall(query, effectiveScope, { sessionId: sid, workspaceId })
+      if (hits.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `No prior knowledge found for "${query}" (scope: ${effectiveScope}). Nothing learned yet — explore fresh.`,
+            },
+          ],
+        }
+      }
+      const text =
+        `Recall — ${hits.length} hit(s) for "${query}" (scope: ${effectiveScope}):\n` +
+        hits.map(renderRecallHit).join("\n")
+      return { content: [{ type: "text" as const, text }] }
     },
   )
 }

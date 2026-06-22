@@ -16,6 +16,7 @@ import type { FileService } from "../services/files"
 import type { UiService } from "../services/ui"
 import type { MissionService } from "../services/mission"
 import type { SessionService } from "../services/sessions"
+import type { RecallService } from "../services/recall"
 import type { AttentionService } from "../services/attention"
 import { registerSessionTools } from "./tools/sessions"
 import { registerWorkSessionTools } from "./tools/worksessions"
@@ -55,11 +56,12 @@ export function registerTools(
   ui: UiService,
   mission: MissionService,
   workSessions: SessionService,
+  recall: RecallService,
   attention: AttentionService,
   identity: TerminalIdentity = {},
 ) {
   registerSessionTools(server, sessions, broadcast, attention, workSessions, workspaces, identity)
-  registerWorkSessionTools(server, workSessions, panels, identity)
+  registerWorkSessionTools(server, workSessions, panels, recall, identity)
   registerMissionTools(server, mission)
   registerPanelTools(server, panels, notes, files, sessions, identity)
   registerPermissionTools(server, sessions, identity, (m, l, t) => notifications.notify(m, l, t))

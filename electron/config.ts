@@ -106,6 +106,20 @@ export interface AgentRailConfig {
   open?: boolean
 }
 
+/**
+ * CAPP-86 — "The Lexicon" context-engine options. Additive/optional — no schema
+ * version bump (mirrors the RenderingConfig/AttentionConfig precedent).
+ *
+ * `primerRecall` gates whether {@link SessionService.getContext} appends the capped
+ * "## Related from other sessions" cross-session recall block to a fresh terminal's
+ * primer. The DEFAULT is FALSE (OFF) so the default primer is BYTE-IDENTICAL — the
+ * cross-session enrichment is opt-in until the owner ratifies it (it risks context
+ * bloat / off-topic injection; kept gated + capped per the design doc's risks).
+ */
+export interface ContextConfig {
+  primerRecall?: boolean
+}
+
 export interface TuiConfig {
   workspaceScanPaths: string[]
   defaultCommand?: string
@@ -115,6 +129,7 @@ export interface TuiConfig {
   rendering?: RenderingConfig
   permissions?: PermissionsConfig
   agentRail?: AgentRailConfig
+  context?: ContextConfig
 }
 
 /**
@@ -185,6 +200,17 @@ export function resolveSkipApproval(config?: { permissions?: PermissionsConfig }
  */
 export function resolveAgentRailOpen(config?: { agentRail?: AgentRailConfig } | null): boolean {
   return config?.agentRail?.open !== false
+}
+
+/**
+ * CAPP-86 — resolve whether the context primer is enriched with the cross-session
+ * "## Related from other sessions" recall block. Returns `false` (OFF) unless
+ * `context.primerRecall` is EXPLICITLY `true`. The single place the default lives:
+ * default-OFF keeps the default primer BYTE-IDENTICAL until the owner opts in. Pure
+ * + deterministic.
+ */
+export function resolvePrimerRecall(config?: { context?: ContextConfig } | null): boolean {
+  return config?.context?.primerRecall === true
 }
 
 /**
@@ -311,5 +337,9 @@ export function loadConfig(): TuiConfig {
     // open/collapsed pref to the renderer (which seeds the rail on mount). Absent →
     // resolveAgentRailOpen defaults to open (true).
     agentRail: data.agentRail,
+    // CAPP-86 — surface `context` so the wiring layer (ipc.ts) sees the on-disk
+    // primer-recall override, not just the type. Absent → resolvePrimerRecall
+    // defaults to OFF (the default primer stays byte-identical).
+    context: data.context,
   }
 }

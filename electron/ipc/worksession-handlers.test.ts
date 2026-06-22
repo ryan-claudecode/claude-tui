@@ -15,6 +15,14 @@ vi.mock("electron", () => ({
 
 import { registerWorkSessionHandlers } from "./worksession-handlers"
 import type { SessionService } from "../services/sessions"
+import type { RecallService } from "../services/recall"
+
+/** A no-op fake RecallService for the CAPP-75 round-trip tests (recall not exercised here). */
+const fakeRecall = {
+  recall: vi.fn(() => []),
+  summary: vi.fn(() => ({ sessions: 0, findings: 0, ruledOut: 0 })),
+  workspaceIdOf: vi.fn(() => undefined),
+} as unknown as RecallService
 
 function call<T = unknown>(channel: string, ...args: unknown[]): T {
   const fn = handlers.get(channel)
@@ -31,7 +39,7 @@ describe("worksession-handlers — CAPP-75 conversation discovery/restore", () =
       listFolderConversations: vi.fn(() => convos),
       openConversationInFolder: vi.fn(),
     } as unknown as SessionService
-    registerWorkSessionHandlers({ workSessionService: fake })
+    registerWorkSessionHandlers({ workSessionService: fake, recallService: fakeRecall })
 
     const out = call("worksession:list-folder-conversations", "C:\\proj\\foo")
     expect((fake.listFolderConversations as any)).toHaveBeenCalledWith("C:\\proj\\foo")
@@ -44,7 +52,7 @@ describe("worksession-handlers — CAPP-75 conversation discovery/restore", () =
       listFolderConversations: vi.fn(),
       openConversationInFolder: vi.fn(() => result),
     } as unknown as SessionService
-    registerWorkSessionHandlers({ workSessionService: fake })
+    registerWorkSessionHandlers({ workSessionService: fake, recallService: fakeRecall })
 
     const out = call("worksession:restore-conversation", "C:\\proj\\foo", "conv-9")
     expect((fake.openConversationInFolder as any)).toHaveBeenCalledWith("C:\\proj\\foo", "conv-9")

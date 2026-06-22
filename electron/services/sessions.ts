@@ -160,6 +160,29 @@ export interface SessionServiceOpts {
    * for convo-id capture, so the two never drift.
    */
   ccProjectsRoot?: string
+  /**
+   * CAPP-86 — OPTIONAL cross-session primer enrichment seam ("The Lexicon"). When
+   * present AND enabled (see {@link SessionServiceOpts.primerRecallEnabled}),
+   * {@link SessionService.getContext} appends a capped "## Related from other
+   * sessions" block of recall hits sourced from this callback. Injected as a
+   * callback (RecallService is read-only and decoupled), the same posture as
+   * getActiveWorkspaceId. ABSENT → the primer is byte-identical (existing call
+   * sites/tests unaffected). The callback is given the session's own id + workspace
+   * id so it can scope to the workspace and exclude the session's own entries.
+   */
+  recallRelated?: (args: {
+    sessionId: string
+    workspaceId?: string
+    query: string
+    limit: number
+  }) => Array<{ text: string; sessionName: string; status: "active" | "ruled-out" | "summary"; correction?: string }>
+  /**
+   * CAPP-86 — gate for the primer enrichment above. Re-read FRESH each call
+   * (mirroring the loadConfig() re-read posture elsewhere) so a config flip is
+   * honored without an app restart. DEFAULT (absent) → FALSE (OFF): the default
+   * primer is byte-identical. Only an explicit `true` arms the enrichment.
+   */
+  primerRecallEnabled?: () => boolean
 }
 
 /** Persistence schema version. v1 = today's WorkSession shape verbatim. */
@@ -248,6 +271,9 @@ export class SessionService {
   private getActiveWorkspaceDir: () => string | null | undefined
   /** CAPP-75 — the Claude Code transcript store root for conversation discovery. */
   private ccProjectsRoot: string
+  /** CAPP-86 — OPTIONAL cross-session primer enrichment seam (default: none → off). */
+  private recallRelated?: SessionServiceOpts["recallRelated"]
+  private primerRecallEnabled: () => boolean
 
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
@@ -256,6 +282,8 @@ export class SessionService {
     this.getActiveWorkspaceId = opts.getActiveWorkspaceId ?? (() => undefined)
     this.getActiveWorkspaceDir = opts.getActiveWorkspaceDir ?? (() => undefined)
     this.ccProjectsRoot = opts.ccProjectsRoot ?? join(homedir(), ".claude", "projects")
+    this.recallRelated = opts.recallRelated
+    this.primerRecallEnabled = opts.primerRecallEnabled ?? (() => false)
   }
 
   attachTerminals(terminals: TerminalLike): void {
@@ -1113,6 +1141,10 @@ export class SessionService {
     if (correctsTarget) this.logEvent(s, "correction", `Corrected an earlier note: ${text}`)
     else this.logEvent(s, "note", `Note: ${text}`)
     this.persist(s)
+    // CAPP-86 — push so cross-session recall (RecallService) + the Rail KNOWS digest
+    // refresh LIVE when a finding lands. Verified-missing before The Lexicon: addNote
+    // persisted but did NOT emit (same bug class fixed for setTerminalActivity).
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
     return note
   }
 
@@ -1123,6 +1155,10 @@ export class SessionService {
     this.summaryDirty.delete(sessionId)
     this.logEvent(s, "summary", "Summary refreshed")
     this.persist(s)
+    // CAPP-86 — push so cross-session recall (RecallService) + the Rail KNOWS digest
+    // refresh LIVE when the summary changes. Verified-missing before The Lexicon:
+    // setSummary persisted but did NOT emit (same bug class as addNote above).
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
   }
 
   getOverview(sessionId: string): SessionOverview | undefined {
@@ -1168,6 +1204,37 @@ export class SessionService {
       })
       parts.push(`## Ruled out / corrected\n` + lines.join("\n"))
     }
+
+    // CAPP-86 — GATED primer enrichment (default OFF → byte-identical primer). When
+    // the owner has opted in (config.context.primerRecall) AND a recall seam is
+    // wired, append a capped "## Related from other sessions" block of cross-session
+    // hits keyed off this session's name + summary, so a fresh terminal inherits
+    // relevant knowledge from OTHER sessions. Ruled-out hits keep the same
+    // `~~old~~ → new` correction-arrow rendering as the section above.
+    if (this.recallRelated && this.primerRecallEnabled()) {
+      const query = `${s.name} ${s.summary}`.trim()
+      if (query) {
+        const related = this.recallRelated({
+          sessionId: s.id,
+          workspaceId: s.workspaceId,
+          query,
+          limit: 3,
+        })
+        if (related.length) {
+          const lines = related.map((r) => {
+            const text =
+              r.status === "ruled-out"
+                ? r.correction
+                  ? `~~${r.text}~~ → ${r.correction}`
+                  : `~~${r.text}~~`
+                : r.text
+            return `- ${text} _(from "${r.sessionName}")_`
+          })
+          parts.push(`## Related from other sessions\n` + lines.join("\n"))
+        }
+      }
+    }
+
     return parts.join("\n\n")
   }
 

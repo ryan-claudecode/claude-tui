@@ -104,6 +104,7 @@ describe.runIf(LIVE)("BO-11 LIVE — Stop truly stops (real claude -p), gated by
       svc,
       stub(), stub(), stub(), stub(), stub(), stub(), stub(), stub(),
       stub(), stub(), stub(), stub(), stub(), stub(), stub(), stub(),
+      stub(), // recallService (CAPP-86)
       attention,
     )
     svc.setMcpConfigPath(started.configPath)

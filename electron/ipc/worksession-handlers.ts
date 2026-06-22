@@ -1,8 +1,12 @@
 import { ipcMain } from "electron"
 import type { SessionService } from "../services/sessions"
+import type { RecallService, RecallScope } from "../services/recall"
 
-export function registerWorkSessionHandlers(deps: { workSessionService: SessionService }) {
-  const { workSessionService } = deps
+export function registerWorkSessionHandlers(deps: {
+  workSessionService: SessionService
+  recallService: RecallService
+}) {
+  const { workSessionService, recallService } = deps
 
   // Work-session (container) IPC -- the durable session tier above terminals
   ipcMain.handle("worksession:list", () => workSessionService.list())
@@ -85,5 +89,24 @@ export function registerWorkSessionHandlers(deps: { workSessionService: SessionS
   // the new terminal id so the renderer re-points the active selection.
   ipcMain.handle("agent:interrupt", (_e, terminalId: string) =>
     workSessionService.interruptAgent(terminalId),
+  )
+
+  // CAPP-86 — "The Lexicon": read-only cross-session recall (the RecallPanel +
+  // future Rail KNOWS digest). Scope defaults to 'workspace', resolved from the
+  // caller's session's workspaceId so a finding from project A doesn't leak into B.
+  // Both handlers are pure reads — they cannot mutate any canonical session file.
+  ipcMain.handle(
+    "worksession:recall",
+    (_e, query: string, scope?: RecallScope, sessionId?: string) => {
+      const workspaceId = recallService.workspaceIdOf(sessionId)
+      return recallService.recall(query, scope ?? "workspace", { sessionId, workspaceId })
+    },
+  )
+  ipcMain.handle(
+    "worksession:recall-summary",
+    (_e, scope?: RecallScope, sessionId?: string) => {
+      const workspaceId = recallService.workspaceIdOf(sessionId)
+      return recallService.summary(scope ?? "workspace", { sessionId, workspaceId })
+    },
   )
 }

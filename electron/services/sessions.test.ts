@@ -316,6 +316,34 @@ describe("SessionService notes", () => {
     expect(stored.supersededBy).toBe(second.id)
     expect(notes.find((x) => x.id === second.id)!.status).toBe("active")
   })
+
+  it("addNote emits worksession:updated so recall/KNOWS refresh live (CAPP-86 regression)", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const send = vi.fn()
+    svc.setMainWindow({ webContents: { send }, isDestroyed: () => false })
+    const s = svc.create()
+    send.mockClear() // ignore the create push — assert on the note push only
+    svc.addNote(s.id, "root cause is the N+1 query")
+    const call = send.mock.calls.find((c) => c[0] === "worksession:updated")
+    // Without the emit (the verified-missing bug) this is undefined → recall + the
+    // Rail KNOWS digest never refresh when a finding lands.
+    expect(call).toBeTruthy()
+    const snapshot = call![1] as { notes: Array<{ text: string }> }
+    expect(snapshot.notes.some((n) => n.text === "root cause is the N+1 query")).toBe(true)
+  })
+
+  it("setSummary emits worksession:updated so recall/KNOWS refresh live (CAPP-86 regression)", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const send = vi.fn()
+    svc.setMainWindow({ webContents: { send }, isDestroyed: () => false })
+    const s = svc.create()
+    send.mockClear()
+    svc.setSummary(s.id, "Goal: fix the auth race. Patching middleware.")
+    const call = send.mock.calls.find((c) => c[0] === "worksession:updated")
+    expect(call).toBeTruthy()
+    const snapshot = call![1] as { summary: string }
+    expect(snapshot.summary).toBe("Goal: fix the auth race. Patching middleware.")
+  })
 })
 
 describe("SessionService.getContext", () => {
@@ -345,6 +373,52 @@ describe("SessionService.getContext", () => {
     const s = svc.create()
     svc.addNote(s.id, "only a live note")
     expect(svc.getContext(s.id)!).not.toContain("Ruled out")
+  })
+
+  // CAPP-86 — the GATED primer enrichment must be byte-identical by default (off),
+  // and only append the "## Related from other sessions" block when armed.
+  it("does NOT append the related block when no recall seam is wired (byte-identical default)", () => {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    svc.setSummary(s.id, "Goal: thing")
+    svc.addNote(s.id, "a finding")
+    expect(svc.getContext(s.id)!).not.toContain("Related from other sessions")
+  })
+
+  it("does NOT append the related block when the recall seam is wired but the flag is OFF", () => {
+    let calls = 0
+    const svc = new SessionService({
+      dir,
+      now: () => 1000,
+      primerRecallEnabled: () => false, // OFF
+      recallRelated: () => { calls++; return [{ text: "x", sessionName: "Other", status: "active" as const }] },
+    })
+    const s = svc.create()
+    svc.setSummary(s.id, "Goal: thing")
+    const ctx = svc.getContext(s.id)!
+    expect(ctx).not.toContain("Related from other sessions")
+    // The seam isn't even consulted when the flag is off.
+    expect(calls).toBe(0)
+  })
+
+  it("appends a capped related block (with ruled-out correction-arrows) when the flag is ON", () => {
+    const svc = new SessionService({
+      dir,
+      now: () => 1000,
+      primerRecallEnabled: () => true, // ON
+      recallRelated: () => [
+        { text: "use the pooled client", sessionName: "DB work", status: "active" as const },
+        { text: "the cache is the bottleneck", sessionName: "Perf", status: "ruled-out" as const, correction: "it's the serializer" },
+      ],
+    })
+    const s = svc.create()
+    svc.setSummary(s.id, "Goal: speed up the API")
+    const ctx = svc.getContext(s.id)!
+    expect(ctx).toContain("## Related from other sessions")
+    expect(ctx).toContain("use the pooled client")
+    expect(ctx).toContain('_(from "DB work")_')
+    // ruled-out hit keeps the ~~old~~ → new correction-arrow rendering
+    expect(ctx).toContain("~~the cache is the bottleneck~~ → it's the serializer")
   })
 })
 
