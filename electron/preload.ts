@@ -154,6 +154,16 @@ contextBridge.exposeInMainWorld("api", {
     return () => ipcRenderer.removeListener("workspace:memory-changed", handler)
   },
 
+  // CAPP-95 / D1 — local-history net (the durable-brain data-loss recovery surface).
+  // `restore` takes a snapshot hash + an optional curated relPath (omit to restore the
+  // whole subset); `snapshot` takes an optional reason. The git work runs in the
+  // isolated ~/.claude-tui/.local-history repo only (never the project repo).
+  listLocalHistory: () => ipcRenderer.invoke("local-history:list"),
+  restoreLocalHistory: (hash: string, relPath?: string) =>
+    ipcRenderer.invoke("local-history:restore", hash, relPath),
+  snapshotLocalHistory: (reason?: string) => ipcRenderer.invoke("local-history:snapshot", reason),
+  revealLocalHistory: () => ipcRenderer.invoke("local-history:reveal"),
+
   // Session rename
   renameSession: (id: string, newName: string) => ipcRenderer.invoke("terminal:rename", id, newName),
 

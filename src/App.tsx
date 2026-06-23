@@ -251,6 +251,11 @@ declare global {
       onThemeChanged: (callback: (mode: string) => void) => void
       // CAPP-39 gate ④ — set the DEFAULT engine for NEW terminals (rollback write-path)
       setRenderingEngine: (engine: "xterm" | "structured") => Promise<void>
+      // CAPP-95 / D1 — local-history net (durable-brain data-loss recovery).
+      listLocalHistory: () => Promise<Array<{ hash: string; date: string; message: string }>>
+      restoreLocalHistory: (hash: string, relPath?: string) => Promise<{ restored: string[] }>
+      snapshotLocalHistory: (reason?: string) => Promise<string | null>
+      revealLocalHistory: () => Promise<{ ok: boolean }>
       // Agent Rail (v1) — persist the rail's open/collapsed pref (GLOBAL).
       setAgentRailOpen: (open: boolean) => Promise<void>
       // Window controls (frameless)
@@ -892,6 +897,42 @@ export default function App() {
         run: async () => {
           await window.api.setRenderingEngine("xterm")
           toast("success", "New terminals will use the raw terminal (xterm).")
+        },
+      },
+      // CAPP-95 / D1 — the local-history net (durable-brain data-loss recovery). A
+      // separate local git repo snapshots workspace memory + sessions so a bad
+      // edit/delete is recoverable. Minimal surface: reveal, snapshot-now, and a
+      // palette-driven restore of the latest snapshot (a polished browser is deferred).
+      {
+        id: "local-history-reveal",
+        label: "Local history: reveal backup folder",
+        keywords: "backup recover snapshot git history workspace memory data loss reveal explorer",
+        run: () => { void window.api.revealLocalHistory() },
+      },
+      {
+        id: "local-history-snapshot",
+        label: "Local history: save a snapshot now",
+        keywords: "backup recover snapshot git history workspace memory commit save",
+        run: async () => {
+          const hash = await window.api.snapshotLocalHistory("manual snapshot")
+          toast(hash ? "success" : "info", hash ? "Saved a workspace-memory snapshot." : "No changes since the last snapshot.")
+        },
+      },
+      {
+        id: "local-history-restore",
+        label: "Local history: restore latest snapshot…",
+        keywords: "backup recover snapshot git history workspace memory restore undo revert data loss",
+        run: async () => {
+          const snaps = await window.api.listLocalHistory()
+          if (!snaps.length) { toast("info", "No snapshots yet."); return }
+          const latest = snaps[0]
+          const res = await window.api.restoreLocalHistory(latest.hash)
+          toast(
+            res.restored.length ? "success" : "warning",
+            res.restored.length
+              ? `Restored ${res.restored.length} file(s) from ${latest.date}.`
+              : "Nothing was restored.",
+          )
         },
       },
     ]

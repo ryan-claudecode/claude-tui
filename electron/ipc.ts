@@ -19,6 +19,7 @@ import { MissionService } from "./services/mission"
 import { SessionService } from "./services/sessions"
 import { RecallService, primerHitEligible } from "./services/recall"
 import { WorkspaceMemoryService } from "./services/workspaceMemory"
+import { LocalHistoryService } from "./services/localHistory"
 import { CompanionService } from "./services/companion"
 import { AttentionService } from "./services/attention"
 import { Notification } from "electron"
@@ -31,6 +32,7 @@ import { registerMissionHandlers } from "./ipc/mission-handlers"
 import { registerAppHandlers } from "./ipc/app-handlers"
 import { registerAttentionHandlers } from "./ipc/attention-handlers"
 import { registerWorkspaceHandlers } from "./ipc/workspace-handlers"
+import { registerLocalHistoryHandlers } from "./ipc/local-history-handlers"
 
 export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
@@ -53,6 +55,12 @@ export const companionService = new CompanionService()
 // recallService block below (a later unit injects listWorkspaceMemory() into
 // RecallService; this unit just needs the change seam to call recallService.invalidate()).
 export const workspaceMemoryService = new WorkspaceMemoryService()
+// CAPP-95 / D1 — the local-git data-loss net for the durable brain. A SEPARATE git
+// repo at ~/.claude-tui/.local-history/ snapshots the curated subset (workspace-
+// memory/ + sessions/ ONLY) so a bad edit/delete is recoverable. STRICT path
+// separation: git over a snapshot COPY, never the live dir, never the sync repo,
+// NEVER pushed (no remote ever added). init()/wiring happen in setupIpc below.
+export const localHistoryService = new LocalHistoryService()
 export const missionService = new MissionService(sessionService, {
   notify: (text, level) => notificationService.notify(text, level as any),
   // WS-C — stamp the active workspace onto each freshly-minted mission. A getter
@@ -181,6 +189,9 @@ export async function setupIpc(win: BrowserWindow) {
   // RecallService union itself is U4 — here we only call the EXISTING invalidate().
   workspaceMemoryService.onMemoryChanged((workspaceId) => {
     recallService.invalidate()
+    // CAPP-95 / D1 — every memory mutation schedules a debounced local-history
+    // snapshot (coalesces an edit burst into one commit). No-op until init() ran.
+    localHistoryService.scheduleSnapshot("workspace memory changed")
     if (!win.isDestroyed()) win.webContents.send("workspace:memory-changed", workspaceId)
     // The editor panel (U6) lives in the COMPANION window, NOT the main window — so the
     // change must also reach there or an open editor goes stale when another surface
@@ -262,12 +273,26 @@ export async function setupIpc(win: BrowserWindow) {
       send: (channel: string, ...args: unknown[]) => {
         if (channel === "worksession:updated" || channel === "worksession:removed") {
           recallService.invalidate()
+          // CAPP-95 / D1 — a durable session-store mutation also schedules a
+          // debounced local-history snapshot (sessions/ is half the curated subset).
+          localHistoryService.scheduleSnapshot("session store changed")
         }
         if (!win.isDestroyed()) win.webContents.send(channel, ...args)
       },
     },
   })
   workSessionService.load()
+
+  // CAPP-95 / D1 — wire the local-history net. Reload hooks let a restore refresh
+  // the affected service's cache + re-fire its change event so the renderer/recall
+  // refresh; init() takes the startup baseline snapshot (after load() so the
+  // current durable state is captured). All git work is best-effort + isolated to
+  // the .local-history repo, so a failure here never blocks boot.
+  localHistoryService.setReloadHooks({
+    onWorkspaceMemoryRestored: () => workspaceMemoryService.reload(),
+    onSessionsRestored: () => workSessionService.reloadFromDisk(),
+  })
+  localHistoryService.init()
 
   // Start MCP server and configure sessions to auto-connect. The MCP connection
   // is the app's entire value channel, so a startup failure must be loud — but
@@ -333,6 +358,8 @@ export async function setupIpc(win: BrowserWindow) {
     workspaceMemoryService,
     getScanPaths: () => loadConfig().workspaceScanPaths,
   })
+  // CAPP-95 / D1 — local-history list/restore/snapshot/reveal.
+  registerLocalHistoryHandlers({ localHistoryService, shellService })
   registerAppHandlers({
     config,
     sessionService,

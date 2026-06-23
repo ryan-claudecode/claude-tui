@@ -391,6 +391,24 @@ export class WorkspaceMemoryService {
     }
   }
 
+  /**
+   * Drop the in-memory cache and re-warm it from disk, then notify subscribers.
+   * Used after a LocalHistory restore (CAPP-95 / D1) overwrites a bucket file
+   * out-of-band: without this the service would keep serving the stale cached
+   * record. Re-fires `onMemoryChanged` for every reloaded bucket so the recall
+   * index invalidates and any open editor panel live-refreshes. The emitted id is
+   * the record's STORED id (the untagged stem for the untagged bucket).
+   */
+  reload(): void {
+    this.cache.clear()
+    this.loadAll()
+    // Emit once per (re)loaded bucket so subscribers refresh. A bucket whose file
+    // was deleted by the restore simply won't be in the cache → no stale emit.
+    for (const record of this.cache.values()) {
+      for (const cb of this.listeners) cb(record.workspaceId)
+    }
+  }
+
   // ── change seam ────────────────────────────────────────────────────────────────
 
   /** Subscribe to memory changes. Returns an unsubscribe fn. Mirrors

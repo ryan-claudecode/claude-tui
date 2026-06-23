@@ -1006,6 +1006,46 @@ export class SessionService {
     }
   }
 
+  /**
+   * Re-read every persisted session file from disk into the in-memory map and emit
+   * a `worksession:updated` for each, WITHOUT touching live terminal/PTY state.
+   * Used after a LocalHistory restore (CAPP-95 / D1) overwrites a session JSON
+   * out-of-band: the durable container fields (summary, notes/findings, name) are
+   * refreshed from disk so the recovered state is reflected in-memory, in the recall
+   * index, and in the renderer. Unlike `load()` (boot-time, marks all terminals
+   * dead) this preserves the running terminals' lastState — a restore is a recovery
+   * op, not a cold start. A session file the restore DELETED is left in the map (we
+   * don't reconcile removals here — recovery is additive); a fresh restore of an
+   * older snapshot re-adds it.
+   */
+  reloadFromDisk(): void {
+    let files: string[]
+    try {
+      files = readdirSync(this.dir)
+    } catch {
+      return // dir absent → nothing to reload
+    }
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue
+      const loaded = loadVersioned<WorkSession>(join(this.dir, f), SCHEMA_VERSION, MIGRATIONS)
+      if (!loaded) continue
+      const existing = this.sessions.get(loaded.id)
+      if (existing) {
+        // Preserve the LIVE terminal runtime state (PTYs are owned by
+        // TerminalService); refresh only the durable container fields from disk.
+        const liveStates = new Map(existing.terminals.map((t) => [t.id, t.lastState]))
+        for (const t of loaded.terminals) {
+          const live = liveStates.get(t.id)
+          if (live) t.lastState = live
+        }
+        // Keep the live status (the on-disk one was a snapshot of an old runtime).
+        loaded.status = existing.status
+      }
+      this.sessions.set(loaded.id, loaded)
+      this.emit("worksession:updated", this.withEffectiveActivity(loaded))
+    }
+  }
+
   addTerminal(sessionId: string, ref: TerminalRef): void {
     const s = this.sessions.get(sessionId)
     if (!s) return
