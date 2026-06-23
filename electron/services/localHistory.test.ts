@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync } from "node:fs"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -158,6 +158,97 @@ describe("LocalHistoryService — restore", () => {
     const hash = svc.listSnapshots()[0].hash
     const res = svc.restore(hash, "config.json")
     expect(res.restored).toHaveLength(0)
+  })
+})
+
+describe("LocalHistoryService — sessions tier", () => {
+  it("includes sessions/ in a snapshot and restores a deleted session file + fires the reload hook", () => {
+    mkdirSync(join(root, "sessions"), { recursive: true })
+    const sessFile = join(root, "sessions", "s-1.json")
+    writeFileSync(sessFile, JSON.stringify({ id: "s-1", summary: "hard-won finding" }))
+
+    const onSessionsRestored = vi.fn()
+    const svc = new LocalHistoryService({ rootDir: root })
+    svc.setReloadHooks({ onSessionsRestored })
+    svc.init() // snapshot WITH the session present
+
+    expect(git(repoDir(), ["ls-files"]).stdout).toContain("sessions/s-1.json")
+    const hash = svc.listSnapshots()[0].hash
+
+    rmSync(sessFile) // lose the live session file
+    expect(existsSync(sessFile)).toBe(false)
+
+    const res = svc.restore(hash, "sessions/s-1.json")
+    expect(res.restored).toContain("sessions/s-1.json")
+    expect(existsSync(sessFile)).toBe(true)
+    expect(JSON.parse(readFileSync(sessFile, "utf8")).summary).toBe("hard-won finding")
+    expect(onSessionsRestored).toHaveBeenCalled()
+  })
+})
+
+describe("LocalHistoryService — restore safety", () => {
+  it("rejects a `..` traversal path and writes NOTHING outside the curated store", () => {
+    const mem = new WorkspaceMemoryService({ dir: join(root, "workspace-memory") })
+    mem.addFinding("ws-1", "x", "user")
+    const svc = new LocalHistoryService({ rootDir: root })
+    svc.init()
+    const hash = svc.listSnapshots()[0].hash
+
+    const evil = join(root, "..", "ctui-lh-evil.json")
+    const res = svc.restore(hash, "workspace-memory/../../ctui-lh-evil.json")
+    expect(res.restored).toHaveLength(0)
+    expect(res.failed).toContain("workspace-memory/../../ctui-lh-evil.json")
+    expect(existsSync(evil)).toBe(false)
+  })
+
+  it("rejects a directory (tree) path, a blank hash, and a non-hex hash", () => {
+    const mem = new WorkspaceMemoryService({ dir: join(root, "workspace-memory") })
+    mem.addFinding("ws-1", "x", "user")
+    const svc = new LocalHistoryService({ rootDir: root })
+    svc.init()
+    const hash = svc.listSnapshots()[0].hash
+
+    expect(svc.restore(hash, "workspace-memory/").restored).toHaveLength(0) // dir, not a file
+    expect(svc.restore("", "workspace-memory/ws-1.json").restored).toHaveLength(0) // blank hash
+    expect(svc.restore("not-a-hash", "workspace-memory/ws-1.json").restored).toHaveLength(0)
+  })
+})
+
+describe("LocalHistoryService — debounced auto-snapshot + flush", () => {
+  it("scheduleSnapshot is a no-op before init, then coalesces a burst into ONE commit", async () => {
+    const mem = new WorkspaceMemoryService({ dir: join(root, "workspace-memory") })
+    mem.addFinding("ws-1", "seed", "user")
+    const svc = new LocalHistoryService({ rootDir: root, debounceMs: 10 })
+
+    // Before init: no-op (the repo doesn't exist yet).
+    svc.scheduleSnapshot("too early")
+    await new Promise((r) => setTimeout(r, 30))
+    expect(existsSync(join(repoDir(), ".git"))).toBe(false)
+
+    svc.init() // baseline commit (#1)
+    expect(git(repoDir(), ["rev-list", "--count", "HEAD"]).stdout.trim()).toBe("1")
+
+    // A burst of edits + schedules collapses to exactly ONE coalesced commit.
+    mem.addFinding("ws-1", "burst a", "user")
+    svc.scheduleSnapshot()
+    mem.addFinding("ws-1", "burst b", "user")
+    svc.scheduleSnapshot()
+    await new Promise((r) => setTimeout(r, 40))
+    expect(git(repoDir(), ["rev-list", "--count", "HEAD"]).stdout.trim()).toBe("2")
+  })
+
+  it("flush() captures a pending change synchronously (the on-quit safety)", () => {
+    const mem = new WorkspaceMemoryService({ dir: join(root, "workspace-memory") })
+    mem.addFinding("ws-1", "seed", "user")
+    const svc = new LocalHistoryService({ rootDir: root, debounceMs: 60_000 })
+    svc.init() // commit #1
+    expect(git(repoDir(), ["rev-list", "--count", "HEAD"]).stdout.trim()).toBe("1")
+
+    // Schedule a far-future debounced snapshot, then flush (as on quit) → committed now.
+    mem.addFinding("ws-1", "late edit", "user")
+    svc.scheduleSnapshot()
+    svc.flush()
+    expect(git(repoDir(), ["rev-list", "--count", "HEAD"]).stdout.trim()).toBe("2")
   })
 })
 

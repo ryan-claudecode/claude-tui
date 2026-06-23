@@ -1,6 +1,6 @@
 import { app, BrowserWindow, protocol, Menu, ipcMain, dialog } from "electron"
 import { join } from "path"
-import { setupIpc, companionService, sessionService } from "./ipc"
+import { setupIpc, companionService, sessionService, localHistoryService } from "./ipc"
 import { getThemeMode } from "./config"
 import { logError, logWarn } from "./log"
 
@@ -115,6 +115,17 @@ app
     console.error("Fatal error during startup:", err)
     dialog.showErrorBox("ClaudeTUI — startup failed", String(err))
   })
+
+// CAPP-95 / D1 — capture any pending debounced snapshot synchronously before quit, so
+// the most recent (most likely to be regretted) edit isn't lost in the debounce window.
+// Best-effort; never blocks quit.
+app.on("before-quit", () => {
+  try {
+    localHistoryService.flush()
+  } catch {
+    /* never block quit on the data-loss net */
+  }
+})
 
 app.on("window-all-closed", () => {
   // Kill all PTYs before quitting to avoid node-pty assertion failures

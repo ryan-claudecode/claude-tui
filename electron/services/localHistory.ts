@@ -59,6 +59,9 @@ export interface Snapshot {
 export interface RestoreResult {
   /** The relative curated paths written back into the live `<rootDir>`. */
   restored: string[]
+  /** Paths requested but NOT restored (non-curated / missing / write error) — lets the
+   *  renderer warn on a PARTIAL restore instead of mis-reporting total success/failure. */
+  failed: string[]
 }
 
 /** Result of a single git invocation, normalized to strings + a numeric code. */
@@ -113,10 +116,31 @@ export class LocalHistoryService {
 
   // ── git runner ────────────────────────────────────────────────────────────────
 
+  /** Config flags that make the INTERNAL history repo HERMETIC from the user's global
+   *  git config — the repo is our own infra, not the user's project. Ignore their hooks
+   *  (a global husky/pre-commit that exits non-zero would fail every commit and silently
+   *  disable the net), their `excludesfile` (could ignore our JSON → every snapshot
+   *  silently empty), CRLF translation (so `git show` is a byte-exact JSON round-trip),
+   *  and gpg signing. */
+  private static readonly HARDEN = [
+    "-c",
+    "core.hooksPath=",
+    "-c",
+    "core.excludesfile=",
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "core.safecrlf=false",
+    "-c",
+    "commit.gpgsign=false",
+  ]
+
   /** A real synchronous git invocation in the history repo. Mirrors
-   *  `WorktreeService`'s defaultRunGit (never throws — a spawn failure → code 1). */
+   *  `WorktreeService`'s defaultRunGit (never throws — a spawn failure → code 1), with
+   *  the global-config-hardening flags so the internal repo can't be broken by a user's
+   *  global git settings. */
   private git(args: string[]): GitResult {
-    const r = spawnSync("git", args, {
+    const r = spawnSync("git", [...LocalHistoryService.HARDEN, ...args], {
       cwd: this.repoDir,
       encoding: "utf8",
       timeout: 30_000,
@@ -286,21 +310,33 @@ export class LocalHistoryService {
    * Returns the list of restored relative paths (empty on failure / nothing to do).
    */
   restore(hash: string, relPath?: string): RestoreResult {
-    if (!this.isRepo()) return { restored: [] }
-    try {
-      const paths = relPath ? [relPath] : this.curatedPathsAt(hash)
-      const restored: string[] = []
-      let touchedMemory = false
-      let touchedSessions = false
-      for (const p of paths) {
-        const norm = p.replace(/\\/g, "/")
-        if (!this.isCuratedPath(norm)) {
-          logWarn("localHistory", `refusing to restore non-curated path: ${norm}`)
-          continue
-        }
+    if (!this.isRepo()) return { restored: [], failed: [] }
+    // A snapshot hash from listSnapshots is a full hex object name. Reject anything else
+    // BEFORE touching git, so a blank hash can't silently restore from the working index
+    // (`git show :path`) and garbage can't be mis-parsed.
+    if (!/^[0-9a-fA-F]{7,40}$/.test(hash)) {
+      logWarn("localHistory", `refusing restore from a non-commit hash: ${hash}`)
+      return { restored: [], failed: [] }
+    }
+    const paths = relPath ? [relPath] : this.curatedPathsAt(hash)
+    const restored: string[] = []
+    const failed: string[] = []
+    let touchedMemory = false
+    let touchedSessions = false
+    for (const p of paths) {
+      const norm = p.replace(/\\/g, "/")
+      if (!this.isCuratedPath(norm)) {
+        logWarn("localHistory", `refusing to restore non-curated path: ${norm}`)
+        failed.push(norm)
+        continue
+      }
+      // PER-FILE isolation: one bad path (missing blob, EISDIR, read-only, disk-full)
+      // must never abort the batch or strand the reload hooks. A half-restore reported
+      // as total failure is worse than the original loss for a recovery tool.
+      try {
         const show = this.git(["show", `${hash}:${norm}`])
         if (show.code !== 0) {
-          // Missing in that commit (e.g. the file was created later) — skip, don't fail.
+          // Not present in that commit (created later) — not a failure, just absent.
           continue
         }
         const dest = join(this.rootDir, norm)
@@ -309,15 +345,35 @@ export class LocalHistoryService {
         restored.push(norm)
         if (norm.startsWith("workspace-memory/")) touchedMemory = true
         else if (norm.startsWith("sessions/")) touchedSessions = true
+      } catch (err) {
+        logWarn("localHistory", `restore of ${norm} failed: ${String(err)}`)
+        failed.push(norm)
       }
-      // Reload the affected service caches so the live write is reflected in-memory
-      // (and the renderer refreshes via the re-fired change event).
-      if (touchedMemory) this.onWorkspaceMemoryRestored?.()
-      if (touchedSessions) this.onSessionsRestored?.()
-      return { restored }
+    }
+    // Reload whatever WAS written (even on a partial batch) so the live store + the
+    // renderer reflect the recovery.
+    if (touchedMemory) this.onWorkspaceMemoryRestored?.()
+    if (touchedSessions) this.onSessionsRestored?.()
+    // Capture the post-restore state directly (immediate, sync) rather than depending
+    // solely on the reload-hook emit chain to re-trigger a snapshot.
+    if (restored.length) this.snapshot("after restore")
+    return { restored, failed }
+  }
+
+  /**
+   * Run any pending debounced snapshot SYNCHRONOUSLY — called on app quit so the most
+   * recent edit (the one most likely to be regretted) is captured before the 15s
+   * debounce window would otherwise drop it. Best-effort: never throws.
+   */
+  flush(): void {
+    try {
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer)
+        this.debounceTimer = null
+      }
+      this.snapshot("flush on quit")
     } catch (err) {
-      logWarn("localHistory", `restore failed: ${String(err)}`)
-      return { restored: [] }
+      logWarn("localHistory", `flush failed: ${String(err)}`)
     }
   }
 
@@ -332,10 +388,13 @@ export class LocalHistoryService {
       .filter((l) => l && this.isCuratedPath(l))
   }
 
-  /** True if a relative path is inside one of the curated subdirs (defense against a
-   *  caller asking to restore something outside the snapshot's intended scope). */
+  /** True ONLY for a real curated FILE path — `<curated-subdir>/<name>.json`, a single
+   *  segment, no `..` traversal. Rejects directory/tree paths (a trailing slash),
+   *  `..` escapes, and absolute paths, so a crafted restore `relPath` (reachable over
+   *  IPC/MCP) can never write OUTSIDE the store or OVER a directory inside it. */
   private isCuratedPath(relPath: string): boolean {
-    return CURATED_SUBDIRS.some((sub) => relPath.startsWith(`${sub}/`))
+    if (relPath.split("/").includes("..")) return false
+    return CURATED_SUBDIRS.some((sub) => new RegExp(`^${sub}/[^/]+\\.json$`).test(relPath))
   }
 
   /** Reveal the history repo dir for the OS file-manager affordance. */
