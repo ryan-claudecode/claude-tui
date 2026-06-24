@@ -117,20 +117,31 @@ function renderRuledOut(n: { text: string; correction?: string }): string {
 interface Unit {
   priority: number
   line: string
+  // CAPP-97 — the SOURCE identity of this unit, carried so the launch stamp can be built
+  // from ONLY the units that survived eviction (were actually injected). A finding evicted
+  // under the cap therefore stays "new/updated" in the later delta and is never lost.
+  wsSig?: string
+  sessionSig?: string
+  kind?: "instructions" | "summary"
+}
+
+interface InjectPlan {
+  units: Unit[]
+  /** Indices of `units` that survived eviction (were rendered into the payload). */
+  kept: Set<number>
+  omitted: number
+  session?: InjectSessionTier
+  header: string
 }
 
 /**
- * Build the auto-loaded context markdown for a fresh session, OR the short resume
- * pointer. Pure over the fetched input. Stays under `maxBytes` (default 8 KB) by
- * value-ordered eviction — pinned findings are never dropped. Renders an omission
- * marker when anything was dropped, signalling a `get_session_context` call.
- *
- * Returns "" when there is nothing to inject (empty workspace + session) on a fresh
- * spawn, so the caller can skip writing a file / adding the flag entirely.
+ * Assemble the priority-tagged units and run value-ordered eviction until the rendered
+ * whole fits `maxBytes`. Returns `null` when there is nothing durable to inject. SHARED by
+ * the renderer ({@link buildInjectedContext}) AND the launch stamp ({@link
+ * computeContextStamp}) so the stamp reflects EXACTLY the findings that were injected — not
+ * the uncapped input (which would silently drop evicted findings from the later delta).
  */
-export function buildInjectedContext(input: InjectContextInput, opts: BuildOptions = {}): string {
-  if (opts.resume) return RESUME_POINTER
-
+function planInject(input: InjectContextInput, opts: BuildOptions = {}): InjectPlan | null {
   const maxBytes = opts.maxBytes && opts.maxBytes > 0 ? opts.maxBytes : DEFAULT_INJECT_MAX_BYTES
 
   const header =
@@ -146,6 +157,7 @@ export function buildInjectedContext(input: InjectContextInput, opts: BuildOptio
     units.push({
       priority: 1,
       line: `## Workspace standing instructions\n${capText(instructions, INSTRUCTIONS_CAP)}`,
+      kind: "instructions",
     })
   }
 
@@ -159,40 +171,39 @@ export function buildInjectedContext(input: InjectContextInput, opts: BuildOptio
   const wsRuledOut = input.workspaceFindings.filter((f) => f.status === "ruled-out")
 
   // (0) pinned workspace findings — never evicted.
-  for (const f of wsPinned) units.push({ priority: 0, line: renderWorkspaceFinding(f) })
+  for (const f of wsPinned) units.push({ priority: 0, line: renderWorkspaceFinding(f), wsSig: signWorkspaceFinding(f) })
   // (3) active workspace findings (oldest first).
-  for (const f of wsUnpinned) units.push({ priority: 3, line: renderWorkspaceFinding(f) })
+  for (const f of wsUnpinned) units.push({ priority: 3, line: renderWorkspaceFinding(f), wsSig: signWorkspaceFinding(f) })
   // (6) ruled-out workspace findings — least valuable, dropped first.
-  for (const f of wsRuledOut) units.push({ priority: 6, line: renderWorkspaceFinding(f) })
+  for (const f of wsRuledOut) units.push({ priority: 6, line: renderWorkspaceFinding(f), wsSig: signWorkspaceFinding(f) })
 
   // (2) session summary
   const session = input.session
   if (session?.summary.trim()) {
-    units.push({ priority: 2, line: `__SESSION_SUMMARY__\n${capText(session.summary, INSTRUCTIONS_CAP)}` })
+    units.push({ priority: 2, line: `__SESSION_SUMMARY__\n${capText(session.summary, INSTRUCTIONS_CAP)}`, kind: "summary" })
   }
   // (4) session active notes (newest first — most recent reasoning).
   if (session) {
     for (const n of [...session.active].reverse()) {
-      units.push({ priority: 4, line: `- ${capText(n.text, FINDING_CAP)}` })
+      units.push({ priority: 4, line: `- ${capText(n.text, FINDING_CAP)}`, sessionSig: signSessionActive(n) })
     }
     // (5) session ruled-out
     for (const n of session.ruledOut) {
-      units.push({ priority: 5, line: renderRuledOut(n) })
+      units.push({ priority: 5, line: renderRuledOut(n), sessionSig: signSessionRuledOut(n) })
     }
   }
 
-  // Nothing durable at all → no payload (skip the file/flag).
-  if (units.length === 0) return ""
+  // Nothing durable at all → no plan (caller skips the file/flag + records no stamp).
+  if (units.length === 0) return null
 
   // ── value-ordered eviction until the rendered whole fits ──────────────────────
   // Keep is stable in build order; we only DROP, never reorder, so render order stays
   // logical. Drop the single highest-priority (least valuable) kept unit each pass.
   const kept = new Set<number>(units.map((_, i) => i))
   let omitted = 0
-  // A guard so the function always terminates even in a degenerate case.
+  // A guard so the loop always terminates even in a degenerate case.
   for (let guard = 0; guard <= units.length; guard++) {
-    const rendered = render(units, kept, omitted, session, header)
-    if (byteLength(rendered) <= maxBytes) return rendered
+    if (byteLength(render(units, kept, omitted, session, header)) <= maxBytes) break
     // Find the highest-priority (largest number) DROPPABLE (priority > 0) kept unit;
     // among equal priority, drop the LAST kept index (oldest-first survives for active
     // findings; newest-first survives for session notes — both already encoded by build
@@ -206,16 +217,30 @@ export function buildInjectedContext(input: InjectContextInput, opts: BuildOptio
         victim = i
       }
     }
-    if (victim === -1) {
-      // Only pinned units remain and they STILL overflow — emit them anyway (a pinned
-      // finding is never silently dropped; the cap is a soft guarantee against the
-      // un-pinned firehose, honest about the rare all-pinned overflow).
-      return render(units, kept, omitted, session, header)
-    }
+    // victim === -1: only pinned units remain and they STILL overflow — emit them anyway
+    // (a pinned finding is never silently dropped; the cap is a soft guarantee against the
+    // un-pinned firehose, honest about the rare all-pinned overflow).
+    if (victim === -1) break
     kept.delete(victim)
     omitted++
   }
-  return render(units, kept, omitted, session, header)
+  return { units, kept, omitted, session, header }
+}
+
+/**
+ * Build the auto-loaded context markdown for a fresh session, OR the short resume
+ * pointer. Pure over the fetched input. Stays under `maxBytes` (default 8 KB) by
+ * value-ordered eviction — pinned findings are never dropped. Renders an omission
+ * marker when anything was dropped, signalling a `get_session_context` call.
+ *
+ * Returns "" when there is nothing to inject (empty workspace + session) on a fresh
+ * spawn, so the caller can skip writing a file / adding the flag entirely.
+ */
+export function buildInjectedContext(input: InjectContextInput, opts: BuildOptions = {}): string {
+  if (opts.resume) return RESUME_POINTER
+  const plan = planInject(input, opts)
+  if (!plan) return ""
+  return render(plan.units, plan.kept, plan.omitted, plan.session, plan.header)
 }
 
 /**
@@ -311,12 +336,33 @@ export function buildSessionInject(
   opts: { resume: boolean; maxBytes?: number },
   deps: SessionInjectDeps,
 ): string {
+  return buildSessionInjectWithStamp(sessionId, opts, deps).payload
+}
+
+/**
+ * CAPP-97 — the spawn-wiring primitive: the inject `payload` AND the launch `stamp` to
+ * record, computed together from ONE assembly so they can never disagree. The single
+ * tested source of three load-bearing rules:
+ *   • RESUME spawn → only the short pointer, NO stamp (nothing to diff against).
+ *   • EMPTY brain → "" payload, NO stamp (so a later get_session_context returns the FULL
+ *     primer, never a false "no durable changes" over a spawn that loaded nothing).
+ *   • a finding EVICTED under `maxBytes` → absent from the stamp (it was never injected), so
+ *     the later delta surfaces it rather than swallowing it.
+ * The caller records `stamp` (when present) keyed by the spawning terminal's id.
+ */
+export function buildSessionInjectWithStamp(
+  sessionId: string | undefined,
+  opts: { resume: boolean; maxBytes?: number },
+  deps: SessionInjectDeps,
+): { payload: string; stamp?: ContextStamp } {
   if (opts.resume) {
-    return buildInjectedContext({ instructions: "", workspaceFindings: [] }, { resume: true })
+    return { payload: buildInjectedContext({ instructions: "", workspaceFindings: [] }, { resume: true }) }
   }
   const input = assembleInjectInput(sessionId, deps)
-  if (!input) return ""
-  return buildInjectedContext(input, { resume: false, maxBytes: opts.maxBytes })
+  if (!input) return { payload: "" }
+  const payload = buildInjectedContext(input, { resume: false, maxBytes: opts.maxBytes })
+  if (!payload) return { payload: "" }
+  return { payload, stamp: computeContextStamp(input, { maxBytes: opts.maxBytes }) }
 }
 
 /**
@@ -385,15 +431,22 @@ function signSessionRuledOut(n: { text: string; correction?: string }): string {
   return `ruled-out ${n.text.trim()} ${(n.correction ?? "").trim()}`
 }
 
-/** Compute the launch stamp from the SAME assembled input the inject rendered. */
-export function computeContextStamp(input: InjectContextInput): ContextStamp {
+/**
+ * Compute the launch stamp from the SAME assembled input the inject rendered — and,
+ * crucially, ONLY from the units that SURVIVED eviction under `opts.maxBytes` (what was
+ * actually injected). A finding dropped by the cap at spawn is therefore absent from the
+ * stamp, so the later {@link buildContextDelta} surfaces it as "new/updated" rather than
+ * silently swallowing it. An empty plan (nothing durable) yields an empty stamp.
+ */
+export function computeContextStamp(input: InjectContextInput, opts: BuildOptions = {}): ContextStamp {
+  const plan = planInject(input, opts)
+  if (!plan) return { instructions: "", summary: "", workspaceSignatures: [], sessionSignatures: [] }
+  const keptUnits = [...plan.kept].map((i) => plan.units[i])
   return {
-    instructions: input.instructions.trim(),
-    summary: input.session?.summary.trim() ?? "",
-    workspaceSignatures: input.workspaceFindings.map(signWorkspaceFinding),
-    sessionSignatures: input.session
-      ? [...input.session.active.map(signSessionActive), ...input.session.ruledOut.map(signSessionRuledOut)]
-      : [],
+    instructions: keptUnits.some((u) => u.kind === "instructions") ? input.instructions.trim() : "",
+    summary: keptUnits.some((u) => u.kind === "summary") ? (input.session?.summary.trim() ?? "") : "",
+    workspaceSignatures: keptUnits.flatMap((u) => (u.wsSig ? [u.wsSig] : [])),
+    sessionSignatures: keptUnits.flatMap((u) => (u.sessionSig ? [u.sessionSig] : [])),
   }
 }
 

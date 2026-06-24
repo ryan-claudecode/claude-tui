@@ -501,6 +501,51 @@ describe("SessionService.getContext — CAPP-97 launch-delta", () => {
     expect(ctx).toContain("# Session:")
     expect(ctx).toContain("f1")
   })
+
+  it("closeTerminal clears the launch stamp (a REAL teardown path, not just removeTerminal)", () => {
+    const { svc, sessionId, terminalId } = setup()
+    svc.addNote(sessionId, "f1")
+    recordStampNow(svc, sessionId, terminalId)
+    expect(svc.hasLaunchStamp(terminalId)).toBe(true)
+    svc.closeTerminal(sessionId, terminalId)
+    expect(svc.hasLaunchStamp(terminalId)).toBe(false)
+  })
+
+  it("killSession clears every terminal's launch stamp (no map leak on the real teardown path)", () => {
+    const { svc, sessionId, terminalId } = setup()
+    svc.addNote(sessionId, "f1")
+    recordStampNow(svc, sessionId, terminalId)
+    expect(svc.hasLaunchStamp(terminalId)).toBe(true)
+    svc.killSession(sessionId)
+    expect(svc.hasLaunchStamp(terminalId)).toBe(false)
+  })
+
+  it("the delta path STILL appends the gated 'Related from other sessions' block (it is pull-only, never injected)", () => {
+    const svc = new SessionService({
+      dir,
+      now: () => 1000,
+      primerRecallEnabled: () => true,
+      recallRelated: () => [{ text: "cross-session insight", sessionName: "Other", status: "active" as const }],
+    })
+    const s = svc.create()
+    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "idle" })
+    svc.setInjectInputResolver((sessionId) => {
+      if (!sessionId) return undefined
+      const sections = svc.getSessionContextSections(sessionId)
+      return sections ? { instructions: "", workspaceFindings: [], session: sections } : undefined
+    })
+    svc.setSummary(s.id, "Goal: ship it")
+    svc.addNote(s.id, "the only finding")
+    // Stamp recorded with nothing changing after → the delta CORE is "no changes"…
+    const sections = svc.getSessionContextSections(s.id)!
+    svc.recordLaunchStamp("t1", computeContextStamp({ instructions: "", workspaceFindings: [], session: sections }))
+
+    const delta = svc.getContext(s.id, "t1")!
+    expect(delta).toContain("No durable changes since launch")
+    // …but the pull-only Related block must still ride on it (an opt-in user mustn't lose it).
+    expect(delta).toContain("## Related from other sessions")
+    expect(delta).toContain("cross-session insight")
+  })
 })
 
 describe("SessionService terminal activity & state", () => {

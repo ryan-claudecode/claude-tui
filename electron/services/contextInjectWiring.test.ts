@@ -15,7 +15,14 @@ import {
 import { SessionService } from "./sessions"
 import { WorkspaceMemoryService } from "./workspaceMemory"
 import { RecallService } from "./recall"
-import { buildInjectedContext, buildSessionInject } from "./contextInject"
+import {
+  buildInjectedContext,
+  buildSessionInject,
+  buildSessionInjectWithStamp,
+  buildContextDelta,
+  NO_DELTA_HEADER,
+  type SessionInjectDeps,
+} from "./contextInject"
 
 vi.mock("../log", () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
@@ -221,5 +228,54 @@ describe("CAPP-96 wiring — file-backed inject + scope", () => {
     )
     xtermSvc.createXterm("t", homeDir, s.id)
     expect(xtermSpawned.at(-1)!.args.join(" ")).toContain("--append-system-prompt-file")
+  })
+})
+
+/**
+ * CAPP-97 review fixes — `buildSessionInjectWithStamp` is the SINGLE source for "what to
+ * inject AND what to stamp", so the stamp can never disagree with the payload: resume /
+ * empty → no stamp; a finding evicted under the cap stays out of the stamp (→ surfaces in
+ * the later delta, never lost).
+ */
+describe("buildSessionInjectWithStamp — payload/stamp agreement (CAPP-97)", () => {
+  const deps = (over: Partial<SessionInjectDeps> = {}): SessionInjectDeps => ({
+    workspaceIdOf: () => "ws-A",
+    getInstructions: () => "",
+    workspaceTierEntries: () => [],
+    getSessionSections: () => undefined,
+    ...over,
+  })
+
+  it("a RESUME spawn yields the short pointer and NO stamp", () => {
+    const out = buildSessionInjectWithStamp("s1", { resume: true }, deps())
+    expect(out.payload).toContain("Durable context may have changed")
+    expect(out.stamp).toBeUndefined()
+  })
+
+  it("an EMPTY brain yields no payload and NO stamp (later pull → full primer, not 'no changes')", () => {
+    const out = buildSessionInjectWithStamp("s1", { resume: false }, deps())
+    expect(out.payload).toBe("")
+    expect(out.stamp).toBeUndefined()
+  })
+
+  it("a non-empty brain stamps ONLY the injected survivors → an evicted finding surfaces in the delta", () => {
+    const big = "y".repeat(300)
+    const entries = [
+      { text: `A ${big}`, status: "active" as const, createdAt: 1 },
+      { text: `B ${big}`, status: "active" as const, createdAt: 2 },
+    ]
+    const d = deps({ workspaceTierEntries: () => entries })
+    const out = buildSessionInjectWithStamp("s1", { resume: false, maxBytes: 400 }, d)
+    expect(out.payload).toContain("omitted") // one finding evicted at spawn
+    expect(out.stamp).toBeDefined()
+    // The evicted finding was never injected → it is NOT in the stamp → the delta surfaces it
+    // even though nothing changed since launch.
+    const currentInput = {
+      instructions: "",
+      workspaceFindings: entries.map((e) => ({ text: e.text, status: e.status, createdAt: e.createdAt })),
+    }
+    const delta = buildContextDelta(currentInput, out.stamp!)
+    expect(delta).not.toBe(NO_DELTA_HEADER)
+    expect(delta).toContain("# Context updates since launch")
   })
 })

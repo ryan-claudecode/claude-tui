@@ -226,6 +226,34 @@ describe("computeContextStamp + buildContextDelta (CAPP-97)", () => {
     expect(delta).toContain("Refresh tokens rotate")
   })
 
+  it("a finding EVICTED under the cap at launch is NOT in the stamp → it surfaces in the delta", () => {
+    // A tiny cap forces eviction of the lower-priority (unpinned, oldest) finding at launch.
+    // The stamp must reflect only what was INJECTED, so the evicted finding stays "new" in
+    // the delta and is never silently lost (the launch payload literally told the agent to
+    // call get_session_context to see the omitted findings).
+    const big = "x".repeat(300)
+    const a = wf(`A FIRST ${big}`, { createdAt: 1 })
+    const b = wf(`B SECOND ${big}`, { createdAt: 2 })
+    const input: InjectContextInput = { instructions: "", workspaceFindings: [a, b] }
+    const opts = { maxBytes: 400 } // only one finding fits
+
+    const payload = buildInjectedContext(input, opts)
+    expect(payload).toContain("omitted") // at least one finding evicted at launch
+    const stamp = computeContextStamp(input, opts) // SAME cap → stamp only the survivors
+
+    // Nothing actually changed since launch, but a finding that was EVICTED was never
+    // injected → the delta must surface it (NOT claim "no durable changes").
+    const delta = buildContextDelta(input, stamp)
+    expect(delta).not.toBe(NO_DELTA_HEADER)
+    expect(delta).toContain("# Context updates since launch")
+    // Robust to 1 or 2 evictions: every NOT-injected finding is surfaced by the delta;
+    // every injected one is not re-emitted.
+    for (const marker of ["A FIRST", "B SECOND"]) {
+      if (payload.includes(marker)) expect(delta).not.toContain(marker)
+      else expect(delta).toContain(marker)
+    }
+  })
+
   it("surfaces a newly ruled-out finding (a status flip reads as a changed signature)", () => {
     // Launch: an ACTIVE finding. Current: it's now ruled-out → its signature changed.
     const launch: InjectContextInput = {

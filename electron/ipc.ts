@@ -20,9 +20,8 @@ import { SessionService } from "./services/sessions"
 import { RecallService, primerHitEligible } from "./services/recall"
 import { WorkspaceMemoryService } from "./services/workspaceMemory"
 import {
-  buildSessionInject,
+  buildSessionInjectWithStamp,
   assembleInjectInput,
-  computeContextStamp,
   type SessionInjectDeps,
 } from "./services/contextInject"
 import { resolveInjectMaxBytes } from "./config"
@@ -253,8 +252,8 @@ export async function setupIpc(win: BrowserWindow) {
 
   // CAPP-96 — auto-load the durable "brain" into every freshly-spawned session via a
   // file-backed --append-system-prompt-file (a seam our stream-json reducer provably
-  // never surfaces). The assembly lives in `buildSessionInject` (contextInject.ts) so the
-  // SAME logic is unit-tested rather than re-implemented here; this closure only injects
+  // never surfaces). The assembly lives in `buildSessionInjectWithStamp` (contextInject.ts) so
+  // the SAME logic is unit-tested rather than re-implemented here; this closure only injects
   // the live services. It is SCOPED off the SPAWNING session's own workspaceId (NEVER
   // getActiveId — a session spawned while a different workspace is active injects ITS OWN
   // brain), reads the WARMED RecallService index + the WorkspaceMemoryService cache (the
@@ -270,15 +269,14 @@ export async function setupIpc(win: BrowserWindow) {
     getSessionSections: (id) => workSessionService.getSessionContextSections(id),
   }
   sessionService.setContextBuilder((sessionId, { resume, terminalId }) => {
-    // CAPP-97 — on a FRESH spawn, record the launch STAMP keyed by THIS terminalId from the
-    // SAME assembled input the payload renders, so a later get_session_context for this
-    // terminal returns only the delta. A resume spawn injects only the short pointer (no
-    // snapshot to diff against) → no stamp recorded → the pull degrades to the full primer.
-    if (!resume) {
-      const input = assembleInjectInput(sessionId, injectDeps)
-      if (input) workSessionService.recordLaunchStamp(terminalId, computeContextStamp(input))
-    }
-    return buildSessionInject(sessionId, { resume, maxBytes: resolveInjectMaxBytes(loadConfig()) }, injectDeps)
+    // CAPP-97 — one assembly yields BOTH the payload and the launch stamp to record (keyed by
+    // THIS terminalId), so the later get_session_context delta diffs against EXACTLY what was
+    // injected. The helper owns the rules: resume / empty brain → no stamp (the pull degrades
+    // to the FULL primer); a finding evicted under the cap stays "new" in the delta.
+    const maxBytes = resolveInjectMaxBytes(loadConfig())
+    const { payload, stamp } = buildSessionInjectWithStamp(sessionId, { resume, maxBytes }, injectDeps)
+    if (stamp) workSessionService.recordLaunchStamp(terminalId, stamp)
+    return payload
   })
   // CAPP-97 — the delta resolver: re-assemble the CURRENT auto-load input for a session
   // (same deps) so getContext can diff it against the recorded launch stamp.

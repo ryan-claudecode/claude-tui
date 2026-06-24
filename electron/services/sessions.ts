@@ -573,6 +573,7 @@ export class SessionService {
     if (!s) return
     const closed = s.terminals.find((t) => t.id === terminalId)
     this.terminals?.kill(terminalId)
+    this.clearLaunchStamp(terminalId) // CAPP-97 — the terminal is gone; drop its launch stamp.
     s.terminals = s.terminals.filter((t) => t.id !== terminalId)
     s.status = s.terminals.some((t) => t.lastState === "active" || t.lastState === "idle") ? "active" : "stopped"
     if (closed) this.logEvent(s, "retire", `Closed terminal "${closed.name}"`, terminalId)
@@ -584,7 +585,10 @@ export class SessionService {
   killSession(sessionId: string): void {
     const s = this.sessions.get(sessionId)
     if (!s) return
-    for (const t of s.terminals) this.terminals?.kill(t.id)
+    for (const t of s.terminals) {
+      this.terminals?.kill(t.id)
+      this.clearLaunchStamp(t.id) // CAPP-97 — drop each terminal's launch stamp.
+    }
     this.sessions.delete(sessionId)
     this.summaryDirty.delete(sessionId)
     this.lastFlushAt.delete(sessionId)
@@ -645,6 +649,7 @@ export class SessionService {
       : this.terminals.create(undefined, old.cwd, s.id)
     s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: info.state as TerminalRef["lastState"], engine: info.engine, model: info.model, effort: info.effort })
     this.terminals.kill(terminalId)
+    this.clearLaunchStamp(terminalId) // CAPP-97 — the retired terminal's id is dead; drop its stamp.
     old.lastState = "dead"
     s.status = "active"
     this.logEvent(s, "handoff", `Handoff: retired "${old.name}", continued in "${info.name}"`, info.id)
@@ -670,6 +675,7 @@ export class SessionService {
     // the xterm path ignores it. CAPP-46: re-pass the persisted `effort` the same
     // way (undefined → the resume spawn omits `--effort`, byte-unchanged default).
     const info = this.terminals.create(ref.name, ref.cwd, s.id, ref.ccConversationId, ref.model, ref.effort)
+    this.clearLaunchStamp(terminalId) // CAPP-97 — the ref's id is being replaced; drop the old stamp.
     ref.id = info.id
     // BO-4b: reopen re-derives the engine (create() routes to the headless path
     // when the engine config is structured) and honors the spawn's state, so a
@@ -1398,7 +1404,13 @@ export class SessionService {
     // CAPP-97 delta path — only when this terminal has a launch stamp to diff against.
     if (terminalId && this.hasLaunchStamp(terminalId)) {
       const delta = this.getContextDelta(terminalId)
-      if (delta !== undefined) return delta
+      if (delta !== undefined) {
+        // The "## Related from other sessions" block is pull-only — it is NEVER injected at
+        // launch, so it isn't double-loaded and MUST ride on the delta too, else an opt-in
+        // primerRecall user loses it entirely on the structured-spawn path.
+        const related = this.renderRelatedBlock(s)
+        return related ? `${delta}\n\n${related}` : delta
+      }
     }
     const sections = this.getSessionContextSections(sessionId)!
     const parts: string[] = []
@@ -1416,37 +1428,45 @@ export class SessionService {
       parts.push(`## Ruled out / corrected\n` + lines.join("\n"))
     }
 
-    // CAPP-86 — GATED primer enrichment (default OFF → byte-identical primer). When
-    // the owner has opted in (config.context.primerRecall) AND a recall seam is
-    // wired, append a capped "## Related from other sessions" block of cross-session
-    // hits keyed off this session's name + summary, so a fresh terminal inherits
-    // relevant knowledge from OTHER sessions. Ruled-out hits keep the same
-    // `~~old~~ → new` correction-arrow rendering as the section above.
-    if (this.recallRelated && this.primerRecallEnabled()) {
-      const query = `${s.name} ${s.summary}`.trim()
-      if (query) {
-        const related = this.recallRelated({
-          sessionId: s.id,
-          workspaceId: s.workspaceId,
-          query,
-          limit: 3,
-        })
-        if (related.length) {
-          const lines = related.map((r) => {
-            const text =
-              r.status === "ruled-out"
-                ? r.correction
-                  ? `~~${r.text}~~ → ${r.correction}`
-                  : `~~${r.text}~~`
-                : r.text
-            return `- ${text} _(from "${r.sessionName}")_`
-          })
-          parts.push(`## Related from other sessions\n` + lines.join("\n"))
-        }
-      }
-    }
+    // CAPP-86 — GATED primer enrichment (default OFF → byte-identical primer). Shared with
+    // the CAPP-97 delta path (renderRelatedBlock) so an opt-in user gets the cross-session
+    // block on BOTH the full primer and the delta.
+    const related = this.renderRelatedBlock(s)
+    if (related) parts.push(related)
 
     return parts.join("\n\n")
+  }
+
+  /**
+   * CAPP-86 — the GATED "## Related from other sessions" block (default OFF → undefined).
+   * When the owner has opted in (config.context.primerRecall) AND a recall seam is wired,
+   * returns a capped block of cross-session hits keyed off this session's name + summary, so
+   * a terminal inherits relevant knowledge from OTHER sessions. Ruled-out hits keep the same
+   * `~~old~~ → new` correction-arrow rendering as the session's own ruled-out section.
+   * Extracted (CAPP-97) so it rides on BOTH the full primer AND the launch-delta — it is
+   * pull-only (never injected at spawn), so it is never double-loaded.
+   */
+  private renderRelatedBlock(s: WorkSession): string | undefined {
+    if (!this.recallRelated || !this.primerRecallEnabled()) return undefined
+    const query = `${s.name} ${s.summary}`.trim()
+    if (!query) return undefined
+    const related = this.recallRelated({
+      sessionId: s.id,
+      workspaceId: s.workspaceId,
+      query,
+      limit: 3,
+    })
+    if (!related.length) return undefined
+    const lines = related.map((r) => {
+      const text =
+        r.status === "ruled-out"
+          ? r.correction
+            ? `~~${r.text}~~ → ${r.correction}`
+            : `~~${r.text}~~`
+          : r.text
+      return `- ${text} _(from "${r.sessionName}")_`
+    })
+    return `## Related from other sessions\n` + lines.join("\n")
   }
 
   /**
