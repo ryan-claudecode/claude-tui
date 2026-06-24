@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync
 import { join } from "path"
 import { tmpdir } from "os"
 import { SessionService } from "./sessions"
+import { computeContextStamp } from "./contextInject"
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "ctui-sess-")) })
@@ -419,6 +420,86 @@ describe("SessionService.getContext", () => {
     expect(ctx).toContain('_(from "DB work")_')
     // ruled-out hit keeps the ~~old~~ → new correction-arrow rendering
     expect(ctx).toContain("~~the cache is the bottleneck~~ → it's the serializer")
+  })
+})
+
+/**
+ * CAPP-97 — get_session_context returns the DELTA vs the launch snapshot for a terminal
+ * that has a recorded launch stamp (the curated brain was auto-loaded at spawn). A
+ * terminal with NO stamp degrades to the FULL primer (byte-identical to pre-CAPP-97).
+ */
+describe("SessionService.getContext — CAPP-97 launch-delta", () => {
+  /** Build a session with one registered terminal + the inject-input resolver wired off
+   *  the live session sections (no workspace tier, which is enough to exercise the delta). */
+  function setup() {
+    const svc = new SessionService({ dir, now: () => 1000 })
+    const s = svc.create()
+    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "idle" })
+    // The resolver re-assembles the CURRENT auto-load input from the live session sections.
+    svc.setInjectInputResolver((sessionId) => {
+      if (!sessionId) return undefined
+      const sections = svc.getSessionContextSections(sessionId)
+      return sections ? { instructions: "", workspaceFindings: [], session: sections } : undefined
+    })
+    return { svc, sessionId: s.id, terminalId: "t1" }
+  }
+
+  /** Compute + record the launch stamp from the CURRENT state (simulating spawn-time inject). */
+  function recordStampNow(svc: SessionService, sessionId: string, terminalId: string) {
+    const sections = svc.getSessionContextSections(sessionId)!
+    svc.recordLaunchStamp(
+      terminalId,
+      computeContextStamp({ instructions: "", workspaceFindings: [], session: sections }),
+    )
+  }
+
+  it("a terminal with NO launch stamp gets the FULL primer (byte-identical to today)", () => {
+    const { svc, sessionId, terminalId } = setup()
+    svc.setSummary(sessionId, "Goal: ship it")
+    svc.addNote(sessionId, "a finding")
+    // No stamp recorded → full primer, exactly equal to the no-terminalId call.
+    const full = svc.getContext(sessionId)!
+    const withTid = svc.getContext(sessionId, terminalId)!
+    expect(withTid).toBe(full)
+    expect(withTid).toContain("# Session:")
+    expect(withTid).toContain("a finding")
+  })
+
+  it("with a stamp + a NEW finding since launch, returns only the delta", () => {
+    const { svc, sessionId, terminalId } = setup()
+    svc.setSummary(sessionId, "Goal: ship it")
+    svc.addNote(sessionId, "finding at launch")
+    recordStampNow(svc, sessionId, terminalId)
+
+    // A new finding lands AFTER launch.
+    svc.addNote(sessionId, "discovered after launch")
+
+    const delta = svc.getContext(sessionId, terminalId)!
+    expect(delta).toContain("# Context updates since launch")
+    expect(delta).toContain("discovered after launch")
+    // The launch-time finding is NOT re-loaded.
+    expect(delta).not.toContain("finding at launch")
+  })
+
+  it("with a stamp and NOTHING changed since launch, returns the stable 'no changes' header", () => {
+    const { svc, sessionId, terminalId } = setup()
+    svc.setSummary(sessionId, "Goal: ship it")
+    svc.addNote(sessionId, "the only finding")
+    recordStampNow(svc, sessionId, terminalId)
+
+    const delta = svc.getContext(sessionId, terminalId)!
+    expect(delta).toContain("No durable changes since launch")
+    expect(delta).not.toContain("the only finding")
+  })
+
+  it("clearing the stamp (terminal removed) reverts to the FULL primer", () => {
+    const { svc, sessionId, terminalId } = setup()
+    svc.addNote(sessionId, "f1")
+    recordStampNow(svc, sessionId, terminalId)
+    svc.removeTerminal(sessionId, terminalId) // drops the stamp
+    const ctx = svc.getContext(sessionId, terminalId)!
+    expect(ctx).toContain("# Session:")
+    expect(ctx).toContain("f1")
   })
 })
 

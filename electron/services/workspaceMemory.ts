@@ -293,6 +293,27 @@ export class WorkspaceMemoryService {
     return true
   }
 
+  /**
+   * Pin/unpin a finding (CAPP-97 / sub-feature 2 — surfacing the CAPP-96 `pinned`
+   * field in the editor). A pinned finding is the ONLY thing never evicted under the
+   * auto-load context cap ({@link buildInjectedContext}). Idempotent: setting the
+   * value it already has still goes through `persistAndEmit` so the change seam fires
+   * and an open editor panel live-refreshes (the panel is a thin view of the record).
+   * Returns false if the finding isn't found.
+   */
+  setPinned(workspaceId: string | null, findingId: string, pinned: boolean): boolean {
+    const key = this.keyFor(workspaceId)
+    const record = this.loadOrCreate(key)
+    const finding = record.findings.find((f) => f.id === findingId)
+    if (!finding) return false
+    // Keep the file clean: store `true`, drop the key entirely when unpinned (matches
+    // the additive-OPTIONAL field posture — an unpinned finding has no `pinned` key).
+    if (pinned) finding.pinned = true
+    else delete finding.pinned
+    this.persistAndEmit(key, record)
+    return true
+  }
+
   /** Remove a finding. Returns false if the finding isn't found. */
   deleteFinding(workspaceId: string | null, findingId: string): boolean {
     const key = this.keyFor(workspaceId)

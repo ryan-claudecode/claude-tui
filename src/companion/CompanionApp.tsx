@@ -97,6 +97,12 @@ declare global {
         workspaceId: string | null,
         findingId: string,
       ) => Promise<boolean>
+      // CAPP-97 — pin/unpin a finding (never evicted under the auto-load context cap).
+      setWorkspaceFindingPinned: (
+        workspaceId: string | null,
+        findingId: string,
+        pinned: boolean,
+      ) => Promise<boolean>
       onWorkspaceMemoryChanged: (cb: (workspaceId: string) => void) => () => void
       // CAPP-94 / U6 — promote a session's findings into its OWNING workspace memory
       // (the SessionOverviewPanel "Push context to workspace" button). The owning

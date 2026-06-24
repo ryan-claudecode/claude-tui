@@ -247,6 +247,15 @@ describe("WS-B/H workspace-handlers", () => {
       expect(mem.getMemory("ws-1").findings).toHaveLength(0)
     })
 
+    it("workspace:set-pinned pins/unpins a finding and returns true (false for unknown id) — CAPP-97", () => {
+      const finding = call<{ id: string }>("workspace:add-finding", "ws-1", "load-bearing", "agent")
+      expect(call<boolean>("workspace:set-pinned", "ws-1", finding.id, true)).toBe(true)
+      expect(mem.getMemory("ws-1").findings[0].pinned).toBe(true)
+      expect(call<boolean>("workspace:set-pinned", "ws-1", finding.id, false)).toBe(true)
+      expect(mem.getMemory("ws-1").findings[0].pinned).toBeUndefined()
+      expect(call<boolean>("workspace:set-pinned", "ws-1", "ghost", true)).toBe(false)
+    })
+
     it("workspace:promote-findings re-mints + appends the entries to the workspace", () => {
       const promoted = call<Array<{ id: string; originNoteId?: string; text: string }>>(
         "workspace:promote-findings",

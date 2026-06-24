@@ -140,6 +140,12 @@ declare global {
         text: string,
       ) => Promise<boolean>
       deleteWorkspaceFinding: (workspaceId: string | null, findingId: string) => Promise<boolean>
+      // CAPP-97 — pin/unpin a finding (never evicted under the auto-load context cap).
+      setWorkspaceFindingPinned: (
+        workspaceId: string | null,
+        findingId: string,
+        pinned: boolean,
+      ) => Promise<boolean>
       promoteWorkspaceFindings: (
         workspaceId: string | null,
         entries: PromoteEntry[],

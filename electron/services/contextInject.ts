@@ -314,7 +314,24 @@ export function buildSessionInject(
   if (opts.resume) {
     return buildInjectedContext({ instructions: "", workspaceFindings: [] }, { resume: true })
   }
-  if (!sessionId) return ""
+  const input = assembleInjectInput(sessionId, deps)
+  if (!input) return ""
+  return buildInjectedContext(input, { resume: false, maxBytes: opts.maxBytes })
+}
+
+/**
+ * CAPP-97 — assemble the structured {@link InjectContextInput} for a fresh spawn from
+ * the live-service deps, extracted so BOTH the inject payload ({@link buildSessionInject})
+ * AND the launch STAMP ({@link computeContextStamp}) read the EXACT same source. Returns
+ * `undefined` when there's no sessionId (a bare spawn injects nothing → no stamp). This is
+ * the single assembly point so the delta can never compare against a differently-shaped
+ * snapshot than what was injected.
+ */
+export function assembleInjectInput(
+  sessionId: string | undefined,
+  deps: SessionInjectDeps,
+): InjectContextInput | undefined {
+  if (!sessionId) return undefined
   const workspaceId = deps.workspaceIdOf(sessionId)
   const workspaceFindings: InjectWorkspaceFinding[] = deps.workspaceTierEntries(workspaceId).map((e) => ({
     text: e.text,
@@ -323,12 +340,122 @@ export function buildSessionInject(
     createdAt: e.createdAt,
     ...(e.pinned ? { pinned: true } : {}),
   }))
-  return buildInjectedContext(
-    {
-      instructions: deps.getInstructions(workspaceId ?? null),
-      workspaceFindings,
-      session: deps.getSessionSections(sessionId),
-    },
-    { resume: false, maxBytes: opts.maxBytes },
-  )
+  return {
+    instructions: deps.getInstructions(workspaceId ?? null),
+    workspaceFindings,
+    session: deps.getSessionSections(sessionId),
+  }
+}
+
+// ── CAPP-97 — get_session_context DELTA vs the launch snapshot ──────────────────────
+
+/**
+ * A launch-snapshot STAMP for one terminal: enough to compute, on a later
+ * `get_session_context`, ONLY what changed since the curated brain was auto-loaded at
+ * spawn — so the pull doesn't re-load the same bytes the inject already pushed.
+ *
+ * It is the set of finding SIGNATURES that went in (a signature folds text + status +
+ * correction, so an EDIT or a RULE-OUT both register as a change), plus the
+ * instructions + summary strings (compared whole). Persisted per-terminal (keyed by the
+ * SAME terminalId the inject wrote `<tid>.md` under) for the life of the terminal. A
+ * terminal with NO stamp (xterm legacy, inject disabled, resume pointer, pre-existing
+ * session) is the default-safe branch — `get_session_context` returns the FULL primer.
+ */
+export interface ContextStamp {
+  /** The workspace standing instructions at launch (compared whole). */
+  instructions: string
+  /** The session summary at launch (compared whole). "" when there was no session tier. */
+  summary: string
+  /** Signatures of every workspace finding present at launch. */
+  workspaceSignatures: string[]
+  /** Signatures of every session finding (active + ruled-out) present at launch. */
+  sessionSignatures: string[]
+}
+
+/** Fold a finding into a stable signature so text edits / status flips / correction
+ *  changes all read as "changed". Newline-delimited fields (findings never contain a
+ *  raw NUL, and text is trimmed) keep the parts unambiguous. */
+function signWorkspaceFinding(f: InjectWorkspaceFinding): string {
+  return `${f.status} ${f.text.trim()} ${(f.correction ?? "").trim()}`
+}
+function signSessionActive(n: { text: string }): string {
+  return `active ${n.text.trim()} `
+}
+function signSessionRuledOut(n: { text: string; correction?: string }): string {
+  return `ruled-out ${n.text.trim()} ${(n.correction ?? "").trim()}`
+}
+
+/** Compute the launch stamp from the SAME assembled input the inject rendered. */
+export function computeContextStamp(input: InjectContextInput): ContextStamp {
+  return {
+    instructions: input.instructions.trim(),
+    summary: input.session?.summary.trim() ?? "",
+    workspaceSignatures: input.workspaceFindings.map(signWorkspaceFinding),
+    sessionSignatures: input.session
+      ? [...input.session.active.map(signSessionActive), ...input.session.ruledOut.map(signSessionRuledOut)]
+      : [],
+  }
+}
+
+/** The stable header returned when nothing durable changed since launch. */
+export const NO_DELTA_HEADER =
+  "# Context for this session\n" +
+  "> No durable changes since launch — the curated context was auto-loaded at spawn."
+
+/**
+ * Render the DELTA between the CURRENT assembled context and the launch `stamp`: only
+ * new/edited workspace + session findings (a changed signature), ruled-out findings that
+ * weren't ruled-out at launch (their changed signature already counts as new), and the
+ * summary/instructions ONLY when they changed. When nothing changed, returns
+ * {@link NO_DELTA_HEADER}. Reuses the inject renderers ({@link renderWorkspaceFinding} /
+ * {@link renderRuledOut}) so a finding reads identically in the delta and the launch payload.
+ *
+ * Pure over (current input, stamp) — the wiring layer fetches the current input from the
+ * same deps and looks up the stamp by terminalId.
+ */
+export function buildContextDelta(input: InjectContextInput, stamp: ContextStamp): string {
+  const launchWs = new Set(stamp.workspaceSignatures)
+  const launchSession = new Set(stamp.sessionSignatures)
+
+  const parts: string[] = [
+    "# Context updates since launch\n" +
+      "> The curated context below was auto-loaded at spawn — only what CHANGED since is shown here.",
+  ]
+
+  // Instructions — show only when the whole string changed.
+  const instructions = input.instructions.trim()
+  if (instructions && instructions !== stamp.instructions) {
+    parts.push(`## Workspace standing instructions (changed)\n${capText(instructions, INSTRUCTIONS_CAP)}`)
+  }
+
+  // Workspace findings new/edited since launch (signature not in the launch set).
+  const wsNew = input.workspaceFindings.filter((f) => !launchWs.has(signWorkspaceFinding(f)))
+  if (wsNew.length) {
+    parts.push(`## Durable workspace findings (new/updated)\n${wsNew.map(renderWorkspaceFinding).join("\n")}`)
+  }
+
+  // Session tier — summary changed + new/edited findings.
+  const session = input.session
+  const sessionParts: string[] = []
+  if (session) {
+    const summary = session.summary.trim()
+    if (summary && summary !== stamp.summary) {
+      sessionParts.push(`### Summary (changed)\n${capText(summary, INSTRUCTIONS_CAP)}`)
+    }
+    const activeNew = session.active.filter((n) => !launchSession.has(signSessionActive(n)))
+    if (activeNew.length) {
+      sessionParts.push(`### Findings (new/updated)\n${activeNew.map((n) => `- ${capText(n.text, FINDING_CAP)}`).join("\n")}`)
+    }
+    const ruledNew = session.ruledOut.filter((n) => !launchSession.has(signSessionRuledOut(n)))
+    if (ruledNew.length) {
+      sessionParts.push(`### Ruled out / corrected (new/updated)\n${ruledNew.map(renderRuledOut).join("\n")}`)
+    }
+  }
+  if (sessionParts.length) {
+    parts.push([`## This session: ${session!.name}`, ...sessionParts].join("\n\n"))
+  }
+
+  // Nothing changed → the stable "no changes" header (so the agent doesn't re-load bytes).
+  if (parts.length === 1) return NO_DELTA_HEADER
+  return parts.join("\n\n")
 }

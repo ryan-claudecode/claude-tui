@@ -106,6 +106,13 @@ export function registerWorkspaceHandlers(deps: {
     (_e, workspaceId: string | null, findingId: string) =>
       workspaceMemoryService.deleteFinding(workspaceId, findingId),
   )
+  // CAPP-97 — pin/unpin a finding (surfacing CAPP-96's `pinned` field in the editor).
+  // A pinned finding is the only thing never evicted under the auto-load context cap.
+  ipcMain.handle(
+    "workspace:set-pinned",
+    (_e, workspaceId: string | null, findingId: string, pinned: boolean) =>
+      workspaceMemoryService.setPinned(workspaceId, findingId, pinned),
+  )
   ipcMain.handle(
     "workspace:promote-findings",
     (_e, workspaceId: string | null, entries: PromoteEntry[]) =>

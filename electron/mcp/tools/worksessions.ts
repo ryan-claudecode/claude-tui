@@ -174,12 +174,16 @@ export function registerWorkSessionTools(
 
   server.tool(
     "get_session_context",
-    "Pull your work session's context primer: summary, then active findings, then a ruled-out/corrected section. This is what a terminal reads on entry to inherit everything the session knows. session_id defaults to your own.",
+    "Pull your work session's context primer: summary, then active findings, then a ruled-out/corrected section. This is what a terminal reads on entry to inherit everything the session knows. session_id defaults to your own. NOTE: the curated context is already auto-loaded into your context at spawn, so for your OWN session this returns only what CHANGED since launch (or a short 'no changes' header), not the full primer again.",
     { session_id: z.string().optional() },
     async ({ session_id }) => {
       const sid = session_id ?? identity.sessionId
       if (!sid) return { content: [{ type: "text" as const, text: "No work session bound to this connection — pass session_id." }] }
-      const ctx = workSessions.getContext(sid)
+      // CAPP-97 — pass the caller's terminalId ONLY when querying your OWN session, so the
+      // delta path keys off the right launch stamp. Querying ANOTHER session (explicit
+      // session_id != your own) always returns that session's FULL primer.
+      const ownSession = sid === identity.sessionId
+      const ctx = workSessions.getContext(sid, ownSession ? identity.terminalId : undefined)
       return { content: [{ type: "text" as const, text: ctx ?? "Work session not found" }] }
     },
   )

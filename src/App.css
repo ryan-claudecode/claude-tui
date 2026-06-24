@@ -5847,6 +5847,19 @@ body {
 .wmem-mini:hover { background: var(--bg-4); }
 .wmem-delete { color: var(--red); border-color: var(--red); }
 .wmem-delete:hover { background: var(--red-soft); }
+/* CAPP-97 — the statically-visible pin toggle. Outline when unpinned; accent-filled
+   when pinned (reads as "this finding always survives the auto-load context"). */
+.wmem-pin { color: var(--accent); border-color: var(--accent); }
+.wmem-pin:hover { background: var(--accent-soft); }
+.wmem-pin.is-pinned {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+.wmem-pin.is-pinned:hover { background: var(--accent-bright); }
+.wmem-pin-marker { color: var(--accent); }
+/* A pinned finding row gets a quiet accent edge so it reads as pinned at a glance. */
+.wmem-finding.pinned { border-left: 2px solid var(--accent); padding-left: 8px; }
 .wmem-finding-edit {
   display: flex;
   align-items: center;

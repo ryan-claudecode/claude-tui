@@ -55,6 +55,10 @@ contextBridge.exposeInMainWorld("companionApi", {
     ipcRenderer.invoke("workspace:edit-finding", workspaceId, findingId, text),
   deleteWorkspaceFinding: (workspaceId: string | null, findingId: string) =>
     ipcRenderer.invoke("workspace:delete-finding", workspaceId, findingId),
+  // CAPP-97 — pin/unpin a finding (a pinned finding is never evicted under the auto-load
+  // context cap). Fires onMemoryChanged → the panel live-refreshes off memory-changed.
+  setWorkspaceFindingPinned: (workspaceId: string | null, findingId: string, pinned: boolean) =>
+    ipcRenderer.invoke("workspace:set-pinned", workspaceId, findingId, pinned),
   // Per-instance unsubscribe (mirrors the main preload's onWorkspaceMemoryChanged) so
   // the panel + CompanionApp can each subscribe + tear down independently.
   onWorkspaceMemoryChanged: (cb: (workspaceId: string) => void) => {

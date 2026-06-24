@@ -8,6 +8,7 @@ import {
   type PromoteEntry,
   type WorkspaceMemoryRecord,
 } from "./workspaceMemory"
+import { RecallService } from "./recall"
 
 let dir: string
 beforeEach(() => {
@@ -144,6 +145,68 @@ describe("WorkspaceMemoryService — mutators persist + emit", () => {
     expect(f.promotedAt).toBe(4242)
     expect(f.source).toBe("agent")
     expect(f.status).toBe("active")
+  })
+})
+
+describe("WorkspaceMemoryService — setPinned (CAPP-97)", () => {
+  it("pins a finding, persists `pinned:true`, and survives a reload from disk", () => {
+    const a = new WorkspaceMemoryService({ dir, now: () => 1000 })
+    const f = a.addFinding("ws-1", "foundational rule", "user")
+    expect(f.pinned).toBeUndefined()
+
+    expect(a.setPinned("ws-1", f.id, true)).toBe(true)
+    // On disk the key is present + true.
+    const data = readData(join(dir, "ws-1.json"))
+    expect(data.findings[0].pinned).toBe(true)
+
+    // A fresh service round-trips the pin.
+    const b = new WorkspaceMemoryService({ dir, now: () => 2000 })
+    expect(b.getMemory("ws-1").findings[0].pinned).toBe(true)
+  })
+
+  it("unpinning DROPS the key entirely (clean file — additive-optional posture)", () => {
+    const svc = new WorkspaceMemoryService({ dir, now: () => 1000 })
+    const f = svc.addFinding("ws-1", "rule", "user")
+    svc.setPinned("ws-1", f.id, true)
+    svc.setPinned("ws-1", f.id, false)
+    const data = readData(join(dir, "ws-1.json"))
+    expect("pinned" in data.findings[0]).toBe(false)
+  })
+
+  it("is idempotent + always emits onMemoryChanged (so an open editor live-refreshes)", () => {
+    const svc = new WorkspaceMemoryService({ dir, now: () => 1000 })
+    const f = svc.addFinding("ws-1", "rule", "user")
+    const events: string[] = []
+    svc.onMemoryChanged((id) => events.push(id))
+    // Setting the value it already has (false) still goes through persistAndEmit.
+    expect(svc.setPinned("ws-1", f.id, false)).toBe(true)
+    expect(svc.setPinned("ws-1", f.id, true)).toBe(true)
+    expect(svc.setPinned("ws-1", f.id, true)).toBe(true)
+    expect(events).toEqual(["ws-1", "ws-1", "ws-1"])
+    expect(svc.getMemory("ws-1").findings[0].pinned).toBe(true)
+  })
+
+  it("returns false (no emit) for an unknown finding id", () => {
+    const svc = new WorkspaceMemoryService({ dir, now: () => 1000 })
+    svc.addFinding("ws-1", "rule", "user")
+    const events: string[] = []
+    svc.onMemoryChanged((id) => events.push(id))
+    expect(svc.setPinned("ws-1", "ghost", true)).toBe(false)
+    expect(events).toEqual([])
+  })
+
+  it("a pinned finding flows through RecallService.workspaceTierEntries as pinned:true", () => {
+    const mem = new WorkspaceMemoryService({ dir, now: () => 1000 })
+    const f = mem.addFinding("ws-1", "always run the gate", "user")
+    mem.setPinned("ws-1", f.id, true)
+
+    const recall = new RecallService(
+      () => [],
+      () => mem.listWorkspaceMemory(),
+    )
+    const entries = recall.workspaceTierEntries("ws-1")
+    const hit = entries.find((e) => e.text === "always run the gate")
+    expect(hit?.pinned).toBe(true)
   })
 })
 

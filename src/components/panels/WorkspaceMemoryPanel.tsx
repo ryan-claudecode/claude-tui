@@ -173,6 +173,27 @@ export default function WorkspaceMemoryPanel(props: Props) {
     [pinnedId],
   )
 
+  // CAPP-97 — pin/unpin a finding. A pinned finding is the only thing never evicted
+  // from the curated context that auto-loads into a fresh session (the byte cap). The
+  // toggle is statically visible per row (HARD no-hover-reveal rule). Optimistic local
+  // update; the onWorkspaceMemoryChanged push re-fetches to reconcile.
+  const handleTogglePin = useCallback(
+    async (f: WorkspaceFinding) => {
+      const next = !f.pinned
+      try {
+        await window.companionApi.setWorkspaceFindingPinned(pinnedId, f.id, next)
+        setRecord((prev) =>
+          prev
+            ? { ...prev, findings: prev.findings.map((x) => (x.id === f.id ? { ...x, pinned: next } : x)) }
+            : prev,
+        )
+      } catch {
+        /* push-refresh reconciles */
+      }
+    },
+    [pinnedId],
+  )
+
   const handleAdd = useCallback(async () => {
     const text = addText.trim()
     if (!text) return
@@ -239,7 +260,7 @@ export default function WorkspaceMemoryPanel(props: Props) {
             {rows.map(({ finding, ruledOut, correction, freshness }) => (
               <li
                 key={finding.id}
-                className={`wmem-finding${ruledOut ? " ruled-out" : ""}`}
+                className={`wmem-finding${ruledOut ? " ruled-out" : ""}${finding.pinned ? " pinned" : ""}`}
               >
                 {editingId === finding.id ? (
                   <div className="wmem-finding-edit">
@@ -270,13 +291,38 @@ export default function WorkspaceMemoryPanel(props: Props) {
                 ) : (
                   <div className="wmem-finding-row">
                     <div className="wmem-finding-text">
-                      <span className={ruledOut ? "wmem-struck" : undefined}>{finding.text}</span>
+                      <span className={ruledOut ? "wmem-struck" : undefined}>
+                        {finding.pinned && (
+                          <span className="wmem-pin-marker" aria-hidden="true">
+                            📌{" "}
+                          </span>
+                        )}
+                        {finding.text}
+                      </span>
                       {ruledOut && correction && (
                         <span className="wmem-correction"> → {correction}</span>
                       )}
                       {freshness && <div className="wmem-finding-meta">{freshness}</div>}
                     </div>
                     <div className="wmem-finding-controls">
+                      <button
+                        type="button"
+                        className={`wmem-mini wmem-pin${finding.pinned ? " is-pinned" : ""}`}
+                        onClick={() => void handleTogglePin(finding)}
+                        aria-pressed={!!finding.pinned}
+                        aria-label={
+                          finding.pinned
+                            ? `Unpin finding (currently pinned — never dropped from auto-loaded context): ${finding.text}`
+                            : `Pin finding (keep it in auto-loaded context): ${finding.text}`
+                        }
+                        title={
+                          finding.pinned
+                            ? "Pinned — never dropped from the auto-loaded context. Click to unpin."
+                            : "Pin — keep this in the auto-loaded context (never evicted)."
+                        }
+                      >
+                        {finding.pinned ? "📌 Pinned" : "Pin"}
+                      </button>
                       <button
                         type="button"
                         className="wmem-mini"

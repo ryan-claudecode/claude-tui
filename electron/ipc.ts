@@ -19,7 +19,12 @@ import { MissionService } from "./services/mission"
 import { SessionService } from "./services/sessions"
 import { RecallService, primerHitEligible } from "./services/recall"
 import { WorkspaceMemoryService } from "./services/workspaceMemory"
-import { buildSessionInject } from "./services/contextInject"
+import {
+  buildSessionInject,
+  assembleInjectInput,
+  computeContextStamp,
+  type SessionInjectDeps,
+} from "./services/contextInject"
 import { resolveInjectMaxBytes } from "./config"
 import { LocalHistoryService } from "./services/localHistory"
 import { CompanionService } from "./services/companion"
@@ -256,18 +261,28 @@ export async function setupIpc(win: BrowserWindow) {
   // only sync fs is the byte-cap config read), and returns the full payload on a fresh
   // spawn / a short pointer on a --resume. Left UNSET in tests + e2e, so the spawn is
   // byte-unchanged there; here it opts in.
-  sessionService.setContextBuilder((sessionId, { resume }) =>
-    buildSessionInject(
-      sessionId,
-      { resume, maxBytes: resolveInjectMaxBytes(loadConfig()) },
-      {
-        workspaceIdOf: (id) => workSessionService.workspaceIdOf(id),
-        getInstructions: (wsId) => workspaceMemoryService.getMemory(wsId).instructions,
-        workspaceTierEntries: (wsId) => recallService.workspaceTierEntries(wsId),
-        getSessionSections: (id) => workSessionService.getSessionContextSections(id),
-      },
-    ),
-  )
+  // The live-service deps both the inject payload AND the CAPP-97 delta resolver read,
+  // so the launch snapshot and the later get_session_context diff against the SAME source.
+  const injectDeps: SessionInjectDeps = {
+    workspaceIdOf: (id) => workSessionService.workspaceIdOf(id),
+    getInstructions: (wsId) => workspaceMemoryService.getMemory(wsId).instructions,
+    workspaceTierEntries: (wsId) => recallService.workspaceTierEntries(wsId),
+    getSessionSections: (id) => workSessionService.getSessionContextSections(id),
+  }
+  sessionService.setContextBuilder((sessionId, { resume, terminalId }) => {
+    // CAPP-97 — on a FRESH spawn, record the launch STAMP keyed by THIS terminalId from the
+    // SAME assembled input the payload renders, so a later get_session_context for this
+    // terminal returns only the delta. A resume spawn injects only the short pointer (no
+    // snapshot to diff against) → no stamp recorded → the pull degrades to the full primer.
+    if (!resume) {
+      const input = assembleInjectInput(sessionId, injectDeps)
+      if (input) workSessionService.recordLaunchStamp(terminalId, computeContextStamp(input))
+    }
+    return buildSessionInject(sessionId, { resume, maxBytes: resolveInjectMaxBytes(loadConfig()) }, injectDeps)
+  })
+  // CAPP-97 — the delta resolver: re-assemble the CURRENT auto-load input for a session
+  // (same deps) so getContext can diff it against the recorded launch stamp.
+  workSessionService.setInjectInputResolver((sessionId) => assembleInjectInput(sessionId, injectDeps))
 
   appService.setMainWindow(win)
   appService.setProjectRoot(join(__dirname, "../.."))

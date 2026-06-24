@@ -135,6 +135,9 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("workspace:edit-finding", workspaceId, findingId, text),
   deleteWorkspaceFinding: (workspaceId: string | null, findingId: string) =>
     ipcRenderer.invoke("workspace:delete-finding", workspaceId, findingId),
+  // CAPP-97 — pin/unpin a finding (never evicted under the auto-load context cap).
+  setWorkspaceFindingPinned: (workspaceId: string | null, findingId: string, pinned: boolean) =>
+    ipcRenderer.invoke("workspace:set-pinned", workspaceId, findingId, pinned),
   promoteWorkspaceFindings: (workspaceId: string | null, entries: any[]) =>
     ipcRenderer.invoke("workspace:promote-findings", workspaceId, entries),
   // The Keep modal's editable candidate list (the dying session's promotable notes).

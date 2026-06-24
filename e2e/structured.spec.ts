@@ -1337,3 +1337,73 @@ test("CAPP-94 / U6: the workspace-memory editor opens from the switcher, renders
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
+
+test("CAPP-97: the workspace-memory editor shows a statically-visible Pin toggle per finding, and toggling it persists", async () => {
+  // Seed the untagged ("All") bucket (reused seed: 3 findings) so the editor has rows
+  // to pin. Open the editor in the companion window, assert one statically-visible Pin
+  // control per row (NO hover), click the first to pin it, and verify the button reflects
+  // the pinned state AND the backend persisted `pinned: true` to the untagged bucket.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-wmem-pin-"))
+  await seedStructuredConfig(tempHome)
+  await seedUntaggedWorkspaceMemory(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  const memBtn = win.locator(".workspace-memory-btn")
+  await expect(memBtn).toBeVisible({ timeout: 15_000 })
+  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  await memBtn.click()
+  const companion = await companionPromise
+
+  const panel = companion.locator(".workspace-memory-panel")
+  await expect(panel).toBeVisible({ timeout: 15_000 })
+
+  // One STATICALLY-visible Pin control per finding row (no hover-reveal — HARD rule).
+  const findingRows = panel.locator(".wmem-finding")
+  await expect(findingRows).toHaveCount(3, { timeout: 10_000 })
+  const pinBtns = panel.locator(".wmem-finding .wmem-pin")
+  await expect(pinBtns).toHaveCount(3)
+  for (let i = 0; i < 3; i++) {
+    await expect(pinBtns.nth(i)).toBeVisible()
+    // Starts unpinned: the button reads "Pin" and is NOT marked pinned.
+    await expect(pinBtns.nth(i)).toHaveText("Pin")
+  }
+
+  // Pin the FIRST finding. Its button flips to the pinned state ("📌 Pinned" + is-pinned).
+  const firstPin = pinBtns.nth(0)
+  await firstPin.click()
+  await expect(firstPin).toContainText("Pinned", { timeout: 10_000 })
+  await expect(firstPin).toHaveClass(/is-pinned/)
+  // The row also gets the pinned marker + class.
+  await expect(panel.locator(".wmem-finding.pinned")).toHaveCount(1)
+  await expect(panel.locator(".wmem-pin-marker")).toHaveCount(1)
+
+  // The backend persisted pinned:true to the untagged bucket (addressed by null).
+  await expect(async () => {
+    const mem = await win.evaluate(() => (window as any).api.getWorkspaceMemory(null))
+    const pinnedCount = (mem?.findings ?? []).filter((f: any) => f.pinned === true).length
+    expect(pinnedCount).toBe(1)
+  }).toPass({ timeout: 15_000 })
+
+  // Unpin it again → the button reverts and the pin clears on disk.
+  await firstPin.click()
+  await expect(firstPin).toHaveText("Pin", { timeout: 10_000 })
+  await expect(panel.locator(".wmem-finding.pinned")).toHaveCount(0)
+  await expect(async () => {
+    const mem = await win.evaluate(() => (window as any).api.getWorkspaceMemory(null))
+    const pinnedCount = (mem?.findings ?? []).filter((f: any) => f.pinned === true).length
+    expect(pinnedCount).toBe(0)
+  }).toPass({ timeout: 15_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})

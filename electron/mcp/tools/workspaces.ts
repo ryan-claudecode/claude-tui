@@ -317,4 +317,26 @@ export function registerWorkspaceTools(
       return json(promoted)
     },
   )
+
+  server.tool(
+    "pin_workspace_finding",
+    "Pin (or unpin) a durable workspace finding so it is NEVER dropped from the curated context that auto-loads into a fresh session — use it for a foundational, load-bearing finding (a HARD RULE, a project-wide invariant) that must always survive the auto-load byte cap. By default it targets YOUR bound session's workspace (the untagged 'All' bucket if your session isn't workspace-scoped); pass workspace_id to target a specific workspace. Returns whether the finding was found.",
+    {
+      finding_id: z.string().describe("The workspace finding id (from get_workspace_memory)"),
+      pinned: z.boolean().describe("true to pin (never evict), false to unpin"),
+      workspace_id: z
+        .string()
+        .optional()
+        .describe("Workspace id to target (default: your bound session's workspace). Rejected if unknown."),
+    },
+    async ({ finding_id, pinned, workspace_id }) => {
+      if (workspace_id !== undefined && !isKnownWorkspace(workspace_id)) {
+        return text(`Workspace not found: ${workspace_id}`)
+      }
+      // NEVER fall back to the global active selection (cross-workspace write leak).
+      const wsId = workspace_id ?? workSessions.get(identity.sessionId ?? "")?.workspaceId ?? null
+      const ok = workspaceMemory.setPinned(wsId, finding_id, pinned)
+      return text(ok ? (pinned ? "Finding pinned" : "Finding unpinned") : `Finding not found: ${finding_id}`)
+    },
+  )
 }

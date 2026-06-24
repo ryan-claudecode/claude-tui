@@ -825,13 +825,16 @@ export class TerminalService {
    * spawn is byte-unchanged unless the wiring layer opts in.
    */
   setContextBuilder(
-    fn: (sessionId: string | undefined, opts: { resume: boolean }) => string | undefined,
+    fn: (
+      sessionId: string | undefined,
+      opts: { resume: boolean; terminalId: string },
+    ) => string | undefined,
   ): void {
     this.contextBuilder = fn
   }
   private contextBuilder?: (
     sessionId: string | undefined,
-    opts: { resume: boolean },
+    opts: { resume: boolean; terminalId: string },
   ) => string | undefined
 
   /**
@@ -850,7 +853,10 @@ export class TerminalService {
     if (!this.contextBuilder) return []
     let payload: string | undefined
     try {
-      payload = this.contextBuilder(sessionId, { resume })
+      // CAPP-97 — the builder also records a launch STAMP keyed by THIS terminalId (the
+      // same id `<tid>.md` is written under), so a later get_session_context for this
+      // terminal can return only the delta vs. what was pushed at spawn.
+      payload = this.contextBuilder(sessionId, { resume, terminalId })
     } catch (err) {
       logWarn("contextInject", `builder failed for ${terminalId}: ${String(err)}`)
       return []

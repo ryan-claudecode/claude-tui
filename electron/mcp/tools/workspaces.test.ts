@@ -477,4 +477,51 @@ describe("CAPP-87 / U3 workspace memory MCP tools", () => {
     const rec = parse<{ findings: Array<{ text: string }> }>(await h.get_workspace_memory({}))
     expect(rec.findings.map((f) => f.text)).toEqual(["global"])
   })
+
+  // CAPP-97 — pin_workspace_finding. Identity-bound: pins in the CALLER's bound session's
+  // workspace, NEVER getActiveId.
+  it("pin_workspace_finding pins in the CALLER's workspace (never getActiveId), returns found/not-found", async () => {
+    const ws = svc()
+    const a = ws.create("A", "/a")
+    const b = ws.create("B", "/b")
+    ws.setActive(b.id) // active selection must be ignored
+    const memory = mem()
+    const f = memory.addFinding(a.id, "load-bearing", "user")
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": a.id } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    const ok = await h.pin_workspace_finding({ finding_id: f.id, pinned: true })
+    expect(ok.content[0].text).toMatch(/pinned/i)
+    // Pinned in A (the caller's workspace), NOT the active selection B.
+    expect(memory.getMemory(a.id).findings[0].pinned).toBe(true)
+    expect(memory.getMemory(b.id).findings).toHaveLength(0)
+
+    // Unpin round-trips.
+    const off = await h.pin_workspace_finding({ finding_id: f.id, pinned: false })
+    expect(off.content[0].text).toMatch(/unpinned/i)
+    expect(memory.getMemory(a.id).findings[0].pinned).toBeUndefined()
+
+    // Unknown finding → not found.
+    expect(
+      (await h.pin_workspace_finding({ finding_id: "ghost", pinned: true })).content[0].text,
+    ).toMatch(/not found/i)
+  })
+
+  it("pin_workspace_finding HONORS an explicit KNOWN workspace_id and rejects an unknown one", async () => {
+    const ws = svc()
+    const a = ws.create("A", "/a")
+    const b = ws.create("B", "/b")
+    const memory = mem()
+    const f = memory.addFinding(b.id, "B rule", "user")
+    const sessions = fakeSessions({ workspaceOf: { "sess-1": a.id } })
+    const h = registerMem(ws, sessions, memory, { sessionId: "sess-1" })
+
+    await h.pin_workspace_finding({ finding_id: f.id, pinned: true, workspace_id: b.id })
+    expect(memory.getMemory(b.id).findings[0].pinned).toBe(true)
+
+    expect(
+      (await h.pin_workspace_finding({ finding_id: f.id, pinned: true, workspace_id: "ghost" })).content[0]
+        .text,
+    ).toMatch(/not found/i)
+  })
 })

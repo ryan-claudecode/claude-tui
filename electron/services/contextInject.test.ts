@@ -3,6 +3,10 @@ import {
   buildInjectedContext,
   byteLength,
   RESUME_POINTER,
+  computeContextStamp,
+  buildContextDelta,
+  NO_DELTA_HEADER,
+  type InjectContextInput,
   type InjectWorkspaceFinding,
   type InjectSessionTier,
 } from "./contextInject"
@@ -151,5 +155,90 @@ describe("buildInjectedContext — byte cap + value-ordered truncation (§B.3)",
     expect(out).toContain("…")
     // The instructions block alone is well under 5 KB after the cap.
     expect(byteLength(out)).toBeLessThan(2500)
+  })
+})
+
+/**
+ * CAPP-97 — the get_session_context DELTA. `computeContextStamp` folds the launch input
+ * into finding signatures + the summary/instructions; `buildContextDelta` returns only
+ * what changed since (or the stable "no changes" header). Pure over (input, stamp).
+ */
+describe("computeContextStamp + buildContextDelta (CAPP-97)", () => {
+  const session: InjectSessionTier = {
+    name: "Refactor auth",
+    summary: "Migrating to JWT.",
+    active: [{ text: "Tokens live in httpOnly cookies" }],
+    ruledOut: [{ text: "localStorage tokens", correction: "XSS-prone" }],
+  }
+  const launchInput: InjectContextInput = {
+    instructions: "Always run the gate before commit.",
+    workspaceFindings: [wf("DB pool maxes at 20")],
+    session,
+  }
+
+  it("returns the stable 'no changes' header when nothing changed since launch", () => {
+    const stamp = computeContextStamp(launchInput)
+    // Re-assemble an identical input (a fresh object, same content).
+    const current: InjectContextInput = {
+      instructions: "Always run the gate before commit.",
+      workspaceFindings: [wf("DB pool maxes at 20")],
+      session: { ...session, active: [...session.active], ruledOut: [...session.ruledOut] },
+    }
+    expect(buildContextDelta(current, stamp)).toBe(NO_DELTA_HEADER)
+  })
+
+  it("surfaces a NEW workspace finding in the delta, nothing else", () => {
+    const stamp = computeContextStamp(launchInput)
+    const current: InjectContextInput = {
+      ...launchInput,
+      workspaceFindings: [wf("DB pool maxes at 20"), wf("New: cache TTL is 60s")],
+    }
+    const delta = buildContextDelta(current, stamp)
+    expect(delta).toContain("# Context updates since launch")
+    expect(delta).toContain("New: cache TTL is 60s")
+    // The unchanged finding is NOT re-emitted.
+    expect(delta).not.toContain("DB pool maxes at 20")
+  })
+
+  it("treats an EDITED finding (changed text) as new in the delta", () => {
+    const stamp = computeContextStamp(launchInput)
+    const current: InjectContextInput = {
+      ...launchInput,
+      workspaceFindings: [wf("DB pool maxes at 50")], // edited from 20 → 50
+    }
+    const delta = buildContextDelta(current, stamp)
+    expect(delta).toContain("DB pool maxes at 50")
+  })
+
+  it("surfaces a changed SUMMARY + a new session finding under the session header", () => {
+    const stamp = computeContextStamp(launchInput)
+    const current: InjectContextInput = {
+      ...launchInput,
+      session: {
+        ...session,
+        summary: "Migrating to JWT — phase 2 done.",
+        active: [{ text: "Tokens live in httpOnly cookies" }, { text: "Refresh tokens rotate" }],
+      },
+    }
+    const delta = buildContextDelta(current, stamp)
+    expect(delta).toContain("## This session: Refactor auth")
+    expect(delta).toContain("phase 2 done")
+    expect(delta).toContain("Refresh tokens rotate")
+  })
+
+  it("surfaces a newly ruled-out finding (a status flip reads as a changed signature)", () => {
+    // Launch: an ACTIVE finding. Current: it's now ruled-out → its signature changed.
+    const launch: InjectContextInput = {
+      instructions: "",
+      workspaceFindings: [wf("use library X")],
+    }
+    const stamp = computeContextStamp(launch)
+    const current: InjectContextInput = {
+      instructions: "",
+      workspaceFindings: [{ ...wf("use library X"), status: "ruled-out", correction: "deprecated" }],
+    }
+    const delta = buildContextDelta(current, stamp)
+    expect(delta).toContain("~~use library X~~")
+    expect(delta).toContain("deprecated")
   })
 })

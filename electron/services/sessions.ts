@@ -10,6 +10,11 @@ import type { RenderingEngine } from "../config"
 import { logWarn } from "../log"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
 import type { PromoteEntry } from "./workspaceMemory"
+import {
+  buildContextDelta,
+  type ContextStamp,
+  type InjectContextInput,
+} from "./contextInject"
 
 /**
  * BO-11 (CAPP-50) — the deny message {@link SessionService.interruptAgent} settles a
@@ -275,6 +280,16 @@ export class SessionService {
   /** CAPP-86 — OPTIONAL cross-session primer enrichment seam (default: none → off). */
   private recallRelated?: SessionServiceOpts["recallRelated"]
   private primerRecallEnabled: () => boolean
+  /**
+   * CAPP-97 — per-terminal launch snapshot of the auto-loaded context (the curated
+   * "brain" CAPP-96 pushes at spawn). Keyed by the SAME terminalId the inject wrote
+   * `<tid>.md` under. `getContext(sessionId, { terminalId })` diffs the current context
+   * against this stamp and returns only the DELTA, so the agent's later pull doesn't
+   * re-load bytes already injected. In-memory (lives for the terminal's runtime life): a
+   * terminal restored after an app restart has NO stamp and correctly gets the FULL
+   * context (the resume-pointer path injected no snapshot to diff against).
+   */
+  private launchStamps = new Map<string, ContextStamp>()
 
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
@@ -1068,6 +1083,7 @@ export class SessionService {
     const s = this.sessions.get(sessionId)
     if (!s) return
     s.terminals = s.terminals.filter((t) => t.id !== terminalId)
+    this.clearLaunchStamp(terminalId) // CAPP-97 — the id is gone; drop its launch stamp.
     this.persist(s)
   }
 
@@ -1310,10 +1326,80 @@ export class SessionService {
     return { name: s.name, summary: s.summary.trim(), active, ruledOut }
   }
 
-  /** The primer a terminal pulls: summary, then active notes, then ruled-out (with corrections). */
-  getContext(sessionId: string): string | undefined {
+  /**
+   * CAPP-97 — record the launch snapshot stamp for a terminal (called by the spawn
+   * wiring right after the auto-load payload is assembled, keyed by the SAME terminalId
+   * the inject wrote `<tid>.md` under). A later `getContext(sessionId, { terminalId })`
+   * diffs against this so the agent's pull returns only the DELTA, not the bytes already
+   * pushed at spawn. Resume spawns / empty payloads inject no snapshot → no stamp →
+   * getContext correctly degrades to the FULL context.
+   */
+  recordLaunchStamp(terminalId: string, stamp: ContextStamp): void {
+    this.launchStamps.set(terminalId, stamp)
+  }
+
+  /** Drop a terminal's launch stamp (on terminal kill/retire — the id is gone). */
+  clearLaunchStamp(terminalId: string): void {
+    this.launchStamps.delete(terminalId)
+  }
+
+  /**
+   * CAPP-97 — the DELTA path. When the calling `terminalId` has a recorded launch stamp
+   * (the curated brain was auto-loaded at spawn), return ONLY what changed since launch —
+   * new/edited findings, ruled-out, a changed summary — assembled from the SAME source the
+   * inject used (so the shape can never drift). When nothing changed, a short stable header.
+   * No stamp (xterm legacy, inject disabled, resume pointer, pre-existing session) → undefined,
+   * so the caller falls back to the FULL {@link getContext} (byte-identical to pre-CAPP-97).
+   *
+   * Pure-ish: the current {@link InjectContextInput} is supplied by the `injectInputResolver`
+   * the wiring layer installs (it owns the workspace-tier + instructions deps), so this method
+   * stays inside SessionService for the stamp lookup but never reaches into the workspace
+   * services directly. Returns undefined (→ caller falls back to FULL context) when there's no
+   * stamp, no resolver, or the resolver yields no current input.
+   */
+  getContextDelta(terminalId: string | undefined): string | undefined {
+    if (!terminalId) return undefined
+    const stamp = this.launchStamps.get(terminalId)
+    if (!stamp) return undefined
+    if (!this.injectInputResolver) return undefined
+    const currentInput = this.injectInputResolver(this.sessionIdOf(terminalId))
+    if (!currentInput) return undefined
+    return buildContextDelta(currentInput, stamp)
+  }
+
+  /** Whether a terminal has a recorded launch stamp (the wiring uses this to decide
+   *  between the delta path and the full primer without a redundant assembly). */
+  hasLaunchStamp(terminalId: string | undefined): boolean {
+    return terminalId != null && this.launchStamps.has(terminalId)
+  }
+
+  /**
+   * CAPP-97 — install the resolver that re-assembles the CURRENT auto-load
+   * {@link InjectContextInput} for a sessionId (the SAME `assembleInjectInput` deps the
+   * spawn inject used). ipc.ts wires it after the workspace services exist; left UNSET in
+   * isolated tests so `getContextDelta` degrades to undefined (full context).
+   */
+  setInjectInputResolver(fn: (sessionId: string | undefined) => InjectContextInput | undefined): void {
+    this.injectInputResolver = fn
+  }
+  private injectInputResolver?: (sessionId: string | undefined) => InjectContextInput | undefined
+
+  /**
+   * The primer a terminal pulls: summary, then active notes, then ruled-out (with corrections).
+   *
+   * CAPP-97 — when `terminalId` has a recorded launch stamp (the curated brain was
+   * auto-loaded at this terminal's spawn), this returns ONLY the DELTA since launch instead
+   * of the full primer, so the agent's pull doesn't re-load the same bytes. No stamp →
+   * the FULL primer below, byte-identical to the pre-CAPP-97 behavior.
+   */
+  getContext(sessionId: string, terminalId?: string): string | undefined {
     const s = this.sessions.get(sessionId)
     if (!s) return undefined
+    // CAPP-97 delta path — only when this terminal has a launch stamp to diff against.
+    if (terminalId && this.hasLaunchStamp(terminalId)) {
+      const delta = this.getContextDelta(terminalId)
+      if (delta !== undefined) return delta
+    }
     const sections = this.getSessionContextSections(sessionId)!
     const parts: string[] = []
     parts.push(`# Session: ${sections.name}`)
