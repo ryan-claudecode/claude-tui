@@ -2054,6 +2054,19 @@ describe("SessionService CAPP-101 (P1) — propagation nudge: mark + re-prime", 
     expect(reRef?.pendingMemoryDelta).toBeFalsy()
   })
 
+  it("a marked terminal that DIES clears its pending nudge (no stale rail affordance on a dead ref)", () => {
+    const term = new FakeTerminals()
+    const { svc, setActiveWs } = makeSvc(term)
+    setActiveWs("ws-1")
+    const a = svc.openSession("/a")
+    svc.markWorkspaceMemoryChanged("ws-1")
+    expect(svc.get(a.session.id)!.terminals[0].pendingMemoryDelta).toBe(true)
+    // The terminal's process exits → it goes dead. The pending nudge must be dropped (a dead
+    // terminal can't pull a delta — keeping it would leave an inert "re-prime to pull" button).
+    svc.setTerminalState(a.session.id, a.terminalId, "dead")
+    expect(svc.get(a.session.id)!.terminals[0].pendingMemoryDelta).toBeFalsy()
+  })
+
   it("re-prime is a no-op (false) for an unknown session/terminal and for a dead ref", () => {
     const term = new FakeTerminals()
     const { svc } = makeSvc(term)

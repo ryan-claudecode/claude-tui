@@ -411,6 +411,9 @@ export class SessionService {
     t.lastState = state
     s.status = s.terminals.some((x) => x.lastState === "active" || x.lastState === "idle") ? "active" : "stopped"
     if (state === "idle") this.scheduleIdleFlush(s.id, terminalId)
+    // CAPP-101 — a terminal that DIED can't pull a delta; drop any pending nudge so the rail
+    // doesn't keep a stale "re-prime to pull" affordance + an inert button on a dead ref.
+    if (state === "dead") this.clearPendingMemoryDelta(t)
     this.persist(s)
     this.emit("worksession:updated", this.withEffectiveActivity(s))
   }
@@ -1290,6 +1293,7 @@ export class SessionService {
     const t = s.terminals.find((x) => x.id === terminalId)
     if (!t) return
     t.lastState = state
+    if (state === "dead") this.clearPendingMemoryDelta(t) // CAPP-101 — a dead terminal can't re-prime.
     this.persist(s)
   }
 
