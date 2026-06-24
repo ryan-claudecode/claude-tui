@@ -31,6 +31,9 @@ export interface WorkspaceFinding {
   originNoteId?: string
   /** When the finding graduated/was authored (DISTINCT from createdAt — freshness). */
   promotedAt: number
+  /** CAPP-96 — a foundational finding the owner marked never-evict (auto-load truncation
+   *  honors it). Additive + optional; mirrors the canonical service field. */
+  pinned?: boolean
 }
 
 /** Mirror of `WorkspaceMemoryRecord` (electron/services/workspaceMemory.ts). */

@@ -58,6 +58,15 @@ export interface WorkspaceFinding {
   originNoteId?: string
   /** When the finding graduated/was authored (DISTINCT from createdAt — a freshness signal). */
   promotedAt: number
+  /**
+   * CAPP-96 / DECISION 7 — a foundational finding the owner has marked as never-evict.
+   * Additive + OPTIONAL (default falsy === not pinned), so existing files load unchanged
+   * and no migration is needed. The auto-load context builder ({@link buildInjectedContext})
+   * honors it: a pinned finding is the ONLY thing never dropped under the 8 KB cap, because
+   * `promotedAt`/`createdAt` are recency signals, not importance. Surfacing a pin TOGGLE in
+   * the editor panel is a fast-follow; the field must exist now so truncation can honor it.
+   */
+  pinned?: boolean
 }
 
 export interface WorkspaceMemoryRecord {

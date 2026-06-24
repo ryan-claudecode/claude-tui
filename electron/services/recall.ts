@@ -53,6 +53,10 @@ export interface RecallEntry {
   /** For a workspace-memory entry: the origin session `Note.id` it was promoted from —
    *  the other half of the (originSessionId, originNoteId) de-dup key. */
   originNoteId?: string
+  /** CAPP-96 — for a workspace-memory entry: the owner's never-evict pin, carried through
+   *  so the auto-load builder can keep a pinned finding under the byte cap. Undefined for
+   *  session notes/summaries (only the durable tier is pinnable). */
+  pinned?: boolean
 }
 
 /** A ranked recall hit: the indexed entry plus its match score. */
@@ -243,6 +247,7 @@ export function deriveRecallIndex(
         ...(correction ? { correction } : {}),
         ...(f.originSessionId != null ? { originSessionId: f.originSessionId } : {}),
         ...(f.originNoteId != null ? { originNoteId: f.originNoteId } : {}),
+        ...(f.pinned ? { pinned: true } : {}),
       })
     } else {
       entries.push({
@@ -255,6 +260,7 @@ export function deriveRecallIndex(
         createdAt: f.createdAt,
         ...(f.originSessionId != null ? { originSessionId: f.originSessionId } : {}),
         ...(f.originNoteId != null ? { originNoteId: f.originNoteId } : {}),
+        ...(f.pinned ? { pinned: true } : {}),
       })
     }
   }
@@ -366,6 +372,24 @@ export class RecallService {
   workspaceIdOf(sessionId: string | undefined): string | undefined {
     if (!sessionId) return undefined
     return this.listSessions().find((s) => s.id === sessionId)?.workspaceId
+  }
+
+  /**
+   * CAPP-96 — the durable WORKSPACE tier for the auto-load builder: the recall UNION
+   * filtered to 'workspace' scope for `workspaceId`, keeping ONLY `source ===
+   * "workspace-memory"` entries (the promoted/authored memory tier). Sourcing from the
+   * union (not the raw bucket) gives FREE de-dup — a finding promoted up from a session
+   * isn't double-counted (its live origin note is suppressed in `deriveRecallIndex`).
+   * Reads the WARMED index (no per-spawn rebuild). Returns the shape the builder needs
+   * (text/status/correction/createdAt/pinned); `createdAt` drives oldest-first ordering.
+   * NOTE: `pinned` is not carried on `RecallEntry`, so it's resolved from the live
+   * memory snapshot by `(originSessionId, originNoteId)` / text — see the wiring in ipc.ts;
+   * here we expose the recall-scoped entries and let the caller attach `pinned`.
+   */
+  workspaceTierEntries(workspaceId: string | undefined): RecallEntry[] {
+    return scopeFilter(this.getIndex(), "workspace", { workspaceId }).filter(
+      (e) => e.source === "workspace-memory",
+    )
   }
 
   /**

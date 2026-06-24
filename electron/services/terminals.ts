@@ -582,17 +582,53 @@ export type TerminalEvent =
    */
   | { type: "stream"; id: string; event: StreamEvent }
 
+/**
+ * CAPP-96 — argv-safe quoting for the `shellWrap` PATH wrapper.
+ *
+ * `shellWrap` packs the whole command into ONE `-Command` / `-c` string, which the
+ * shell then re-parses — so any arg with a space or a shell metacharacter is word-split,
+ * variable-expanded, or COMMAND-INJECTED (the auto-load payload path can carry a space on
+ * a `C:\Users\John Doe\…` homedir, and findings are partly agent-authored). Before this,
+ * `--allowedTools` had to be hard-filtered to `/^[A-Za-z0-9_]+$/` precisely because of
+ * this. We now quote per-arg so any value round-trips intact.
+ *
+ * Quote ONLY when needed (a plain flag like `-p` / `--model` / `opus` / `stream-json` is
+ * left bare) so the existing pinned-flag-order assertions still hold and the byte stream
+ * is byte-unchanged for the common no-special-char case.
+ */
+// Bare-safe = the chars a flag/alias/simple value uses; anything else is quoted. Includes
+// `[` `]` so the model alias `opus[1m]` stays unquoted (brackets are literal when passed as
+// an arg to a NATIVE exe — PowerShell only treats them as wildcards inside its own path
+// cmdlets, never in a native-command argument, and a POSIX shell leaves them literal too).
+const BARE_SAFE_RE = /^[A-Za-z0-9_./:=@,+[\]-]+$/
+
+/** PowerShell single-quote: wrap in '…' and double any interior single quote. Inside a
+ *  single-quoted PowerShell string NOTHING is special (no `$`, no backtick, no `;`). */
+export function quotePowerShellArg(arg: string): string {
+  if (arg.length > 0 && BARE_SAFE_RE.test(arg)) return arg
+  return `'${arg.replace(/'/g, "''")}'`
+}
+
+/** POSIX single-quote: wrap in '…' and escape any interior single quote as '\''. Inside a
+ *  single-quoted POSIX string NOTHING is special. */
+export function quotePosixArg(arg: string): string {
+  if (arg.length > 0 && BARE_SAFE_RE.test(arg)) return arg
+  return `'${arg.replace(/'/g, `'\\''`)}'`
+}
+
 /** Wrap a command in a shell so PATH resolution works reliably in Electron */
 function shellWrap(command: string, args: string[]): { shell: string; shellArgs: string[] } {
   if (process.platform === "win32") {
+    const cmd = [command, ...args].map(quotePowerShellArg).join(" ")
     return {
       shell: "powershell.exe",
-      shellArgs: ["-NoLogo", "-NoProfile", "-Command", [command, ...args].join(" ")],
+      shellArgs: ["-NoLogo", "-NoProfile", "-Command", cmd],
     }
   }
+  const cmd = [command, ...args].map(quotePosixArg).join(" ")
   return {
     shell: "bash",
-    shellArgs: ["-l", "-c", [command, ...args].join(" ")],
+    shellArgs: ["-l", "-c", cmd],
   }
 }
 
@@ -741,14 +777,25 @@ export class TerminalService {
    */
   private notify?: (message: string, level: NotificationLevel, title?: string) => void
 
+  /**
+   * CAPP-96 — where the auto-load payload files are written (`<dir>/<terminalId>.md`).
+   * Defaults to `~/.claude-tui/context`; overridable at construction so hermetic tests
+   * point it at a temp dir (the codebase's DI posture — no `os.homedir` spying). This dir
+   * is machine-local + regenerable: it's EXCLUDED from local-history snapshots and the
+   * future sync repo (see `localHistory.ts` CURATED_SUBDIRS).
+   */
+  private readonly contextDir: string
+
   constructor(
     opts: {
       spawnPty?: SpawnPty
       spawnProc?: SpawnProc
       permissionGuardMs?: number
       notify?: (message: string, level: NotificationLevel, title?: string) => void
+      contextDir?: string
     } = {},
   ) {
+    this.contextDir = opts.contextDir ?? join(homedir(), ".claude-tui", "context")
     this.spawnPty = opts.spawnPty ?? realSpawnPty
     // BO-4b — env-gated hermetic seam: with CLAUDETUI_FAKE_STREAM=1 the headless
     // path drives a canned stream (fakeStreamProc) instead of spawning a real
@@ -765,6 +812,59 @@ export class TerminalService {
    *  once NotificationService exists). Mirrors {@link setMainWindow}. */
   setNotifier(fn: (message: string, level: NotificationLevel, title?: string) => void): void {
     this.notify = fn
+  }
+
+  /**
+   * CAPP-96 — wire the auto-load context builder after construction (ipc.ts, once
+   * SessionService + WorkspaceMemoryService + RecallService exist). Mirrors
+   * {@link setNotifier}. The closure assembles the curated "brain" markdown for the
+   * SPAWNING session (scoped off ITS workspaceId, never the active selection) and is
+   * called by {@link injectContextFlag} on the spawn hot path: FRESH = full payload,
+   * RESUME = a short pointer. Returns the rendered markdown, or "" / undefined to skip
+   * injection entirely. Left UNSET by tests + the e2e (no builder → no flag), so the
+   * spawn is byte-unchanged unless the wiring layer opts in.
+   */
+  setContextBuilder(
+    fn: (sessionId: string | undefined, opts: { resume: boolean }) => string | undefined,
+  ): void {
+    this.contextBuilder = fn
+  }
+  private contextBuilder?: (
+    sessionId: string | undefined,
+    opts: { resume: boolean },
+  ) => string | undefined
+
+  /**
+   * CAPP-96 — build the auto-load payload for this spawn, write it to
+   * `~/.claude-tui/context/<terminalId>.md`, and return the `--append-system-prompt-file`
+   * flag args to splice into the spawn. Returns `[]` (no flag) when there's no builder,
+   * no payload, or a write fails — auto-load is best-effort and MUST NEVER block a spawn.
+   *
+   * The file is per-terminal (no contention, regenerated every spawn) and lives in a dir
+   * deliberately EXCLUDED from local-history snapshots + the future sync repo (it's a
+   * machine-local, regenerable artifact). `resume` rides in from the caller: a `--resume`
+   * spawn gets a SHORT pointer (the transcript already absorbed the original snapshot),
+   * a fresh spawn gets the full payload.
+   */
+  private injectContextFlag(terminalId: string, sessionId: string | undefined, resume: boolean): string[] {
+    if (!this.contextBuilder) return []
+    let payload: string | undefined
+    try {
+      payload = this.contextBuilder(sessionId, { resume })
+    } catch (err) {
+      logWarn("contextInject", `builder failed for ${terminalId}: ${String(err)}`)
+      return []
+    }
+    if (!payload || !payload.trim()) return []
+    try {
+      mkdirSync(this.contextDir, { recursive: true })
+      const path = join(this.contextDir, `${terminalId}.md`)
+      writeFileSync(path, payload, "utf8")
+      return ["--append-system-prompt-file", path]
+    } catch (err) {
+      logWarn("contextInject", `failed to write context file for ${terminalId}: ${String(err)}`)
+      return []
+    }
   }
 
   private eventListeners = new Set<(e: TerminalEvent) => void>()
@@ -1093,7 +1193,12 @@ export class TerminalService {
     const { id, sessionName, sessionCwd } = this.mintTerminal(name, cwd)
 
     const args = [...this.defaultArgs]
-    for (const a of resumeArgs(this.ccProjectsRoot, sessionCwd, resumeConvId)) args.push(a)
+    const resume = resumeArgs(this.ccProjectsRoot, sessionCwd, resumeConvId)
+    for (const a of resume) args.push(a)
+    // CAPP-96 — auto-load the curated "brain" on the xterm path too (different renderer
+    // — raw PTY bytes — but `--append-system-prompt-file` is a system-prompt file, never
+    // streamed to the PTY). Fresh = full payload, resume = short pointer; best-effort.
+    for (const a of this.injectContextFlag(id, sessionId, resume.length > 0)) args.push(a)
     // Prefer a per-terminal, identity-bound MCP config so this terminal's
     // work-session tools default to its own ids; fall back to the shared config.
     const mcpConfig = this.mcpConfigFor(id, sessionId)
@@ -1251,7 +1356,12 @@ export class TerminalService {
     } else {
       args.push("--permission-prompt-tool", PERMISSION_PROMPT_TOOL)
     }
-    for (const a of resumeArgs(this.ccProjectsRoot, sessionCwd, resumeConvId)) args.push(a)
+    const resume = resumeArgs(this.ccProjectsRoot, sessionCwd, resumeConvId)
+    for (const a of resume) args.push(a)
+    // CAPP-96 — auto-load the curated "brain" via a file-backed --append-system-prompt-file.
+    // A `--resume` spawn (resume.length > 0) gets the SHORT pointer; a fresh spawn the full
+    // payload. Best-effort: an empty payload / write failure adds no flag (spawn unchanged).
+    for (const a of this.injectContextFlag(id, sessionId, resume.length > 0)) args.push(a)
     // Pre-approved tools skip the gate entirely (proved live). Bare tool names
     // only (e.g. "Read", "Write") — parenthesized specifiers aren't shell-safe
     // through the powershell wrapper's space-joined command string.

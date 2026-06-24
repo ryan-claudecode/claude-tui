@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"c0ffee00-aa11-4b22-9c33-d44e55f66001","cwd":"/home/dev/proj","model":"claude-opus-4-8","tools":["Read","Write","Bash"],"mcp_servers":[{"name":"claudetui","status":"connected"}],"slash_commands":["clear","compact","context"],"skills":[],"apiKeySource":"none"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"What is 2 + 2?"}]}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"2 + 2 = 4."}}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"2 + 2 = 4."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"2 + 2 = 4.","session_id":"c0ffee00-aa11-4b22-9c33-d44e55f66001"}

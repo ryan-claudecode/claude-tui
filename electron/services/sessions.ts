@@ -318,6 +318,17 @@ export class SessionService {
     return this.sessionOf(terminalId)?.id
   }
 
+  /**
+   * CAPP-96 — the spawning SESSION's own workspaceId (undefined → the untagged "All"
+   * bucket). The auto-load builder scopes the workspace tier off THIS, NEVER the active
+   * selection (`getActiveId`), so a session spawned while a DIFFERENT workspace is active
+   * still injects ITS OWN brain — mirrors the CAPP-87 promote defense. Unknown id →
+   * undefined (treated as untagged, same as a session with no workspaceId).
+   */
+  workspaceIdOf(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.workspaceId
+  }
+
   /** Persist a terminal rename into the session's durable terminal ref. */
   private renameTerminal(terminalId: string, name: string): void {
     const s = this.sessionOf(terminalId)
@@ -1267,25 +1278,55 @@ export class SessionService {
     return this.getPromotableFindings(sessionId).find((e) => e.originNoteId === noteId)
   }
 
+  /**
+   * CAPP-96 — the SHARED, pure session-context sections both `getContext` (the pull
+   * tool) and the auto-load builder ({@link buildSessionTier}) read, so the two can
+   * never drift. Returns the session name + the three durable sections — summary,
+   * active findings, ruled-out/corrected — as a structured object (NOT the rendered
+   * string), so the auto-load builder can value-order + length-cap them independently
+   * before rendering while the primer renders them exactly as before.
+   *
+   * DELIBERATELY EXCLUDES the `## Related from other sessions` cross-session recall
+   * block — that's firehose-adjacent and stays pull-only (`getContext` appends it
+   * separately under its config gate). Unknown sessionId → undefined.
+   */
+  getSessionContextSections(sessionId: string):
+    | {
+        name: string
+        summary: string
+        active: { text: string }[]
+        ruledOut: { text: string; correction?: string }[]
+      }
+    | undefined {
+    const s = this.sessions.get(sessionId)
+    if (!s) return undefined
+    const active = s.notes.filter((n) => n.status === "active").map((n) => ({ text: n.text }))
+    const ruledOut = s.notes
+      .filter((n) => n.status === "superseded")
+      .map((n) => {
+        const correction = s.notes.find((c) => c.id === n.supersededBy)
+        return correction ? { text: n.text, correction: correction.text } : { text: n.text }
+      })
+    return { name: s.name, summary: s.summary.trim(), active, ruledOut }
+  }
+
   /** The primer a terminal pulls: summary, then active notes, then ruled-out (with corrections). */
   getContext(sessionId: string): string | undefined {
     const s = this.sessions.get(sessionId)
     if (!s) return undefined
+    const sections = this.getSessionContextSections(sessionId)!
     const parts: string[] = []
-    parts.push(`# Session: ${s.name}`)
-    if (s.summary.trim()) parts.push(`## Summary\n${s.summary.trim()}`)
+    parts.push(`# Session: ${sections.name}`)
+    if (sections.summary) parts.push(`## Summary\n${sections.summary}`)
 
-    const active = s.notes.filter((n) => n.status === "active")
-    if (active.length) {
-      parts.push(`## Findings\n` + active.map((n) => `- ${n.text}`).join("\n"))
+    if (sections.active.length) {
+      parts.push(`## Findings\n` + sections.active.map((n) => `- ${n.text}`).join("\n"))
     }
 
-    const superseded = s.notes.filter((n) => n.status === "superseded")
-    if (superseded.length) {
-      const lines = superseded.map((n) => {
-        const correction = s.notes.find((c) => c.id === n.supersededBy)
-        return correction ? `- ~~${n.text}~~ → ${correction.text}` : `- ~~${n.text}~~`
-      })
+    if (sections.ruledOut.length) {
+      const lines = sections.ruledOut.map((n) =>
+        n.correction ? `- ~~${n.text}~~ → ${n.correction}` : `- ~~${n.text}~~`,
+      )
       parts.push(`## Ruled out / corrected\n` + lines.join("\n"))
     }
 

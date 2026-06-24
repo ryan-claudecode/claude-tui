@@ -19,6 +19,8 @@ import { MissionService } from "./services/mission"
 import { SessionService } from "./services/sessions"
 import { RecallService, primerHitEligible } from "./services/recall"
 import { WorkspaceMemoryService } from "./services/workspaceMemory"
+import { buildInjectedContext, type InjectWorkspaceFinding } from "./services/contextInject"
+import { resolveInjectMaxBytes } from "./config"
 import { LocalHistoryService } from "./services/localHistory"
 import { CompanionService } from "./services/companion"
 import { AttentionService } from "./services/attention"
@@ -243,6 +245,41 @@ export async function setupIpc(win: BrowserWindow) {
   sessionService.setNotifier((message, level, title) =>
     notificationService.notify(message, level, title),
   )
+
+  // CAPP-96 — auto-load the durable "brain" into every freshly-spawned session via a
+  // file-backed --append-system-prompt-file (a seam our stream-json reducer provably
+  // never surfaces). The builder is SCOPED off the SPAWNING session's own workspaceId
+  // (NEVER getActiveId — a session spawned while a different workspace is active injects
+  // ITS OWN brain), reads the WARMED RecallService index + the WorkspaceMemoryService
+  // cache (no sync fs in the hot path), and returns the full payload on a fresh spawn /
+  // a short pointer on a --resume. Left UNSET in tests + e2e, so the spawn is byte-
+  // unchanged there; here it opts in.
+  sessionService.setContextBuilder((sessionId, { resume }) => {
+    if (resume) return buildInjectedContext({ instructions: "", workspaceFindings: [] }, { resume: true })
+    if (!sessionId) {
+      // No bound session yet (a bare spawn). Nothing session/workspace-scoped to inject.
+      return ""
+    }
+    // Scope off the SPAWNING session's workspace — its OWN brain, not the active selection.
+    const workspaceId = workSessionService.workspaceIdOf(sessionId)
+    const memory = workspaceMemoryService.getMemory(workspaceId ?? null)
+    // Workspace tier: the recall union @ scope:'workspace' (free de-dup of promoted twins),
+    // keeping only the durable workspace-memory entries.
+    const workspaceFindings: InjectWorkspaceFinding[] = recallService
+      .workspaceTierEntries(workspaceId)
+      .map((e) => ({
+        text: e.text,
+        status: e.status === "ruled-out" ? "ruled-out" : "active",
+        ...(e.correction ? { correction: e.correction } : {}),
+        createdAt: e.createdAt,
+        ...(e.pinned ? { pinned: true } : {}),
+      }))
+    const session = workSessionService.getSessionContextSections(sessionId)
+    return buildInjectedContext(
+      { instructions: memory.instructions, workspaceFindings, session },
+      { resume: false, maxBytes: resolveInjectMaxBytes(loadConfig()) },
+    )
+  })
 
   appService.setMainWindow(win)
   appService.setProjectRoot(join(__dirname, "../.."))

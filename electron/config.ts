@@ -118,6 +118,14 @@ export interface AgentRailConfig {
  */
 export interface ContextConfig {
   primerRecall?: boolean
+  /**
+   * CAPP-96 — the hard byte cap on the auto-loaded "brain" payload injected into a
+   * fresh session's system prompt (file-backed, `--append-system-prompt-file`). The
+   * builder value-orders + truncates to stay under this (per-terminal cost multiplies
+   * across concurrent terminals, so this is a real budget, not a nicety). Default 8192
+   * (8 KB) per the design doc §B.3; resolved via {@link resolveInjectMaxBytes}.
+   */
+  injectMaxBytes?: number
 }
 
 export interface TuiConfig {
@@ -211,6 +219,20 @@ export function resolveAgentRailOpen(config?: { agentRail?: AgentRailConfig } | 
  */
 export function resolvePrimerRecall(config?: { context?: ContextConfig } | null): boolean {
   return config?.context?.primerRecall === true
+}
+
+/** CAPP-96 — the default auto-load payload cap (8 KB) per the design doc §B.3. */
+export const DEFAULT_INJECT_MAX_BYTES = 8192
+
+/**
+ * CAPP-96 — resolve the auto-load payload byte cap. Returns the configured
+ * `context.injectMaxBytes` when it is a FINITE, POSITIVE number, else the 8 KB
+ * default. A non-positive / non-numeric override is ignored (never produces a 0-byte
+ * or negative cap that would silently suppress the whole brain). Pure + deterministic.
+ */
+export function resolveInjectMaxBytes(config?: { context?: ContextConfig } | null): number {
+  const v = config?.context?.injectMaxBytes
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : DEFAULT_INJECT_MAX_BYTES
 }
 
 /**
