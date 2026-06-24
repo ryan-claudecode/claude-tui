@@ -2011,6 +2011,57 @@ body {
 
 /* BO-4b — the structured empty state: a calm "type to start" affordance (the
    resting state of a freshly opened session), NOT a pulsing spinner. */
+/* CAPP-103 — the "Load earlier" bar that sits above the oldest rendered block when a long
+   conversation is windowed. Quiet + statically visible (no hover-reveal). */
+.agent-load-earlier {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  padding: var(--s-2) 0 var(--s-3);
+  margin-bottom: var(--s-1);
+  border-bottom: 1px dashed var(--border-subtle);
+}
+
+.agent-load-earlier-btn,
+.agent-load-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: var(--radius-1);
+  padding: 5px 10px;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.agent-load-earlier-btn {
+  color: var(--text-1);
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+}
+.agent-load-earlier-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.agent-load-earlier-count {
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-load-all-btn {
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+}
+.agent-load-all-btn:hover {
+  color: var(--text-1);
+  border-color: var(--border);
+}
+
 .agent-view-empty {
   display: flex;
   flex-direction: column;

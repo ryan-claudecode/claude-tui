@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react"
 import type { StreamEvent } from "../../electron/services/streamProtocol"
 import {
   reduceTranscript,
@@ -16,6 +16,7 @@ import {
   type AssistantTextBlock,
 } from "../lib/agentTranscript"
 import { nextScrollTop, scrollFollowBehavior, shouldStick } from "../lib/scrollStick"
+import { initialHiddenCount, revealEarlier, visibleBlocks, LOAD_EARLIER_PAGE } from "../lib/transcriptWindow"
 import { useSmoothReveal } from "../hooks/useSmoothReveal"
 import { prefersReducedMotion } from "../lib/reducedMotion"
 import AgentModelPicker from "./AgentModelPicker"
@@ -157,6 +158,25 @@ export default function AgentView({
     const cached = transcriptCache?.get(ccConversationId)
     return !(cached && cached.blocks.length > 0)
   })
+  // CAPP-103 — render-windowing: the number of OLDEST blocks NOT rendered. A long restored
+  // conversation renders only its tail (the rest froze the main thread parsing markdown).
+  // Seeded SYNCHRONOUSLY from the cache hit here so a huge cached transcript never paints a
+  // full-DOM frame before windowing kicks in; the disk-restore path seeds it in the read's
+  // .then (below). Live streaming appends at the tail and never changes it — a conversation
+  // the user watched grow is never auto-hidden. The user reveals older blocks via "Load earlier".
+  const [hiddenCount, setHiddenCount] = useState<number>(() => {
+    if (ccConversationId) {
+      const cached = transcriptCache?.get(ccConversationId)
+      if (cached && cached.blocks.length > 0) return initialHiddenCount(cached.blocks.length)
+    }
+    return 0
+  })
+  // CAPP-103 — true ONLY for a genuine cold restore (a convo id bound at mount with a cold
+  // cache → the disk read below is restoring history). `seeding`'s initial value captures
+  // exactly that. We gate the disk-path window-seed on it so a FRESH live session — whose
+  // convo id arrives late, re-running the seed effect — is NEVER auto-windowed (the user
+  // watched it grow; hiding its head would be jarring). Mirrors the `seeding` initializer.
+  const coldRestoreRef = useRef(seeding)
   const seededRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Inner content wrapper whose box GROWS with the transcript — the ResizeObserver
@@ -200,6 +220,13 @@ export default function AgentView({
         if (!events || events.length === 0) return
         const seeded = settleRunningTools(events.reduce(reduceTranscript, emptyTranscript()))
         setState((prev) => (prev.blocks.length === 0 ? seeded : prev))
+        // CAPP-103 — window a big RESTORED transcript to its tail (batched with the setState
+        // above → windowed from the first paint, no full-DOM frame). ONLY for a genuine cold
+        // restore — never a fresh live session whose convo id arrived late (coldRestoreRef).
+        // Preserve any value the user already set rather than clobbering it.
+        if (coldRestoreRef.current) {
+          setHiddenCount((h) => (h > 0 ? h : initialHiddenCount(seeded.blocks.length)))
+        }
       })
       .catch(() => {
         if (!cancelled) setSeeding(false)
@@ -323,6 +350,36 @@ export default function AgentView({
     })
   }, [])
 
+  // CAPP-103 — "Load earlier": reveal a page of older blocks (or all). Revealing PREPENDS
+  // content above the viewport, which would otherwise jump the page down; capture the
+  // distance from the current scrollTop to the content bottom so the layout effect below can
+  // restore it — the user's reading position stays put. De-arm stick (they're reading
+  // history, not following the tail) so the ResizeObserver follow never fights the anchor.
+  const pendingAnchorRef = useRef<number | null>(null)
+  const captureAnchor = useCallback(() => {
+    const el = scrollRef.current
+    pendingAnchorRef.current = el ? el.scrollHeight - el.scrollTop : null
+    stickRef.current = false
+  }, [])
+  const loadEarlier = useCallback(() => {
+    captureAnchor()
+    setHiddenCount((h) => revealEarlier(h, LOAD_EARLIER_PAGE))
+  }, [captureAnchor])
+  const loadAll = useCallback(() => {
+    captureAnchor()
+    setHiddenCount(0)
+  }, [captureAnchor])
+
+  // Restore the viewport's distance-from-bottom after older blocks prepend, so revealing
+  // history doesn't yank the page. Runs synchronously post-layout (before paint) → no flash.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (el && pendingAnchorRef.current != null) {
+      el.scrollTop = Math.max(0, el.scrollHeight - pendingAnchorRef.current)
+      pendingAnchorRef.current = null
+    }
+  }, [hiddenCount])
+
   const expand = useCallback((block: TranscriptBlock) => {
     const req = panelForBlock(block)
     if (!req) return
@@ -338,6 +395,11 @@ export default function AgentView({
   // flips true (a frame after Enter) and self-suppresses the instant the turn's first
   // content block lands (assistant / tool / thinking / result / …).
   const working = workingRowState(state.blocks, busy)
+
+  // CAPP-103 — only the tail of the transcript is rendered (older blocks hidden behind
+  // "Load earlier"). `working`/`caretId` derive from the FULL `state.blocks` (the streaming
+  // target is the trailing block, always in the visible tail), so streaming is unaffected.
+  const visible = visibleBlocks(state.blocks, hiddenCount)
 
   // WS5 — id of the assistant block (if any) that should carry the live streaming
   // caret. Derived from the same trailing-block + busy signals as the working row,
@@ -386,7 +448,22 @@ export default function AgentView({
         )
       ) : (
         <>
-          {state.blocks.map((block) => (
+          {hiddenCount > 0 && (
+            // CAPP-103 — older history is hidden for performance; reveal it on demand.
+            // Statically visible (no hover-reveal, per the project UI rule).
+            <div className="agent-load-earlier">
+              <button type="button" className="agent-load-earlier-btn" onClick={loadEarlier}>
+                <span aria-hidden="true">▲</span> Load earlier
+                <span className="agent-load-earlier-count">
+                  {hiddenCount} hidden
+                </span>
+              </button>
+              <button type="button" className="agent-load-all-btn" onClick={loadAll}>
+                Load all
+              </button>
+            </div>
+          )}
+          {visible.map((block) => (
             <BlockView
               key={block.id}
               block={block}
