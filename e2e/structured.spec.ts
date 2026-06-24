@@ -1407,3 +1407,67 @@ test("CAPP-97: the workspace-memory editor shows a statically-visible Pin toggle
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
+
+test("CAPP-98 / I1: the always-visible 'Context' switcher button opens the READ-ONLY inspector with the honesty header", async () => {
+  // The Context Inspector v1. With no workspace selected, the always-visible "Context"
+  // switcher button (next to "Workspace memory", NO hover-reveal) opens the READ-ONLY
+  // inspector in the companion window for the untagged "All" bucket (folderless). Assert:
+  // the button is statically visible, it opens the .context-inspector-panel in the
+  // companion window, the verbatim honesty header is present, the tiers enumerate (incl.
+  // a "none" placeholder for an absent tier), and the always-visible Refresh re-inspects.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-ctx-inspect-"))
+  await seedStructuredConfig(tempHome)
+  // Seed the untagged bucket so tier #10 (the injected primer) has content to render.
+  await seedUntaggedWorkspaceMemory(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  // The "Context" button is ALWAYS VISIBLE in the switcher (no hover-reveal), even in
+  // "All" mode — distinct from the adjacent "Workspace memory" button.
+  const ctxBtn = win.locator(".workspace-context-btn")
+  await expect(ctxBtn).toBeVisible({ timeout: 15_000 })
+  await expect(ctxBtn).toContainText("Context")
+
+  // It opens the READ-ONLY inspector in the SEPARATE companion BrowserWindow.
+  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  await ctxBtn.click()
+  const companion = await companionPromise
+
+  const panel = companion.locator(".context-inspector-panel")
+  await expect(panel).toBeVisible({ timeout: 15_000 })
+
+  // The verbatim honesty header is present (v1 must NOT overclaim).
+  await expect(panel.locator(".ctx-honesty")).toContainText(
+    "Files Claude loads at launch, in precedence order. Imported files listed but not expanded. Full resolved view coming soon.",
+  )
+
+  // Folderless (the untagged "All" bucket): the folder reads as folderless/untagged.
+  await expect(panel.locator(".ctx-meta")).toContainText(/folderless|untagged/i)
+
+  // The tiers enumerate as collapsible sections — including a "none" placeholder for an
+  // absent tier (the completeness claim depends on showing empties, never omitting them).
+  await expect(panel.locator(".ctx-source").first()).toBeVisible()
+  await expect(panel.locator(".ctx-badge-none").first()).toBeVisible()
+
+  // The Mission Control primer (tier 10) is present (the untagged bucket was seeded).
+  await expect(panel.locator(".ctx-source", { hasText: "Mission Control primer" })).toBeVisible()
+
+  // The always-visible Refresh button re-invokes the read-only inspection (no hover-reveal).
+  const refresh = panel.locator(".ctx-refresh")
+  await expect(refresh).toBeVisible()
+  await refresh.click()
+  // After a refresh the panel still renders its sections (the read was idempotent).
+  await expect(panel.locator(".ctx-source").first()).toBeVisible({ timeout: 10_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})

@@ -71,6 +71,12 @@ contextBridge.exposeInMainWorld("companionApi", {
   // resolved MAIN-side (never the active selection); the panel only passes the session id.
   promoteSessionToWorkspace: (sessionId: string) =>
     ipcRenderer.invoke("worksession:promote-to-workspace", sessionId),
+  // CAPP-98 / I1 — the Context Inspector (READ-ONLY). The ContextInspectorPanel lives in
+  // THIS companion window; its statically-visible Refresh button re-invokes this to pull a
+  // fresh enumeration of the launch-time native context + our injected primer. A `null`
+  // workspaceId is the untagged "All" bucket. Pure read — no native-file write path.
+  inspectWorkspaceContext: (workspaceId: string | null) =>
+    ipcRenderer.invoke("context:inspect", workspaceId),
   getTheme: () => ipcRenderer.invoke("config:get-theme"),
   onThemeChanged: (cb: (mode: string) => void) =>
     ipcRenderer.on("theme:changed", (_e, mode) => cb(mode)),

@@ -984,6 +984,41 @@ body {
   line-height: 1;
 }
 
+/* CAPP-98 / I1 — the "Context" switcher button. ALWAYS VISIBLE (no hover-reveal),
+   styled identically to the "Workspace memory" button so the two read as a pair. */
+.workspace-context-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  margin-top: 2px;
+  padding: 7px 11px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  cursor: pointer;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
+}
+.workspace-context-btn:hover {
+  background: var(--bg-2);
+  border-color: var(--border);
+  color: var(--accent);
+}
+.workspace-context-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.workspace-context-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+}
+
 /* The name + rename/delete row. The name takes the lead; the ✎ and × are
    ALWAYS visible (never hover-revealed). */
 .workspace-name-controls {
@@ -7268,3 +7303,149 @@ body {
   color: var(--red);
 }
 .permission-deny:hover { background: var(--red); color: #fff; }
+
+/* CAPP-98 / I1 — the Context Inspector panel (companion window). READ-ONLY, sectioned
+   by tier (precedence top-to-bottom); modeled on .overview-panel + .workspace-memory-panel.
+   Sand & Stone tokens; every control statically visible (Refresh button, no hover-reveal). */
+.context-inspector-panel {
+  padding: 12px 16px;
+  overflow-y: auto;
+  font-size: 13px;
+  height: 100%;
+  box-sizing: border-box;
+}
+.ctx-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.ctx-title { margin: 0; font-size: 15px; color: var(--text-0); }
+.ctx-ws-name { color: var(--text-3); font-weight: 400; }
+.ctx-refresh {
+  flex-shrink: 0;
+  padding: 5px 11px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1, 6px);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
+}
+.ctx-refresh:hover:not(:disabled) {
+  background: var(--bg-2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ctx-refresh:disabled { opacity: 0.6; cursor: default; }
+.ctx-honesty {
+  margin: 0 0 12px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-style: italic;
+  line-height: 1.5;
+}
+.ctx-meta {
+  margin-bottom: 16px;
+  padding: 9px 11px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-1, 6px);
+}
+.ctx-meta-row {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.ctx-meta-key {
+  flex-shrink: 0;
+  width: 70px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 11px;
+}
+.ctx-meta-val { color: var(--text-1); word-break: break-all; font-family: var(--mono, monospace); }
+.ctx-sources { display: flex; flex-direction: column; gap: 8px; }
+.ctx-source {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-1, 6px);
+  background: var(--bg-1);
+  overflow: hidden;
+}
+.ctx-source-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.ctx-source-summary::-webkit-details-marker { display: none; }
+.ctx-tier-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  font-family: var(--mono, monospace);
+  min-width: 26px;
+}
+.ctx-source-label { color: var(--text-0); font-weight: 500; flex: 1; }
+.ctx-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ctx-badge-none { background: var(--bg-2); color: var(--text-3); }
+.ctx-badge-excluded { background: var(--red-soft); color: var(--red); }
+.ctx-badge-imports { background: var(--accent-soft, var(--bg-2)); color: var(--accent); }
+.ctx-source-body {
+  padding: 4px 11px 11px;
+  border-top: 1px solid var(--border-subtle);
+}
+.ctx-source-path {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: var(--mono, monospace);
+  word-break: break-all;
+  margin: 8px 0 6px;
+}
+.ctx-source-note {
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
+  margin-bottom: 6px;
+}
+.ctx-source-content {
+  margin: 0;
+  padding: 9px 11px;
+  background: var(--bg-0);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-1, 6px);
+  color: var(--text-1);
+  font-size: 12px;
+  font-family: var(--mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.ctx-source-empty { color: var(--text-3); font-style: italic; font-size: 12px; }
+.ctx-imports { margin-top: 10px; }
+.ctx-imports-head { font-size: 11.5px; color: var(--text-2); margin-bottom: 4px; }
+.ctx-imports-list { margin: 0; padding-left: 16px; }
+.ctx-import-line {
+  font-size: 12px;
+  color: var(--accent);
+  font-family: var(--mono, monospace);
+  word-break: break-all;
+}

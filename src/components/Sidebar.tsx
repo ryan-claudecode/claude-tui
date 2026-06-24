@@ -58,6 +58,9 @@ interface Props {
   /** CAPP-94 — open the workspace-memory editor (companion panel) for the active
    *  workspace, or the untagged "All" bucket when none is selected. */
   onOpenWorkspaceMemory: () => void
+  /** CAPP-98 / I1 — open the READ-ONLY Context Inspector (companion panel) for the active
+   *  workspace, or the untagged "All" bucket when none is selected. */
+  onOpenContextInspector: () => void
 }
 
 // Resolve a friendly label for an attention entry: the terminal's name when we
@@ -81,7 +84,7 @@ export default function Sidebar({
   resumingRows, onFocusResuming, onStopResuming, onDismissResuming,
   workspaces, activeWorkspace, workspaceScoped,
   onSelectAllWorkspaces, onSelectWorkspace, onNewWorkspace, onRenameWorkspace, onDeleteWorkspace,
-  onSetWorkspaceDir, onRestoreConversation, onOpenWorkspaceMemory,
+  onSetWorkspaceDir, onRestoreConversation, onOpenWorkspaceMemory, onOpenContextInspector,
 }: Props) {
   // CAPP-82 — inline rename of the session container row (mirrors TabBar's terminal
   // editor): double-click → controlled input, commit on Enter/blur, cancel on Escape.
@@ -164,6 +167,7 @@ export default function Sidebar({
         onSetWorkspaceDir={onSetWorkspaceDir}
         onRestoreConversation={onRestoreConversation}
         onOpenWorkspaceMemory={onOpenWorkspaceMemory}
+        onOpenContextInspector={onOpenContextInspector}
       />
 
       {attentionEntries.length > 0 && (

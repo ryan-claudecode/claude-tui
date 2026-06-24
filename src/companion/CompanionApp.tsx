@@ -21,6 +21,9 @@ import SessionOverviewPanel from "../components/panels/SessionOverviewPanel"
 import RecallPanel from "../components/panels/RecallPanel"
 import WorktreeReviewPanel, { type ReviewActionResult } from "../components/panels/WorktreeReviewPanel"
 import WorkspaceMemoryPanel from "../components/panels/WorkspaceMemoryPanel"
+import ContextInspectorPanel, {
+  type InspectResultView,
+} from "../components/panels/ContextInspectorPanel"
 import type {
   WorkspaceMemoryRecord,
   WorkspaceFinding,
@@ -41,6 +44,7 @@ const PANEL_LABELS: Record<string, string> = {
   stat: "Stats", log: "Log", progress: "Progress", code: "Code",
   heatmap: "Heatmap", mission: "Mission", "session-overview": "Overview",
   "worktree-review": "Review", recall: "Recall", "workspace-memory": "Memory",
+  "context-inspector": "Context",
 }
 
 function tabLabel(p: PanelState): string {
@@ -53,6 +57,9 @@ function tabLabel(p: PanelState): string {
   }
   if (p.type === "workspace-memory" && typeof p.props?.workspaceName === "string" && p.props.workspaceName) {
     return `Memory: ${p.props.workspaceName}`
+  }
+  if (p.type === "context-inspector" && typeof p.props?.workspaceName === "string" && p.props.workspaceName) {
+    return `Context: ${p.props.workspaceName}`
   }
   return base
 }
@@ -110,6 +117,10 @@ declare global {
       promoteSessionToWorkspace: (
         sessionId: string,
       ) => Promise<{ ok: boolean; count: number; workspaceId: string | null }>
+      // CAPP-98 / I1 — the READ-ONLY Context Inspector. The ContextInspectorPanel (in THIS
+      // companion window) calls this on its Refresh button to re-enumerate the launch-time
+      // native context + our injected primer. A `null` workspaceId is the untagged bucket.
+      inspectWorkspaceContext: (workspaceId: string | null) => Promise<InspectResultView>
       getTheme: () => Promise<string>
       onThemeChanged: (cb: (mode: string) => void) => void
       removeAllListeners: (channel: string) => void
@@ -278,6 +289,7 @@ function PanelContent({
     case "session-overview": return <SessionOverviewPanel {...(panel.props as any)} />
     case "recall": return <RecallPanel {...(panel.props as any)} />
     case "workspace-memory": return <WorkspaceMemoryPanel {...(panel.props as any)} />
+    case "context-inspector": return <ContextInspectorPanel {...(panel.props as any)} />
     case "worktree-review": return (
       <WorktreeReviewPanel
         {...panel.props}

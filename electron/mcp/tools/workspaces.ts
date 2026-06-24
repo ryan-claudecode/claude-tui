@@ -4,6 +4,7 @@ import type { WorkspaceService, PublicWorkspace } from "../../services/workspace
 import type { TerminalIdentity } from "./shared"
 import type { SessionService } from "../../services/sessions"
 import type { WorkspaceMemoryService } from "../../services/workspaceMemory"
+import type { ContextInspectorService } from "../../services/contextInspector"
 import { loadConfig } from "../../config"
 
 /**
@@ -49,6 +50,8 @@ export function registerWorkspaceTools(
   workSessions: SessionService,
   // CAPP-87 / U3 — the durable, workspace-level knowledge tier the memory tools write.
   workspaceMemory: WorkspaceMemoryService,
+  // CAPP-98 / I1 — the READ-ONLY Context Inspector backing `inspect_workspace_context`.
+  contextInspector: ContextInspectorService,
   // The caller's identity (bound work-session id) — the memory tools default their
   // destination workspace to the caller's session's workspace.
   identity: TerminalIdentity = {},
@@ -337,6 +340,32 @@ export function registerWorkspaceTools(
       const wsId = workspace_id ?? workSessions.get(identity.sessionId ?? "")?.workspaceId ?? null
       const ok = workspaceMemory.setPinned(wsId, finding_id, pinned)
       return text(ok ? (pinned ? "Finding pinned" : "Finding unpinned") : `Finding not found: ${finding_id}`)
+    },
+  )
+
+  // ── Context Inspector (CAPP-98 / I1) ───────────────────────────────────────────
+  // READ-ONLY introspection: enumerate the COMPLETE launch-time native context a fresh
+  // `claude` eats for a workspace (managed policy, user/project memory, unconditioned
+  // rules, parent-chain, native auto-memory) PLUS our injected primer (#10), by precedence.
+  // INSPECT-ONLY — it only reads files (existsSync/readFileSync); it NEVER edits a
+  // CLAUDE.md or inserts an @import. @imports are listed LITERALLY, not expanded (v1).
+  server.tool(
+    "inspect_workspace_context",
+    "Inspect (READ-ONLY) the complete launch-time context a fresh Claude session eats in a workspace: every native source by precedence — managed policy, user-global memory + rules, parent-chain memory, project memory + rules, project-local override, Claude's native auto-memory — PLUS the Mission Control primer we inject. Absent tiers are shown as 'none' (the completeness claim depends on it); @imports are listed literally, not expanded; excluded ancestors are marked. Use this to see EXACTLY what context an agent reads at spawn before debugging surprising behavior. Omit workspace_id to inspect your own session's workspace (the untagged 'All' bucket — folderless — if your session isn't workspace-scoped). This NEVER writes any file.",
+    {
+      workspace_id: z
+        .string()
+        .optional()
+        .describe("Workspace id from list_workspaces (default: your bound session's workspace, or the untagged bucket)"),
+    },
+    async ({ workspace_id }) => {
+      if (workspace_id !== undefined && !isKnownWorkspace(workspace_id)) {
+        return text(`Workspace not found: ${workspace_id}`)
+      }
+      // NEVER fall back to the global active selection (the same no-leak posture as the
+      // memory tools): the inspector is identity-bound to the caller's own workspace.
+      const wsId = workspace_id ?? workSessions.get(identity.sessionId ?? "")?.workspaceId ?? null
+      return json(contextInspector.inspectWorkspaceContext(wsId))
     },
   )
 }

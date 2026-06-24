@@ -140,6 +140,11 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("workspace:set-pinned", workspaceId, findingId, pinned),
   promoteWorkspaceFindings: (workspaceId: string | null, entries: any[]) =>
     ipcRenderer.invoke("workspace:promote-findings", workspaceId, entries),
+  // CAPP-98 / I1 — the Context Inspector (READ-ONLY): enumerate the launch-time native
+  // context + our injected primer for a workspace, by precedence. A `null` workspaceId is
+  // the untagged "All" bucket. Consumed by the WorkspaceSwitcher "Context" open handler.
+  inspectWorkspaceContext: (workspaceId: string | null) =>
+    ipcRenderer.invoke("context:inspect", workspaceId),
   // The Keep modal's editable candidate list (the dying session's promotable notes).
   getPromotableFindings: (sessionId: string) =>
     ipcRenderer.invoke("worksession:promotable-findings", sessionId),

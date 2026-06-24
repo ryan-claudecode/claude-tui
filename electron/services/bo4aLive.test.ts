@@ -99,6 +99,7 @@ describe.runIf(LIVE)("BO-4a LIVE end-to-end (real claude -p) — gated by BO4A_L
       stub(), // 18 recallService
       attention, // 19
       stub(), // 20 workspaceMemoryService (CAPP-87)
+      stub(), // 21 contextInspectorService (CAPP-98)
     )
     svc.setMcpConfigPath(started.configPath)
     svc.setMcpServerUrl(`http://127.0.0.1:${started.port}/sse`)

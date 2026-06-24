@@ -23,6 +23,9 @@ interface Props {
   /** CAPP-94 — open the workspace-memory editor (companion panel) for the active
    *  workspace, or the untagged "All" bucket when none is selected. Always-visible. */
   onOpenWorkspaceMemory: () => void
+  /** CAPP-98 / I1 — open the READ-ONLY Context Inspector (companion panel) for the active
+   *  workspace, or the untagged "All" bucket when none is selected. Always-visible. */
+  onOpenContextInspector: () => void
 }
 
 /**
@@ -64,6 +67,7 @@ export default function WorkspaceSwitcher({
   onSetWorkspaceDir,
   onRestoreConversation,
   onOpenWorkspaceMemory,
+  onOpenContextInspector,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [highlight, setHighlight] = useState(0)
@@ -296,6 +300,29 @@ export default function WorkspaceSwitcher({
           🧠
         </span>
         <span>Workspace memory</span>
+      </button>
+
+      {/* CAPP-98 / I1 — open the READ-ONLY Context Inspector. ALWAYS VISIBLE (no
+          hover-reveal), in BOTH "All" and specific-workspace modes. Shows the complete
+          launch-time native context (CLAUDE.md chain, rules, auto-memory) + our injected
+          primer, by precedence — so the user can see EXACTLY what an agent reads at spawn.
+          Captures the workspaceId at click time (the handler doesn't re-derive from the
+          active workspace later). */}
+      <button
+        type="button"
+        className="workspace-context-btn"
+        title={
+          isAllActive
+            ? "Inspect the launch-time context for the All bucket (read-only)"
+            : `Inspect ${active!.name}'s launch-time context (read-only)`
+        }
+        aria-label="Open context inspector"
+        onClick={onOpenContextInspector}
+      >
+        <span className="workspace-context-icon" aria-hidden="true">
+          📄
+        </span>
+        <span>Context</span>
       </button>
 
       {/* WS-H — the active-workspace controls, ALWAYS VISIBLE (no hover-reveal).

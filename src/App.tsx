@@ -151,6 +151,10 @@ declare global {
         entries: PromoteEntry[],
       ) => Promise<unknown>
       onWorkspaceMemoryChanged: (callback: (workspaceId: string) => void) => () => void
+      // CAPP-98 / I1 — the READ-ONLY Context Inspector: enumerate the launch-time native
+      // context + our injected primer for a workspace (null = untagged "All"). Consumed by
+      // the WorkspaceSwitcher "Context" button. Pure read — no native-file write path.
+      inspectWorkspaceContext: (workspaceId: string | null) => Promise<any>
       // CAPP-82 — rename the durable work-session container (the sidebar row).
       renameWorkSession: (id: string, name: string) => Promise<boolean>
       getWorkSessionContext: (sessionId: string) => Promise<string | undefined>
@@ -733,6 +737,30 @@ export default function App() {
     })()
   }, [activeWorkspaceId, activeWorkspace])
 
+  // CAPP-98 / I1 — open the READ-ONLY Context Inspector for the ACTIVE workspace (or the
+  // untagged "All" bucket when none is selected). Mirrors handleOpenWorkspaceMemory: fetch
+  // the inspection main-side (capturing the workspaceId at click time), then show the
+  // companion panel seeded with the result + the captured workspaceId (so the panel's
+  // Refresh re-inspects THAT workspace even if the active selection changes meanwhile).
+  const handleOpenContextInspector = useCallback(() => {
+    void (async () => {
+      try {
+        const result = await window.api.inspectWorkspaceContext(activeWorkspaceId ?? null)
+        await window.api.showPanel(
+          "context-inspector",
+          {
+            workspaceId: activeWorkspaceId ?? null,
+            workspaceName: activeWorkspace?.name,
+            result,
+          },
+          "right",
+        )
+      } catch (err) {
+        toast("error", `Couldn't open the context inspector: ${errMsg(err)}`)
+      }
+    })()
+  }, [activeWorkspaceId, activeWorkspace])
+
   const [dragActive, setDragActive] = useState(false)
 
   // ui:export-log stays in App.tsx because its handler closes over the active
@@ -1188,6 +1216,7 @@ export default function App() {
         onSetWorkspaceDir={(id, dir) => setWorkspaceDir_(id, dir)}
         onRestoreConversation={() => setRestoreConvoOpen(true)}
         onOpenWorkspaceMemory={handleOpenWorkspaceMemory}
+        onOpenContextInspector={handleOpenContextInspector}
       />
       <div className="main-area">
         <TabBar

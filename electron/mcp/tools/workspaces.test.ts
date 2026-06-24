@@ -5,6 +5,7 @@ import { join } from "path"
 import { registerWorkspaceTools } from "./workspaces"
 import { WorkspaceService } from "../../services/workspaces"
 import { WorkspaceMemoryService } from "../../services/workspaceMemory"
+import type { ContextInspectorService } from "../../services/contextInspector"
 import type { TerminalService, TerminalInfo } from "../../services/terminals"
 import type { SessionService } from "../../services/sessions"
 import type { TerminalIdentity } from "./shared"
@@ -60,6 +61,7 @@ function register(workspaceService: WorkspaceService, getScanPaths: () => string
     workspaceService,
     {} as unknown as SessionService,
     {} as unknown as WorkspaceMemoryService,
+    {} as unknown as ContextInspectorService,
     {},
     getScanPaths,
   )
@@ -244,7 +246,15 @@ describe("CAPP-87 / U3 workspace memory MCP tools", () => {
     identity: TerminalIdentity,
   ) {
     const { server, handlers } = fakeServer()
-    registerWorkspaceTools(server as any, workspaceService, sessions, memory, identity, () => [])
+    registerWorkspaceTools(
+      server as any,
+      workspaceService,
+      sessions,
+      memory,
+      {} as unknown as ContextInspectorService,
+      identity,
+      () => [],
+    )
     return handlers
   }
 

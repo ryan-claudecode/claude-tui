@@ -19,6 +19,7 @@ import { MissionService } from "./services/mission"
 import { SessionService } from "./services/sessions"
 import { RecallService, primerHitEligible } from "./services/recall"
 import { WorkspaceMemoryService } from "./services/workspaceMemory"
+import { ContextInspectorService } from "./services/contextInspector"
 import {
   buildSessionInjectWithStamp,
   assembleInjectInput,
@@ -115,6 +116,18 @@ export const workSessionService = new SessionService({
 recallService = new RecallService(
   () => workSessionService.list(),
   () => workspaceMemoryService.listWorkspaceMemory(),
+)
+
+// CAPP-98 / I1 — the Context Inspector (READ-ONLY): enumerates the complete launch-time
+// native context (managed policy, user/project memory, rules, parent-chain, auto-memory)
+// + our injected primer, by precedence, for a workspace. Inspect-only — existsSync/
+// readFileSync ONLY, no write path into any native file. Reads the same workspaceMemory +
+// recall services the spawn inject reads, so tier #10 shows EXACTLY the capped brain a
+// fresh session eats. Constructed after recallService is assigned (it's a dep).
+export const contextInspectorService = new ContextInspectorService(
+  workspaceService,
+  workspaceMemoryService,
+  recallService,
 )
 
 /**
@@ -360,6 +373,7 @@ export async function setupIpc(win: BrowserWindow) {
       recallService,
       attentionService,
       workspaceMemoryService,
+      contextInspectorService,
     )
     sessionService.setMcpConfigPath(configPath)
     sessionService.setMcpServerUrl(`http://127.0.0.1:${port}/sse`)
@@ -394,6 +408,7 @@ export async function setupIpc(win: BrowserWindow) {
   registerWorkspaceHandlers({
     workspaceService,
     workspaceMemoryService,
+    contextInspectorService,
     getScanPaths: () => loadConfig().workspaceScanPaths,
   })
   // CAPP-95 / D1 — local-history list/restore/snapshot/reveal.

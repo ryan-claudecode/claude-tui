@@ -1,6 +1,7 @@
 import { ipcMain, dialog, BrowserWindow } from "electron"
 import type { WorkspaceService } from "../services/workspaces"
 import type { WorkspaceMemoryService, PromoteEntry } from "../services/workspaceMemory"
+import type { ContextInspectorService } from "../services/contextInspector"
 
 /**
  * WS-B — id-based workspace IPC handlers.
@@ -39,9 +40,10 @@ import type { WorkspaceMemoryService, PromoteEntry } from "../services/workspace
 export function registerWorkspaceHandlers(deps: {
   workspaceService: WorkspaceService
   workspaceMemoryService: WorkspaceMemoryService
+  contextInspectorService: ContextInspectorService
   getScanPaths: () => string[]
 }) {
-  const { workspaceService, workspaceMemoryService, getScanPaths } = deps
+  const { workspaceService, workspaceMemoryService, contextInspectorService, getScanPaths } = deps
 
   // Re-project a single id through the public projection so a handler never has
   // to hand-build (and risk drifting from) the no-leak shape.
@@ -117,6 +119,15 @@ export function registerWorkspaceHandlers(deps: {
     "workspace:promote-findings",
     (_e, workspaceId: string | null, entries: PromoteEntry[]) =>
       workspaceMemoryService.promoteFindings(workspaceId, entries),
+  )
+
+  // ── Context Inspector (CAPP-98 / I1) ─────────────────────────────────────────
+  // READ-ONLY: enumerate the complete launch-time native context + our injected
+  // primer for a workspace, by precedence. A `null` workspaceId is the untagged
+  // "All" bucket (folderless — only #10 + machine-global tiers shown). Thin wrapper
+  // over the inspect-only service (existsSync/readFileSync only; no native writes).
+  ipcMain.handle("context:inspect", (_e, workspaceId: string | null) =>
+    contextInspectorService.inspectWorkspaceContext(workspaceId),
   )
 
   // ── Native folder picker (WS-D/H) ────────────────────────────────────────────

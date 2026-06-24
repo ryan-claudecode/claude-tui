@@ -29,7 +29,15 @@ vi.mock("electron", () => ({
 import { registerWorkspaceHandlers } from "./workspace-handlers"
 import { WorkspaceService } from "../services/workspaces"
 import { WorkspaceMemoryService } from "../services/workspaceMemory"
+import type { ContextInspectorService } from "../services/contextInspector"
 import type { TerminalService, TerminalInfo } from "../services/terminals"
+
+// CAPP-98 — the workspace-memory handlers under test don't exercise the inspector;
+// a no-op stub satisfies the (required) dep so the handler registration succeeds.
+// The inspector itself has its own dedicated unit suite (contextInspector.test.ts).
+const inspectorStub = {
+  inspectWorkspaceContext: () => ({ folder: null, gitRoot: null, adopted: false, sources: [] }),
+} as unknown as ContextInspectorService
 
 // Invoke a captured handler by channel (the leading IpcMainInvokeEvent is unused
 // by every WS-B handler, so we pass a dummy).
@@ -73,7 +81,7 @@ afterEach(() => {
 describe("WS-B/H workspace-handlers", () => {
   it("create/get/rename/set-dir round-trip and return the PUBLIC projection (single folder)", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), getScanPaths: () => [] })
+    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), contextInspectorService: inspectorStub, getScanPaths: () => [] })
 
     const created = call<Record<string, unknown>>("workspace:create", "Frontend", "/a")
     expect(created.name).toBe("Frontend")
@@ -97,7 +105,7 @@ describe("WS-B/H workspace-handlers", () => {
 
   it("set-active is SELECTION-ONLY (persists + no spawn); get-active reflects it", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), getScanPaths: () => [] })
+    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), contextInspectorService: inspectorStub, getScanPaths: () => [] })
     const id = call<Record<string, unknown>>("workspace:create", "WS", "/d1").id as string
 
     expect(createCalls).toBe(0)
@@ -111,7 +119,7 @@ describe("WS-B/H workspace-handlers", () => {
 
   it("launch (the boot verb) STILL spawns one session in the folder", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), getScanPaths: () => [] })
+    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), contextInspectorService: inspectorStub, getScanPaths: () => [] })
     const id = call<Record<string, unknown>>("workspace:create", "WS", "/d1").id as string
 
     const result = call<{ workspace: string; sessions: unknown[] }>("workspace:launch", id)
@@ -122,7 +130,7 @@ describe("WS-B/H workspace-handlers", () => {
 
   it("delete returns a boolean and clears get-active when the active workspace is removed", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), getScanPaths: () => [] })
+    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), contextInspectorService: inspectorStub, getScanPaths: () => [] })
     const id = call<Record<string, unknown>>("workspace:create", "Doomed").id as string
     call("workspace:set-active", id)
     expect(call<boolean>("workspace:delete", id)).toBe(true)
@@ -132,7 +140,7 @@ describe("WS-B/H workspace-handlers", () => {
 
   it("set-active(null) clears the selection", () => {
     const workspaceService = svc()
-    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), getScanPaths: () => [] })
+    registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), contextInspectorService: inspectorStub, getScanPaths: () => [] })
     const id = call<Record<string, unknown>>("workspace:create", "A").id as string
     call("workspace:set-active", id)
     expect(call<boolean>("workspace:set-active", null)).toBe(true)
@@ -149,7 +157,7 @@ describe("WS-B/H workspace-handlers", () => {
       writeFileSync(join(scanDir, "workspace.json"), JSON.stringify({ name: "Imported", repos: [] }))
 
       const workspaceService = svc()
-      registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), getScanPaths: () => [join(root, "ws-*")] })
+      registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), contextInspectorService: inspectorStub, getScanPaths: () => [join(root, "ws-*")] })
 
       const list = call<Array<Record<string, unknown>>>("workspace:rescan")
       expect(list).toHaveLength(1)
@@ -167,7 +175,7 @@ describe("WS-B/H workspace-handlers", () => {
   describe("dialog:open-directory (WS-D/H folder picker)", () => {
     beforeEach(() => {
       const workspaceService = svc()
-      registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), getScanPaths: () => [] })
+      registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: memSvc(), contextInspectorService: inspectorStub, getScanPaths: () => [] })
       showOpenDialog.mockClear()
     })
 
@@ -199,7 +207,7 @@ describe("WS-B/H workspace-handlers", () => {
     beforeEach(() => {
       const workspaceService = svc()
       mem = memSvc()
-      registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: mem, getScanPaths: () => [] })
+      registerWorkspaceHandlers({ workspaceService, workspaceMemoryService: mem, contextInspectorService: inspectorStub, getScanPaths: () => [] })
     })
 
     it("workspace:get-memory returns the (empty) record for a workspace id", () => {
