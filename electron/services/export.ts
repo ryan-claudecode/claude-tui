@@ -235,6 +235,9 @@ export class ExportService {
       const target = this.modeAPath(folder)
 
       // GITIGNORE-FIRST: write the entry BEFORE the file lands. Declining / failing → no export.
+      // Capture whether the user ALREADY ignored the dir, so a later rollback removes ONLY a
+      // line WE added (never one of theirs).
+      const hadGitignoreEntry = this.gitignoreEntryPresent(folder)
       const ignored = this.ensureGitignoreEntry(folder)
       if (!ignored) {
         return {
@@ -254,6 +257,10 @@ export class ExportService {
       if (!wrote.ok) {
         delete this.registry.entries[this.keyFor(workspaceId)]
         this.persist()
+        // Roll back the gitignore line too — but ONLY if WE added it this call (never strip a
+        // line the user already had). Best-effort; a residual ignore line is harmless, but
+        // leaving it is a least-surprise wart for an export that never materialized.
+        if (!hadGitignoreEntry) this.removeGitignoreEntry(folder)
         return { ok: false, error: wrote.error ?? "Initial export write failed." }
       }
       return { ok: true, state: this.getExportState(workspaceId) }
@@ -451,15 +458,19 @@ export class ExportService {
       try {
         existing = readFileSync(dest, "utf8")
       } catch {
-        existing = null
+        // FAIL CLOSED: a dest that EXISTS but we can't read is one we CANNOT verify as ours.
+        // Treating it as absent (existing=null) and falling through would STOMP it — e.g. a
+        // transient lock/EPERM on a user-authored file. Refuse instead; the caller
+        // (`regenerate`) catches this and surfaces ok:false, exactly like a marker mismatch.
+        throw new Error(
+          `refusing to overwrite ${dest}: it exists but is unreadable (cannot verify our identity marker)`,
+        )
       }
       // Refuse to clobber a file that exists but is NOT ours (no marker / wrong workspace).
-      // Match the expected marker line from the new content's first line.
+      // The format pins the marker as the FIRST line; a file whose first line isn't our exact
+      // marker is a user-authored (or foreign) file we must NOT stomp.
       const expectedMarker = content.split("\n", 1)[0]
-      if (existing !== null && !existing.startsWith(expectedMarker)) {
-        // Be tolerant of a marker on a different first-line position? No — the format pins
-        // the marker as the FIRST line. A file whose first line isn't our exact marker is a
-        // user-authored (or foreign) file; we must NOT stomp it.
+      if (!existing.startsWith(expectedMarker)) {
         throw new Error(
           `refusing to overwrite ${dest}: it exists but lacks our identity marker (not a Mission Control export)`,
         )
@@ -561,6 +572,28 @@ export class ExportService {
     } catch (err) {
       logWarn("export", `ensureGitignoreEntry(${folder}) failed: ${String(err)}`)
       return false
+    }
+  }
+
+  /**
+   * Best-effort removal of OUR exact {@link GITIGNORE_ENTRY} line — used to roll back the
+   * gitignore-first write when the initial export then fails. Removes ONLY the precise line we
+   * add (never the user's own `.claude-tui` variants matched by {@link hasIgnoreLine}), and
+   * preserves all other content + the file's EOL. Silent on any error (non-fatal — a residual
+   * ignore line is harmless).
+   */
+  private removeGitignoreEntry(folder: string): void {
+    const giPath = join(folder, ".gitignore")
+    try {
+      if (!existsSync(giPath)) return
+      const existing = readFileSync(giPath, "utf8")
+      const eol = existing.includes("\r\n") ? "\r\n" : "\n"
+      // split/join round-trips a trailing newline (the trailing "" element survives the filter),
+      // so removing a real line preserves the file's terminal structure.
+      const kept = existing.split(/\r?\n/).filter((l) => l.trim() !== GITIGNORE_ENTRY)
+      writeFileSync(giPath, kept.join(eol), "utf8")
+    } catch (err) {
+      logWarn("export", `removeGitignoreEntry(${folder}) failed: ${String(err)}`)
     }
   }
 

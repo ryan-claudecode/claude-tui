@@ -202,6 +202,55 @@ describe("ExportService — refuse to overwrite a foreign file", () => {
     // The user's file is untouched.
     expect(readFileSync(dest, "utf8")).toContain("Do not delete.")
   })
+
+  it("fails CLOSED when the dest EXISTS but is unreadable — refuses, never stomps", () => {
+    // existsSync(dest)===true but readFileSync throws (a directory at the path forces EISDIR —
+    // a hermetic stand-in for a transiently-locked user file). The guard must REFUSE, not treat
+    // it as absent and write over it.
+    mkdirSync(join(folderA, ".claude-tui", "workspace-memory.md"), { recursive: true })
+    writeFileSync(join(folderA, ".gitignore"), `${GITIGNORE_ENTRY}\n`, "utf8")
+    const store = { folders: { "ws-1": folderA }, instructions: { "ws-1": "x" }, findings: { "ws-1": [] } }
+    const svc = new ExportService(makeDeps(store), { registryDir: root })
+    const res = svc.enableExport("ws-1", "A")
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/unreadable/i)
+    // Still a directory — never stomped into our file.
+    expect(statSync(join(folderA, ".claude-tui", "workspace-memory.md")).isDirectory()).toBe(true)
+  })
+})
+
+describe("ExportService — gitignore rollback on a failed first regen", () => {
+  /** A foreign (marker-less) file at the dest forces the first regen to refuse, exercising the
+   *  enableExport rollback path. */
+  function seedForeignDest(): void {
+    mkdirSync(join(folderA, ".claude-tui"), { recursive: true })
+    writeFileSync(join(folderA, ".claude-tui", "workspace-memory.md"), "# foreign, no marker\n", "utf8")
+  }
+
+  it("removes the /.claude-tui/ line WE added when the first regen fails", () => {
+    seedForeignDest() // folderA has NO .gitignore yet → our enable will add the line
+    const store = { folders: { "ws-1": folderA }, instructions: { "ws-1": "x" }, findings: { "ws-1": [] } }
+    const svc = new ExportService(makeDeps(store), { registryDir: root })
+    const res = svc.enableExport("ws-1", "A")
+    expect(res.ok).toBe(false)
+    // The line we added is rolled back — no residual ignore entry for an export that never landed.
+    const giPath = join(folderA, ".gitignore")
+    const gi = existsSync(giPath) ? readFileSync(giPath, "utf8") : ""
+    expect(gi).not.toContain(GITIGNORE_ENTRY)
+  })
+
+  it("leaves a PRE-EXISTING /.claude-tui/ line intact when the first regen fails", () => {
+    seedForeignDest()
+    // The user already ignores the dir — our rollback must NOT strip their line.
+    writeFileSync(join(folderA, ".gitignore"), `node_modules\n${GITIGNORE_ENTRY}\n`, "utf8")
+    const store = { folders: { "ws-1": folderA }, instructions: { "ws-1": "x" }, findings: { "ws-1": [] } }
+    const svc = new ExportService(makeDeps(store), { registryDir: root })
+    const res = svc.enableExport("ws-1", "A")
+    expect(res.ok).toBe(false)
+    const gi = readFileSync(join(folderA, ".gitignore"), "utf8")
+    expect(gi).toContain(GITIGNORE_ENTRY)
+    expect(gi).toContain("node_modules")
+  })
 })
 
 describe("ExportService — atomic + only-rewrite-if-changed", () => {
