@@ -10,6 +10,7 @@ import {
   buildInjectedContext,
   type InjectWorkspaceFinding,
 } from "./contextInject"
+import { detectAdoption } from "./adoption"
 import { loadConfig, resolveInjectMaxBytes } from "../config"
 
 /**
@@ -227,6 +228,13 @@ function nonePlaceholder(tier: ContextTier, label: string, path: string): Contex
   return { tier, label, path, exists: false, content: "", imports: [] }
 }
 
+/** Join two optional notes with the standard separator (skips undefined), or undefined when both
+ *  are absent. */
+function combineNotes(a?: string, b?: string): string | undefined {
+  const parts = [a, b].filter(Boolean)
+  return parts.length ? parts.join(" · ") : undefined
+}
+
 /**
  * Best-effort read of the `claudeMdExcludes` array from the user's Claude settings
  * (`~/.claude/settings.json`) + the project settings (`F/.claude/settings.json`,
@@ -334,6 +342,13 @@ export class ContextInspectorService {
     // Injectable home dir so a hermetic test points the machine-global tiers (0/1/2/7) at a
     // temp dir instead of the real `~`. Defaults to `os.homedir()` in production.
     private readonly home: string = homedir(),
+    // CAPP-100 / E2 — an optional Mode-C "wired myself" hint (the only non-scan adoption
+    // signal). Injected by ipc.ts from the ExportService; defaults to none so the inspector
+    // stays constructible without the export service (and tests stay simple).
+    private readonly selfWiredHint: (workspaceId: string | null) => boolean = () => false,
+    // CAPP-100 / E2 — the export's advertised `@import` line, so the adoption scan matches a
+    // MANUAL paste (not just our delimited block). Injected by ipc.ts; defaults to none.
+    private readonly importLineHint: (workspaceId: string | null) => string | null = () => null,
   ) {}
 
   /**
@@ -345,6 +360,17 @@ export class ContextInspectorService {
     const folder = this.resolveFolder(workspaceId)
     const gitRoot = folder ? gitToplevel(folder) : null
     const excludes = readClaudeMdExcludes(this.home, folder)
+
+    // CAPP-100 / E2 — a FRESH adoption scan (marker grep over the host CLAUDE-family files,
+    // bounded by the same home + git-root the inspector uses). When adopted, tier #10
+    // self-attributes the workspace portion under the host @import + `adopted` is true.
+    const adopted = detectAdoption(workspaceId, {
+      resolveFolder: (id) => this.resolveFolder(id),
+      gitRoot: () => gitRoot,
+      home: this.home,
+      selfWiredHint: (id) => this.selfWiredHint(id),
+      importLine: (id) => this.importLineHint(id),
+    })
 
     const sources: ContextSource[] = []
 
@@ -378,14 +404,13 @@ export class ContextInspectorService {
     if (folder) sources.push(this.autoMemorySource(folder, gitRoot))
 
     // ── Tier 10 — Our injected primer (the WORKSPACE tier, through the truncating path) ─
-    sources.push(this.injectedPrimerSource(workspaceId, folder))
+    sources.push(this.injectedPrimerSource(workspaceId, folder, adopted))
 
     return {
       folder,
       gitRoot,
-      // E2 computes real adoption (marker scan over the host files). v1 ALWAYS false — the
-      // field is wired now so the contract is stable.
-      adopted: false,
+      // CAPP-100 / E2 — real adoption from the fresh marker scan over the host CLAUDE-family files.
+      adopted,
       sources,
     }
   }
@@ -543,7 +568,11 @@ export class ContextInspectorService {
    * workspace-level). Sourced from the SAME services the spawn reads
    * (`workspaceMemory.getMemory(W).instructions` + `recall.workspaceTierEntries(W)`).
    */
-  private injectedPrimerSource(workspaceId: string | null, folder: string | null): ContextSource {
+  private injectedPrimerSource(
+    workspaceId: string | null,
+    folder: string | null,
+    adopted: boolean,
+  ): ContextSource {
     const instructions = this.workspaceMemory.getMemory(workspaceId).instructions
     const workspaceFindings: InjectWorkspaceFinding[] = this.recall
       .workspaceTierEntries(workspaceId ?? undefined)
@@ -556,25 +585,32 @@ export class ContextInspectorService {
       }))
 
     const maxBytes = resolveInjectMaxBytes(loadConfig())
-    // TODO(E2): tier #10 adoption self-attribution — when this workspace is ADOPTED (the
-    // user `@import`s our exported primer), #10 must note "delivered via your @import, not
-    // our flag — de-duped" and the inject drops the workspace tier. v1 ships #10 as a plain
-    // truncated render (the design explicitly allows the two-pass ship of #10).
-    const rendered = buildInjectedContext({ instructions, workspaceFindings }, { maxBytes })
+    // CAPP-100 / E2 — tier #10 adoption self-attribution. When this workspace is ADOPTED (the
+    // user `@import`s our exported primer), the inject DROPS the workspace tier (`adopted:true`),
+    // so the truncating render of the workspace-only inspector primer is empty — the workspace
+    // brain is instead "delivered via your @import, not our flag — de-duped". We surface that
+    // attribution note rather than a misleading empty/duplicated render.
+    const rendered = buildInjectedContext({ instructions, workspaceFindings, adopted }, { maxBytes })
 
     const folderNote = folder
       ? undefined
       : "Folderless — only the Mission Control primer applies; machine-global tiers 0/1/2 still shown"
+    const adoptionNote = adopted
+      ? "Adopted — the workspace tier is delivered via your @import of the exported primer, not our " +
+        "injected flag (de-duped, loaded exactly once). Our inject carries only the per-session tier."
+      : undefined
 
     if (!rendered) {
       return {
         tier: 10,
         label: "Mission Control primer",
         path: "(injected via --append-system-prompt-file)",
-        exists: false,
+        // When adopted, the workspace-only inject render is empty by design (the @import carries
+        // it) — that's not "missing", so mark it present with the attribution note.
+        exists: adopted,
         content: "",
         imports: [],
-        ...(folderNote ? { truncatedNote: folderNote } : {}),
+        ...(combineNotes(adoptionNote, folderNote) ? { truncatedNote: combineNotes(adoptionNote, folderNote)! } : {}),
       }
     }
     return {
@@ -584,7 +620,7 @@ export class ContextInspectorService {
       exists: true,
       content: rendered,
       imports: [],
-      ...(folderNote ? { truncatedNote: folderNote } : {}),
+      ...(combineNotes(adoptionNote, folderNote) ? { truncatedNote: combineNotes(adoptionNote, folderNote)! } : {}),
     }
   }
 }

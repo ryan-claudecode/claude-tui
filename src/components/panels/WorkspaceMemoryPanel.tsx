@@ -4,7 +4,7 @@ import {
   type WorkspaceMemoryRecord,
   type WorkspaceFinding,
 } from "../../lib/workspaceMemoryView"
-import type { ExportStateView } from "../../lib/exportView"
+import type { ExportStateView, AdoptionStateView } from "../../lib/exportView"
 
 /**
  * CAPP-94 / U6 — the workspace-memory EDITOR: a companion-window panel to view and
@@ -305,6 +305,75 @@ export default function WorkspaceMemoryPanel(props: Props) {
 
   const exportEnabled = exportState?.enabled ?? false
 
+  // ── CAPP-100 / E2 — adoption: the reversible CLAUDE.local.md "Wire it in for me" / "Unwire" ──
+  const [adoption, setAdoption] = useState<AdoptionStateView | null>(null)
+  const [wireBusy, setWireBusy] = useState(false)
+  const [wireMsg, setWireMsg] = useState<string | null>(null)
+
+  const refreshAdoption = useCallback(async () => {
+    try {
+      const st = await window.companionApi.getAdoptionState(pinnedId)
+      setAdoption(st)
+    } catch {
+      /* leave the last-known adoption state on a transient IPC failure */
+    }
+  }, [pinnedId])
+
+  useEffect(() => {
+    void refreshAdoption()
+  }, [refreshAdoption, exportState])
+
+  const handleWire = useCallback(async () => {
+    if (wireBusy) return
+    setWireBusy(true)
+    setWireMsg(null)
+    try {
+      const res = await window.companionApi.wireImportBlock(pinnedId)
+      if (!res.ok) setWireMsg(res.error ?? "Could not wire the import.")
+      else if (res.status === "already") setWireMsg("Already wired — no change.")
+      else setWireMsg("Wired into CLAUDE.local.md.")
+      await refreshAdoption()
+    } catch (err) {
+      setWireMsg(String(err))
+    } finally {
+      setWireBusy(false)
+    }
+  }, [wireBusy, pinnedId, refreshAdoption])
+
+  const handleUnwire = useCallback(async () => {
+    if (wireBusy) return
+    setWireBusy(true)
+    setWireMsg(null)
+    try {
+      const res = await window.companionApi.unwireImportBlock(pinnedId)
+      if (!res.ok) setWireMsg(res.error ?? "Could not unwire the import.")
+      else if (res.status === "absent") setWireMsg("No Mission Control import block found.")
+      else setWireMsg("Removed our import block from CLAUDE.local.md.")
+      await refreshAdoption()
+    } catch (err) {
+      setWireMsg(String(err))
+    } finally {
+      setWireBusy(false)
+    }
+  }, [wireBusy, pinnedId, refreshAdoption])
+
+  const handleToggleSelfWired = useCallback(
+    async (selfWired: boolean) => {
+      if (wireBusy) return
+      setWireBusy(true)
+      setWireMsg(null)
+      try {
+        await window.companionApi.setExportSelfWired(pinnedId, selfWired)
+        await refreshAdoption()
+      } catch (err) {
+        setWireMsg(String(err))
+      } finally {
+        setWireBusy(false)
+      }
+    },
+    [wireBusy, pinnedId, refreshAdoption],
+  )
+
   const title = props.workspaceName?.trim()
     ? `Memory — ${props.workspaceName}`
     : isUntagged
@@ -514,6 +583,60 @@ export default function WorkspaceMemoryPanel(props: Props) {
                 </button>
               </div>
             )}
+            {/* CAPP-100 / E2 — adoption: wire/unwire the @import for me (NON-MCP, user-driven).
+                Every control statically visible (no hover-reveal). */}
+            <div className="wmem-adoption">
+              <div className="wmem-adoption-status">
+                {adoption?.adopted ? (
+                  <span className="wmem-adoption-on">
+                    ✓ Adopted — your CLAUDE-family files <code>@import</code> this primer, so Mission
+                    Control injects only the per-session tier (loaded exactly once).
+                  </span>
+                ) : (
+                  <span className="wmem-adoption-off">
+                    Not adopted yet — Mission Control still injects the workspace tier directly.
+                  </span>
+                )}
+              </div>
+              {adoption?.canWire ? (
+                <div className="wmem-adoption-actions">
+                  <button
+                    type="button"
+                    className="wmem-mini"
+                    onClick={() => void handleWire()}
+                    disabled={wireBusy}
+                    title="Append a delimited @import block to this folder's CLAUDE.local.md"
+                  >
+                    Wire it in for me
+                  </button>
+                  <button
+                    type="button"
+                    className="wmem-mini"
+                    onClick={() => void handleUnwire()}
+                    disabled={wireBusy}
+                    title="Remove our @import block (refuses if you edited inside it)"
+                  >
+                    Unwire
+                  </button>
+                </div>
+              ) : (
+                <label className="wmem-adoption-selfwired">
+                  <input
+                    type="checkbox"
+                    checked={adoption?.selfWired ?? false}
+                    onChange={(e) => void handleToggleSelfWired(e.target.checked)}
+                    disabled={wireBusy}
+                  />
+                  I’ve wired this export into a CLAUDE-family file myself (custom path)
+                </label>
+              )}
+              {wireMsg && (
+                <p className="wmem-adoption-msg" role="status">
+                  {wireMsg}
+                </p>
+              )}
+            </div>
+
             <button
               type="button"
               className="wmem-mini wmem-export-disable"

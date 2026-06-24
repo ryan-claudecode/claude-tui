@@ -1316,13 +1316,18 @@ export class SessionService {
     | {
         name: string
         summary: string
-        active: { text: string }[]
+        active: { text: string; originKey?: string }[]
         ruledOut: { text: string; correction?: string }[]
       }
     | undefined {
     const s = this.sessions.get(sessionId)
     if (!s) return undefined
-    const active = s.notes.filter((n) => n.status === "active").map((n) => ({ text: n.text }))
+    // CAPP-100 / E2 — carry each active note's `(sessionId|noteId)` originKey so the ADOPTED
+    // (session-tier-only) inject can suppress an origin note whose promoted workspace twin
+    // arrives via the user's @import. Non-adopted path never consults it (byte-unchanged).
+    const active = s.notes
+      .filter((n) => n.status === "active")
+      .map((n) => ({ text: n.text, originKey: `${s.id}|${n.id}` }))
     const ruledOut = s.notes
       .filter((n) => n.status === "superseded")
       .map((n) => {

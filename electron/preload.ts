@@ -158,6 +158,17 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("export:set-untagged-enabled", enabled),
   regenerateExport: (workspaceId: string | null) =>
     ipcRenderer.invoke("export:regenerate", workspaceId),
+  // CAPP-100 / E2 — adoption: the reversible CLAUDE.local.md insert/Unwire (NON-MCP, user-driven
+  // only) + the read-only adoption probe. Appends/removes ONLY our delimited block; change-guarded;
+  // Unwire refuses when the user hand-edited inside the delimiters.
+  getAdoptionState: (workspaceId: string | null) =>
+    ipcRenderer.invoke("adoption:get-state", workspaceId),
+  wireImportBlock: (workspaceId: string | null) =>
+    ipcRenderer.invoke("adoption:wire", workspaceId),
+  unwireImportBlock: (workspaceId: string | null) =>
+    ipcRenderer.invoke("adoption:unwire", workspaceId),
+  setExportSelfWired: (workspaceId: string | null, selfWired: boolean) =>
+    ipcRenderer.invoke("adoption:set-self-wired", workspaceId, selfWired),
   // The Keep modal's editable candidate list (the dying session's promotable notes).
   getPromotableFindings: (sessionId: string) =>
     ipcRenderer.invoke("worksession:promotable-findings", sessionId),

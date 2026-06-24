@@ -29,7 +29,9 @@ import {
 import { resolveInjectMaxBytes } from "./config"
 import { LocalHistoryService } from "./services/localHistory"
 import { ExportService } from "./services/export"
+import { detectAdoption } from "./services/adoption"
 import { registerExportHandlers } from "./ipc/export-handlers"
+import { registerAdoptionHandlers } from "./ipc/adoption-handlers"
 import { logWarn } from "./log"
 import { CompanionService } from "./services/companion"
 import { AttentionService } from "./services/attention"
@@ -132,6 +134,11 @@ export const contextInspectorService = new ContextInspectorService(
   workspaceService,
   workspaceMemoryService,
   recallService,
+  undefined,
+  // CAPP-100 / E2 — the Mode-C self-wired hint + the advertised @import line, read lazily
+  // (exportService is declared just below; the closures resolve them at call time).
+  (id) => exportService.isSelfWired(id),
+  (id) => exportService.getExportState(id).importLine,
 )
 
 // CAPP-99 / E1 — the EXPORT pillar: materialize the WORKSPACE tier (instructions + durable
@@ -317,6 +324,16 @@ export async function setupIpc(win: BrowserWindow) {
     getInstructions: (wsId) => workspaceMemoryService.getMemory(wsId).instructions,
     workspaceTierEntries: (wsId) => recallService.workspaceTierEntries(wsId),
     getSessionSections: (id) => workSessionService.getSessionContextSections(id),
+    // CAPP-100 / E2 — the FRESH per-spawn adoption scan (never cached). Default-SAFE: a throw
+    // here is caught in assembleInjectInput → NOT adopted → the workspace tier is injected. An
+    // adopted workspace's inject drops the workspace tier (it rides the user's @import); the
+    // session tier (incl. promoted-twin suppression) is always present.
+    isAdopted: (wsId) =>
+      detectAdoption(wsId ?? null, {
+        resolveFolder: (id) => workspaceService.resolveWorkspaceDir(id),
+        selfWiredHint: (id) => exportService.isSelfWired(id),
+        importLine: (id) => exportService.getExportState(id).importLine,
+      }),
   }
   sessionService.setContextBuilder((sessionId, { resume, terminalId }) => {
     // CAPP-97 — one assembly yields BOTH the payload and the launch stamp to record (keyed by
@@ -459,6 +476,9 @@ export async function setupIpc(win: BrowserWindow) {
   registerLocalHistoryHandlers({ localHistoryService, shellService })
   // CAPP-99 / E1 — export enable/disable/regen/state (export:* channels).
   registerExportHandlers({ exportService, workspaceService })
+  // CAPP-100 / E2 — the reversible CLAUDE.local.md insert + adoption probe. MAIN-WINDOW only,
+  // NON-MCP (no agent can trigger the native-file write).
+  registerAdoptionHandlers({ exportService, workspaceService })
   registerAppHandlers({
     config,
     sessionService,

@@ -28,3 +28,26 @@ export interface EnableResultView {
   error?: string
   state?: ExportStateView
 }
+
+/** CAPP-100 / E2 — the adoption probe the Export section reads (fresh marker scan + host-file
+ *  + whether our managed block can be auto-inserted). Mirrors the `adoption:get-state` payload. */
+export interface AdoptionStateView {
+  /** True iff this workspace's exported primer is `@import`ed in a host CLAUDE-family file. */
+  adopted: boolean
+  /** The `<F>/CLAUDE.local.md` host file the wire/unwire would edit, or null (folderless). */
+  hostFile: string | null
+  /** True when auto-wire is possible (Mode A + a resolvable folder). */
+  canWire: boolean
+  /** The explicit Mode-C "I wired it myself" hint. */
+  selfWired: boolean
+  /** The @import line (for the manual-paste / wire path). */
+  importLine: string | null
+}
+
+/** CAPP-100 / E2 — the result of a Wire/Unwire attempt. Mirrors `WireResult` in `adoption.ts`. */
+export interface WireResultView {
+  ok: boolean
+  status: "wired" | "already" | "removed" | "absent" | "refused" | "error"
+  error?: string
+  path?: string
+}

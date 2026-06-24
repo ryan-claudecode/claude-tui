@@ -377,6 +377,51 @@ describe("ContextInspectorService — tier 10 truncation parity with the inject"
   })
 })
 
+describe("ContextInspectorService — CAPP-100 / E2 adoption tie-in (tier #10 + adopted field)", () => {
+  it("adopted=false + plain #10 render when no host file imports our marker", () => {
+    const folder = join(root, "proj-not-adopted")
+    mkdirSync(folder, { recursive: true })
+    const { inspector, memory, workspaceId } = makeInspector(folder)
+    memory.setInstructions(workspaceId, "Use TS.")
+    const result = inspector.inspectWorkspaceContext(workspaceId)
+    expect(result.adopted).toBe(false)
+    const t10 = tier(result, 10)!
+    // Not adopted → the workspace tier IS in #10 (instructions present).
+    expect(t10.content).toContain("Workspace standing instructions")
+  })
+
+  it("adopted=true + #10 self-attribution when CLAUDE.md @imports our marker", () => {
+    const folder = join(root, "proj-adopted")
+    mkdirSync(folder, { recursive: true })
+    const { inspector, memory, workspaceId } = makeInspector(folder)
+    memory.setInstructions(workspaceId, "Use TS.")
+    // The user has @import'ed our exported primer — the marker for THIS workspace is present.
+    const marker = `<!-- mission-control:workspace-memory v1 workspace=${workspaceId} -->`
+    writeFileSync(join(folder, "CLAUDE.md"), `# Project\n@./.claude-tui/workspace-memory.md\n${marker}\n`)
+    const result = inspector.inspectWorkspaceContext(folder ? workspaceId : null)
+    expect(result.adopted).toBe(true)
+    const t10 = tier(result, 10)!
+    // The workspace tier is dropped from our inject (it rides the @import) → empty content +
+    // the self-attribution note.
+    expect(t10.content).not.toContain("Workspace standing instructions")
+    expect(t10.exists).toBe(true)
+    expect(t10.truncatedNote ?? "").toContain("delivered via your @import")
+  })
+
+  it("a marker for a DIFFERENT workspace does NOT mark this one adopted", () => {
+    const folder = join(root, "proj-other-marker")
+    mkdirSync(folder, { recursive: true })
+    const { inspector, memory, workspaceId } = makeInspector(folder)
+    memory.setInstructions(workspaceId, "Use TS.")
+    writeFileSync(
+      join(folder, "CLAUDE.md"),
+      `# Project\n<!-- mission-control:workspace-memory v1 workspace=some-other-id -->\n`,
+    )
+    const result = inspector.inspectWorkspaceContext(workspaceId)
+    expect(result.adopted).toBe(false)
+  })
+})
+
 describe("ContextInspectorService — read-only invariant", () => {
   it("never creates or mutates any native file under F or the home dir", () => {
     const folder = join(root, "proj-readonly")

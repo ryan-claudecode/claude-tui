@@ -35,7 +35,14 @@ export interface InjectWorkspaceFinding {
 export interface InjectSessionTier {
   name: string
   summary: string
-  active: { text: string }[]
+  active: {
+    text: string
+    /** CAPP-100 / E2 — the `(originSessionId|noteId)` identity of this note, carried so the
+     *  ADOPTED (session-tier-only) build can suppress an origin note whose promoted workspace
+     *  twin arrives via the user's @import (so the finding shows EXACTLY once). Undefined for
+     *  the non-adopted path, where it is never consulted (byte-unchanged). */
+    originKey?: string
+  }[]
   ruledOut: { text: string; correction?: string }[]
 }
 
@@ -47,6 +54,23 @@ export interface InjectContextInput {
   workspaceFindings: InjectWorkspaceFinding[]
   /** The spawning session's own context sections (undefined → no session tier). */
   session?: InjectSessionTier
+  /**
+   * CAPP-100 / E2 — the double-load reconcile. When true (the workspace's export is ADOPTED
+   * via the user's `@import`), the inject DROPS the workspace tier (instructions + workspace
+   * findings) — it arrives once via the @import. The workspace findings are STILL passed in
+   * (and {@link promotedOriginKeys} computed from them) so the session-tier-only build can
+   * suppress a promoted finding's origin note. Default (undefined/false) → today's behavior:
+   * the inject carries BOTH tiers, byte-unchanged from CAPP-97.
+   */
+  adopted?: boolean
+  /**
+   * CAPP-100 / E2 — the promoted-twin suppression key set: `(originSessionId|originNoteId)`
+   * for every workspace finding that was promoted from a session note. In the ADOPTED build,
+   * a session active note whose `originKey` is in this set is suppressed (its twin is in the
+   * @import). NEVER consulted in the non-adopted path. The keystone of the §E invariant that
+   * the session-tier-only build "still takes the workspace findings as input".
+   */
+  promotedOriginKeys?: string[]
 }
 
 export interface BuildOptions {
@@ -151,9 +175,15 @@ function planInject(input: InjectContextInput, opts: BuildOptions = {}): InjectP
   // ── assemble the priority-tagged units ────────────────────────────────────────
   const units: Unit[] = []
 
-  // (1) workspace standing instructions
+  // CAPP-100 / E2 — the double-load reconcile. When the workspace's export is ADOPTED (the user
+  // `@import`s our primer), the workspace tier (instructions + workspace findings) is DROPPED
+  // from the inject — it arrives exactly once via the @import. The session tier is ALWAYS
+  // present. NOT adopted (default) → both tiers, byte-unchanged from CAPP-97.
+  const adopted = input.adopted === true
+
+  // (1) workspace standing instructions — OMITTED when adopted.
   const instructions = input.instructions.trim()
-  if (instructions) {
+  if (!adopted && instructions) {
     units.push({
       priority: 1,
       line: `## Workspace standing instructions\n${capText(instructions, INSTRUCTIONS_CAP)}`,
@@ -162,29 +192,40 @@ function planInject(input: InjectContextInput, opts: BuildOptions = {}): InjectP
   }
 
   // Workspace findings split by pin/status. Active findings keep OLDEST first
-  // (foundational findings are often the load-bearing HARD RULES).
-  const wsActive = input.workspaceFindings
-    .filter((f) => f.status === "active")
-    .sort((a, b) => a.createdAt - b.createdAt)
-  const wsPinned = wsActive.filter((f) => f.pinned)
-  const wsUnpinned = wsActive.filter((f) => !f.pinned)
-  const wsRuledOut = input.workspaceFindings.filter((f) => f.status === "ruled-out")
+  // (foundational findings are often the load-bearing HARD RULES). OMITTED when adopted —
+  // but the input findings are STILL used below to compute the promoted-twin suppression.
+  if (!adopted) {
+    const wsActive = input.workspaceFindings
+      .filter((f) => f.status === "active")
+      .sort((a, b) => a.createdAt - b.createdAt)
+    const wsPinned = wsActive.filter((f) => f.pinned)
+    const wsUnpinned = wsActive.filter((f) => !f.pinned)
+    const wsRuledOut = input.workspaceFindings.filter((f) => f.status === "ruled-out")
 
-  // (0) pinned workspace findings — never evicted.
-  for (const f of wsPinned) units.push({ priority: 0, line: renderWorkspaceFinding(f), wsSig: signWorkspaceFinding(f) })
-  // (3) active workspace findings (oldest first).
-  for (const f of wsUnpinned) units.push({ priority: 3, line: renderWorkspaceFinding(f), wsSig: signWorkspaceFinding(f) })
-  // (6) ruled-out workspace findings — least valuable, dropped first.
-  for (const f of wsRuledOut) units.push({ priority: 6, line: renderWorkspaceFinding(f), wsSig: signWorkspaceFinding(f) })
+    // (0) pinned workspace findings — never evicted.
+    for (const f of wsPinned) units.push({ priority: 0, line: renderWorkspaceFinding(f), wsSig: signWorkspaceFinding(f) })
+    // (3) active workspace findings (oldest first).
+    for (const f of wsUnpinned) units.push({ priority: 3, line: renderWorkspaceFinding(f), wsSig: signWorkspaceFinding(f) })
+    // (6) ruled-out workspace findings — least valuable, dropped first.
+    for (const f of wsRuledOut) units.push({ priority: 6, line: renderWorkspaceFinding(f), wsSig: signWorkspaceFinding(f) })
+  }
+
+  // CAPP-100 / E2 — the promoted-twin suppression set. ALWAYS computed from the workspace
+  // findings (passed in even when adopted), so the session-tier-only build never emits a
+  // promoted finding's origin note alongside its workspace twin (which, when adopted, is in
+  // the @import). The keys come from the wiring layer (the recall entries carry origin ids).
+  const promotedKeys = new Set(input.promotedOriginKeys ?? [])
 
   // (2) session summary
   const session = input.session
   if (session?.summary.trim()) {
     units.push({ priority: 2, line: `__SESSION_SUMMARY__\n${capText(session.summary, INSTRUCTIONS_CAP)}`, kind: "summary" })
   }
-  // (4) session active notes (newest first — most recent reasoning).
+  // (4) session active notes (newest first — most recent reasoning). When ADOPTED, an origin
+  // note whose promoted twin is in the @import is suppressed (so the finding shows once).
   if (session) {
     for (const n of [...session.active].reverse()) {
+      if (adopted && n.originKey && promotedKeys.has(n.originKey)) continue
       units.push({ priority: 4, line: `- ${capText(n.text, FINDING_CAP)}`, sessionSig: signSessionActive(n) })
     }
     // (5) session ruled-out
@@ -367,6 +408,11 @@ export interface InjectSourceEntry {
   correction?: string
   createdAt: number
   pinned?: boolean
+  /** CAPP-100 / E2 — the promotion origin `(originSessionId, originNoteId)`, carried so the
+   *  ADOPTED session-tier-only build can suppress a promoted finding's origin note. Present
+   *  only for a promoted (not authored) workspace finding. */
+  originSessionId?: string
+  originNoteId?: string
 }
 
 /** The live-service reads `buildSessionInject` needs, INJECTED by the wiring layer so the
@@ -381,6 +427,13 @@ export interface SessionInjectDeps {
   workspaceTierEntries: (workspaceId: string | undefined) => InjectSourceEntry[]
   /** The spawning session's own context sections. */
   getSessionSections: (sessionId: string) => InjectSessionTier | undefined
+  /**
+   * CAPP-100 / E2 — whether THIS workspace's export is ADOPTED (a FRESH marker scan over the
+   * host CLAUDE-family files, run at EVERY assembly — never cached). Default-SAFE: any
+   * uncertainty → false → the inject carries the workspace tier. Optional so existing test
+   * deps (no E2) default to NOT adopted = today's byte-unchanged behavior.
+   */
+  isAdopted?: (workspaceId: string | undefined) => boolean
 }
 
 /**
@@ -438,17 +491,33 @@ export function assembleInjectInput(
 ): InjectContextInput | undefined {
   if (!sessionId) return undefined
   const workspaceId = deps.workspaceIdOf(sessionId)
-  const workspaceFindings: InjectWorkspaceFinding[] = deps.workspaceTierEntries(workspaceId).map((e) => ({
+  const entries = deps.workspaceTierEntries(workspaceId)
+  const workspaceFindings: InjectWorkspaceFinding[] = entries.map((e) => ({
     text: e.text,
     status: e.status === "ruled-out" ? "ruled-out" : "active",
     ...(e.correction ? { correction: e.correction } : {}),
     createdAt: e.createdAt,
     ...(e.pinned ? { pinned: true } : {}),
   }))
+  // CAPP-100 / E2 — the promoted-twin suppression keys, derived from the workspace findings'
+  // promotion origins. Always computed (cheap) so the session-tier-only ADOPTED build can
+  // suppress an origin note; the non-adopted build never consults them.
+  const promotedOriginKeys = entries
+    .filter((e) => e.originSessionId && e.originNoteId)
+    .map((e) => `${e.originSessionId}|${e.originNoteId}`)
+  // FRESH adoption scan (default-safe: no detector / a throw → NOT adopted → inject both tiers).
+  let adopted = false
+  try {
+    adopted = deps.isAdopted?.(workspaceId) === true
+  } catch {
+    adopted = false
+  }
   return {
     instructions: deps.getInstructions(workspaceId ?? null),
     workspaceFindings,
     session: deps.getSessionSections(sessionId),
+    adopted,
+    promotedOriginKeys,
   }
 }
 
@@ -534,16 +603,26 @@ export function buildContextDelta(input: InjectContextInput, stamp: ContextStamp
       "> The curated context below was auto-loaded at spawn — only what CHANGED since is shown here.",
   ]
 
-  // Instructions — show only when the whole string changed.
+  // CAPP-100 / E2 — when ADOPTED, the workspace tier is delivered by the user's @import (a
+  // CLAUDE.md user message refreshed each spawn), NOT by our inject. So the delta MUST NOT
+  // surface workspace instructions/findings as "new" — the launch stamp has no workspace
+  // signatures (the inject dropped that tier), and resurfacing them here would double-load
+  // exactly what §E removes. Only the SESSION tier (which the @import can't carry) deltas.
+  const adopted = input.adopted === true
+
+  // Instructions — show only when the whole string changed (skipped entirely when adopted).
   const instructions = input.instructions.trim()
-  if (instructions && instructions !== stamp.instructions) {
+  if (!adopted && instructions && instructions !== stamp.instructions) {
     parts.push(`## Workspace standing instructions (changed)\n${capText(instructions, INSTRUCTIONS_CAP)}`)
   }
 
-  // Workspace findings new/edited since launch (signature not in the launch set).
-  const wsNew = input.workspaceFindings.filter((f) => !launchWs.has(signWorkspaceFinding(f)))
-  if (wsNew.length) {
-    parts.push(`## Durable workspace findings (new/updated)\n${wsNew.map(renderWorkspaceFinding).join("\n")}`)
+  // Workspace findings new/edited since launch (signature not in the launch set). Skipped when
+  // adopted (the @import carries the workspace tier).
+  if (!adopted) {
+    const wsNew = input.workspaceFindings.filter((f) => !launchWs.has(signWorkspaceFinding(f)))
+    if (wsNew.length) {
+      parts.push(`## Durable workspace findings (new/updated)\n${wsNew.map(renderWorkspaceFinding).join("\n")}`)
+    }
   }
 
   // Session tier — summary changed + new/edited findings.
@@ -554,7 +633,14 @@ export function buildContextDelta(input: InjectContextInput, stamp: ContextStamp
     if (summary && summary !== stamp.summary) {
       sessionParts.push(`### Summary (changed)\n${capText(summary, INSTRUCTIONS_CAP)}`)
     }
-    const activeNew = session.active.filter((n) => !launchSession.has(signSessionActive(n)))
+    // When adopted, a promoted finding's origin note is suppressed (its twin rides the @import),
+    // consistent with the launch payload — so it never surfaces as a session-tier "new" delta.
+    const promotedKeys = new Set(input.promotedOriginKeys ?? [])
+    const activeNew = session.active.filter(
+      (n) =>
+        !launchSession.has(signSessionActive(n)) &&
+        !(adopted && n.originKey && promotedKeys.has(n.originKey)),
+    )
     if (activeNew.length) {
       sessionParts.push(`### Findings (new/updated)\n${activeNew.map((n) => `- ${capText(n.text, FINDING_CAP)}`).join("\n")}`)
     }

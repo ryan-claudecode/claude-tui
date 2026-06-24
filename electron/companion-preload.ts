@@ -91,6 +91,17 @@ contextBridge.exposeInMainWorld("companionApi", {
     ipcRenderer.invoke("export:set-untagged-enabled", enabled),
   regenerateExport: (workspaceId: string | null) =>
     ipcRenderer.invoke("export:regenerate", workspaceId),
+  // CAPP-100 / E2 — adoption: the reversible CLAUDE.local.md insert/Unwire (NON-MCP, user-driven
+  // only — no agent can reach these) + the read-only adoption probe. Appends/removes ONLY our
+  // delimited block; change-guarded; Unwire refuses on a user edit inside the delimiters.
+  getAdoptionState: (workspaceId: string | null) =>
+    ipcRenderer.invoke("adoption:get-state", workspaceId),
+  wireImportBlock: (workspaceId: string | null) =>
+    ipcRenderer.invoke("adoption:wire", workspaceId),
+  unwireImportBlock: (workspaceId: string | null) =>
+    ipcRenderer.invoke("adoption:unwire", workspaceId),
+  setExportSelfWired: (workspaceId: string | null, selfWired: boolean) =>
+    ipcRenderer.invoke("adoption:set-self-wired", workspaceId, selfWired),
   getTheme: () => ipcRenderer.invoke("config:get-theme"),
   onThemeChanged: (cb: (mode: string) => void) =>
     ipcRenderer.on("theme:changed", (_e, mode) => cb(mode)),

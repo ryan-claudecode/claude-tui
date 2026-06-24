@@ -28,7 +28,7 @@ import type {
   WorkspaceMemoryRecord,
   WorkspaceFinding,
 } from "../lib/workspaceMemoryView"
-import type { ExportStateView, EnableResultView } from "../lib/exportView"
+import type { ExportStateView, EnableResultView, AdoptionStateView, WireResultView } from "../lib/exportView"
 
 interface PanelState {
   id: string
@@ -136,6 +136,14 @@ declare global {
       regenerateExport: (
         workspaceId: string | null,
       ) => Promise<{ ok: boolean; wrote?: boolean; error?: string }>
+      // CAPP-100 / E2 — adoption: the reversible CLAUDE.local.md insert/Unwire (NON-MCP) + probe.
+      getAdoptionState: (workspaceId: string | null) => Promise<AdoptionStateView>
+      wireImportBlock: (workspaceId: string | null) => Promise<WireResultView>
+      unwireImportBlock: (workspaceId: string | null) => Promise<WireResultView>
+      setExportSelfWired: (
+        workspaceId: string | null,
+        selfWired: boolean,
+      ) => Promise<ExportStateView>
       getTheme: () => Promise<string>
       onThemeChanged: (cb: (mode: string) => void) => void
       removeAllListeners: (channel: string) => void
