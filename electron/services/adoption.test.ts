@@ -158,6 +158,33 @@ describe("detectAdoption — the fresh marker scan", () => {
     writeFileSync(join(home, ".claude", "CLAUDE.md"), workspaceMemoryMarker("__untagged__"), "utf8")
     expect(detectAdoption(null, d)).toBe(true)
   })
+
+  it("a RELATIVE import line in a SHARED host file does NOT false-positive a different workspace", () => {
+    // The Mode-A import line is the SAME for every workspace (`@./.claude-tui/workspace-memory.md`).
+    // If workspace A's "Copy line" is pasted into a SHARED file (the git-root/global CLAUDE.md),
+    // workspace B (whose folder is a sibling) MUST NOT be considered adopted — else B's inject
+    // silently drops B's workspace tier (the worse §E failure).
+    const sharedImport = "@./.claude-tui/workspace-memory.md"
+    // Lay out a git root with the relative import in the ROOT CLAUDE.md (shared), and B under it.
+    const gitRoot = folder
+    const bFolder = join(folder, "pkg-b")
+    mkdirSync(bFolder, { recursive: true })
+    writeFileSync(join(gitRoot, "CLAUDE.md"), `# Monorepo root\n${sharedImport}\n`, "utf8")
+    const dB = deps({ resolveFolder: () => bFolder, gitRoot: () => gitRoot, importLine: () => sharedImport })
+    // The relative import lives in the shared root file, not B's own → B is NOT adopted.
+    expect(detectAdoption("ws-b", dB)).toBe(false)
+
+    // …but the SAME relative line in B's OWN CLAUDE.local.md DOES count (non-regression).
+    writeFileSync(join(bFolder, "CLAUDE.local.md"), `# B local\n${sharedImport}\n`, "utf8")
+    expect(detectAdoption("ws-b", dB)).toBe(true)
+  })
+
+  it("an ABSOLUTE (self-identifying) import line still matches in a shared/global host file", () => {
+    // A Mode-C absolute path embeds the workspace id, so it self-identifies and may match anywhere.
+    const absImport = "@~/.claude-tui/exports/ws-1/workspace-memory.md"
+    writeFileSync(join(home, ".claude", "CLAUDE.md"), `# global\n${absImport}\n`, "utf8")
+    expect(detectAdoption(WS, deps({ importLine: () => absImport }))).toBe(true)
+  })
 })
 
 describe("wireImport / unwireImport — reversible CLAUDE.local.md insert", () => {
@@ -255,5 +282,25 @@ describe("wireImport / unwireImport — reversible CLAUDE.local.md insert", () =
     expect(after).not.toContain(IMPORT_BLOCK_START)
     expect(after).toContain("line one")
     expect(after).toContain("line two")
+  })
+
+  it("a DANGLING half-block (START, no END) → wire REFUSES (never appends a duplicate)", () => {
+    // The user hand-deleted our END delimiter, leaving an orphan START.
+    writeFileSync(host, `# Local\n${IMPORT_BLOCK_START}\n${LINE}\n`, "utf8")
+    const res = wireImport({ hostFile: host, importLine: LINE })
+    expect(res.ok).toBe(false)
+    expect(res.status).toBe("refused")
+    // No second START was appended.
+    const after = readFileSync(host, "utf8")
+    expect(after.split(IMPORT_BLOCK_START).length - 1).toBe(1)
+  })
+
+  it("a DANGLING half-block (START, no END) → unwire REFUSES (manual fix)", () => {
+    writeFileSync(host, `# Local\n${IMPORT_BLOCK_START}\n${LINE}\n`, "utf8")
+    const res = unwireImport({ hostFile: host, importLine: LINE })
+    expect(res.ok).toBe(false)
+    expect(res.status).toBe("refused")
+    // The orphan START is left for the user to fix manually (never silently dropped).
+    expect(readFileSync(host, "utf8")).toContain(IMPORT_BLOCK_START)
   })
 })

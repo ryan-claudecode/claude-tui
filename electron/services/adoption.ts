@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, statSync, writeFileSync, renameSync, unlinkSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { dirname, join } from "node:path"
 import { homedir } from "node:os"
@@ -141,6 +141,16 @@ export function detectAdoption(workspaceId: string | null, deps: AdoptionDeps): 
   const needles = [marker, IMPORT_BLOCK_START]
   if (importLine) needles.push(importLine)
 
+  // A RELATIVE import line is workspace-INVARIANT (every Mode-A workspace advertises the same
+  // `@./.claude-tui/workspace-memory.md`), so honoring it in a SHARED/ancestor/global host file
+  // would FALSE-POSITIVE workspace B off workspace A's wiring → silently drop B's workspace tier
+  // (the worse §E direction). So a relative import (signal #3, and the import-line-in-block
+  // disambiguation of #2) only counts in F's OWN CLAUDE-family files.
+  const ownFiles = folder
+    ? new Set([join(folder, "CLAUDE.md"), join(folder, "CLAUDE.local.md")])
+    : new Set<string>()
+  const relativeImport = importLine ? isRelativeImport(importLine) : false
+
   for (const path of adoptionScanFiles(folder, gitRoot, home)) {
     let text: string
     try {
@@ -153,16 +163,21 @@ export function detectAdoption(workspaceId: string | null, deps: AdoptionDeps): 
       // file we couldn't read.
       continue
     }
+    const relativeOk = !relativeImport || ownFiles.has(path) // a relative import only counts in own files
     // LITERAL exact-string grep — no @import expansion (deferred).
     for (const needle of needles) {
       if (needle && text.includes(needle)) {
+        // The advertised import line (#3): a relative one is only meaningful in F's own files.
+        if (needle === importLine && !relativeOk) continue
         // The bare block delimiter (#2) belongs to ANY workspace's wire — confirm it's OURS by
         // also requiring this workspace's import line inside that block. Without an importLine
-        // hint we can't disambiguate the bare delimiter, so we don't treat it alone as adoption.
+        // hint we can't disambiguate the bare delimiter, so we don't treat it alone as adoption;
+        // and a relative import inside the block follows the same own-files rule.
         if (needle === IMPORT_BLOCK_START && !importLine) continue
         if (needle === IMPORT_BLOCK_START) {
           const block = findImportBlock(text)
           if (!block || !block.inner.includes(importLine!)) continue
+          if (!relativeOk) continue
         }
         return true
       }
@@ -206,6 +221,57 @@ export interface WireInput {
 /** Detect a file's EOL (preserve it), defaulting to CRLF for a brand-new/empty file on Windows. */
 function detectEol(text: string): string {
   return text.includes("\r\n") ? "\r\n" : text.includes("\n") ? "\n" : "\r\n"
+}
+
+/**
+ * ATOMIC write of the USER-OWNED CLAUDE.local.md: temp-then-rename with a Windows
+ * EPERM/EACCES/EBUSY retry-backoff (a reader — an editor or a `claude` — may transiently hold
+ * the dest). The rename is atomic, so a crash/power-loss/disk-full mid-write can NEVER leave the
+ * user's file truncated (§B.5 "read-modify-RENAME"). Cleans up the temp on a failed rename, then
+ * rethrows so the caller surfaces it. Mirrors `ExportService.writeAtomic`/`renameWithRetry`.
+ */
+function atomicWriteHostFile(dest: string, content: string): void {
+  const tmp = `${dest}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+  writeFileSync(tmp, content, "utf8")
+  let lastErr: unknown
+  for (let i = 0; i < 5; i++) {
+    try {
+      renameSync(tmp, dest)
+      return
+    } catch (err) {
+      lastErr = err
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") break
+      const until = Date.now() + 20 * (i + 1) // brief synchronous backoff for a transient lock
+      while (Date.now() < until) {
+        /* spin — the contended window is milliseconds */
+      }
+    }
+  }
+  try {
+    unlinkSync(tmp)
+  } catch {
+    /* best-effort temp cleanup */
+  }
+  throw lastErr
+}
+
+/** A DANGLING half-block — a START delimiter with no matching END (the user hand-deleted the
+ *  END). We must neither append (→ a duplicate block) nor silently no-op; both wire + unwire
+ *  REFUSE so the user fixes it manually. */
+function hasDanglingStart(text: string): boolean {
+  const s = text.indexOf(IMPORT_BLOCK_START)
+  if (s === -1) return false
+  return text.indexOf(IMPORT_BLOCK_END, s) === -1
+}
+
+/** A RELATIVE `@import` line (`@./…` / `@../…`) is NOT self-identifying — every Mode-A workspace
+ *  advertises the SAME `@./.claude-tui/workspace-memory.md`, and a relative import resolves
+ *  against the file that contains it. So a relative line only counts as adoption when found in F's
+ *  OWN CLAUDE-family files; an absolute / home line (Mode C, whose path embeds the workspace id)
+ *  self-identifies and may match in any scanned host file. */
+function isRelativeImport(line: string): boolean {
+  return /^@\.\.?\//.test(line.trim())
 }
 
 /**
@@ -263,6 +329,18 @@ export function wireImport(input: WireInput): WireResult {
       }
     }
 
+    // A dangling half-block (START, no END) → REFUSE rather than append a second block.
+    if (hasDanglingStart(existing)) {
+      return {
+        ok: false,
+        status: "refused",
+        path: hostFile,
+        error:
+          "CLAUDE.local.md has a malformed import block (a start marker with no end). " +
+          "Fix it manually, then try again.",
+      }
+    }
+
     // Idempotent: if our block already exists, no-op (never a duplicate).
     if (findImportBlock(existing)) {
       return { ok: true, status: "already", path: hostFile }
@@ -274,7 +352,7 @@ export function wireImport(input: WireInput): WireResult {
     if (next.length > 0) next += eol // a blank line before our block for readability
     next += `${IMPORT_BLOCK_START}${pristineInner(importLine, eol)}${IMPORT_BLOCK_END}${eol}`
 
-    writeFileSync(hostFile, next, "utf8")
+    atomicWriteHostFile(hostFile, next)
     return { ok: true, status: "wired", path: hostFile }
   } catch (err) {
     logWarn("adoption", `wireImport(${hostFile}) failed: ${String(err)}`)
@@ -293,6 +371,17 @@ export function unwireImport(input: { hostFile: string; importLine: string }): W
   try {
     if (!existsSync(hostFile)) return { ok: true, status: "absent", path: hostFile }
     const existing = readFileSync(hostFile, "utf8")
+    // A dangling half-block (START, no END) is not auto-removable — REFUSE so the user fixes it.
+    if (hasDanglingStart(existing)) {
+      return {
+        ok: false,
+        status: "refused",
+        path: hostFile,
+        error:
+          "CLAUDE.local.md has a malformed import block (a start marker with no end) — " +
+          "refusing to auto-remove it. Edit it manually.",
+      }
+    }
     const block = findImportBlock(existing)
     if (!block) return { ok: true, status: "absent", path: hostFile }
 
@@ -327,7 +416,7 @@ export function unwireImport(input: { hostFile: string; importLine: string }): W
     cutEnd = existing.length - afterTrimmed.length
 
     const next = existing.slice(0, cutStart) + existing.slice(cutEnd)
-    writeFileSync(hostFile, next, "utf8")
+    atomicWriteHostFile(hostFile, next)
     void eol
     return { ok: true, status: "removed", path: hostFile }
   } catch (err) {
