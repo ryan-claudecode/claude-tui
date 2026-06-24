@@ -110,6 +110,26 @@ describe("applyFidelityTransforms", () => {
     // A mid-line @ is not an import line.
     expect(imports.some((i) => i.includes("not-at-line-start"))).toBe(false)
   })
+
+  it("PRESERVES an HTML comment INSIDE a code fence (Claude reads fenced content verbatim)", () => {
+    const raw = [
+      "before",
+      "<!-- stripped outside -->",
+      "```",
+      "<!-- kept inside the fence -->",
+      "@./fenced-import.md",
+      "```",
+      "after",
+    ].join("\n")
+    const { body, imports } = applyFidelityTransforms(raw)
+    // Outside the fence: comment stripped.
+    expect(body).not.toContain("stripped outside")
+    // Inside the fence: comment + @import preserved as text (NOT stripped, NOT collected).
+    expect(body).toContain("kept inside the fence")
+    expect(imports).not.toContain("@./fenced-import.md")
+    expect(body).toContain("before")
+    expect(body).toContain("after")
+  })
 })
 
 describe("hasPathsFrontMatter", () => {
@@ -247,6 +267,45 @@ describe("ContextInspectorService — claudeMdExcludes (tier 3)", () => {
     expect(ancestor, "the ancestor CLAUDE.md must be SHOWN, not dropped").toBeDefined()
     expect(ancestor!.excluded).toBe(true)
     expect(ancestor!.truncatedNote).toContain("claudeMdExcludes")
+  })
+})
+
+describe("ContextInspectorService — parent-chain boundary (tier 3)", () => {
+  it("when F IS the git root, tier 3 is 'none' and NO ancestor above the repo is read", () => {
+    const repo = join(root, "repo-at-f")
+    mkdirSync(repo, { recursive: true })
+    if (!gitInit(repo)) return // git unavailable in the runner → skip (keying is git-dependent)
+    // A CLAUDE.md ABOVE the repo (in the temp root) must NEVER be scanned — that would read
+    // outside §A.4's read set (unrelated projects in the home tree).
+    writeFileSync(join(root, "CLAUDE.md"), "ABOVE-REPO rule that must NOT leak")
+    const { inspector, workspaceId } = makeInspector(repo)
+    const result = inspector.inspectWorkspaceContext(workspaceId)
+    const t3 = result.sources.filter((s) => s.tier === 3)
+    expect(t3.every((s) => !s.exists), "tier 3 must be a 'none' placeholder when F == git root").toBe(true)
+    expect(
+      result.sources.some((s) => (s.content ?? "").includes("ABOVE-REPO")),
+      "an ancestor above the git root must never be read",
+    ).toBe(false)
+  })
+
+  it("reads an in-repo ancestor's CLAUDE.md but never one ABOVE the git root", () => {
+    const repo = join(root, "repo")
+    const sub = join(repo, "pkg", "app")
+    mkdirSync(sub, { recursive: true })
+    if (!gitInit(repo)) return
+    writeFileSync(join(repo, "CLAUDE.md"), "IN-REPO ancestor rule")
+    writeFileSync(join(root, "CLAUDE.md"), "ABOVE-REPO rule")
+    const { inspector, workspaceId } = makeInspector(sub)
+    const result = inspector.inspectWorkspaceContext(workspaceId)
+    const t3 = result.sources.filter((s) => s.tier === 3)
+    expect(
+      t3.some((s) => s.exists && (s.content ?? "").includes("IN-REPO")),
+      "the in-repo ancestor must be shown",
+    ).toBe(true)
+    expect(
+      result.sources.some((s) => (s.content ?? "").includes("ABOVE-REPO")),
+      "an ancestor above the git root must never be read",
+    ).toBe(false)
   })
 })
 

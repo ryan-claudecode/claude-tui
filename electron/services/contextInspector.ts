@@ -145,29 +145,42 @@ function readText(path: string): string | null {
  * The imports are shown LITERALLY with a count — v1 NEVER expands their bodies.
  */
 export function applyFidelityTransforms(raw: string): { body: string; imports: string[] } {
-  // (1) strip block-level HTML comments. The `[\s\S]` (not `.`) spans newlines so a
-  // multi-line comment is removed whole; non-greedy so adjacent comments don't merge.
-  const noComments = raw.replace(/<!--[\s\S]*?-->/g, "")
-
-  // (2) walk lines, tracking fenced code blocks, and collect @import lines outside fences.
+  // ONE fence-tracking line-walk so the transforms only touch content OUTSIDE code fences —
+  // a fenced ```<!-- … -->``` or ```@import``` is shown by Claude verbatim, so the inspector
+  // must preserve it too (stripping/collecting inside a fence would diverge from what Claude
+  // actually reads). Non-fence lines are buffered into regions; comment-stripping runs per
+  // region (so a MULTI-line `<!-- … -->` is still removed whole) and @imports are collected
+  // from the stripped text.
   const imports: string[] = []
+  const out: string[] = []
   let inFence = false
-  for (const line of noComments.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    // A ``` / ~~~ fence toggles the code-block state. (We don't validate the info string;
-    // a bare ``` flips it — matches how a human reads the file.)
-    if (/^(```|~~~)/.test(trimmed)) {
+  let region: string[] = []
+  const flushRegion = () => {
+    if (!region.length) return
+    const stripped = region.join("\n").replace(/<!--[\s\S]*?-->/g, "")
+    out.push(stripped)
+    for (const line of stripped.split("\n")) {
+      const t = line.trim()
+      // An @import line: `@` then `./`, `../`, `~/`, or an absolute-ish path. Claude only
+      // honors `@`-prefixed import lines; we match that literal shape (NEVER expanded in v1).
+      if (/^@(\.{1,2}\/|~\/|\/)/.test(t)) imports.push(t)
+    }
+    region = []
+  }
+  for (const line of raw.split(/\r?\n/)) {
+    // A ``` / ~~~ fence delimiter toggles the code-block state. (We don't validate the info
+    // string; a bare ``` flips it — matches how a human reads the file.)
+    if (/^(```|~~~)/.test(line.trim())) {
+      flushRegion() // close the preceding non-fence region before the fence delimiter
+      out.push(line) // the delimiter line itself stays verbatim
       inFence = !inFence
       continue
     }
-    if (inFence) continue
-    // An @import line: starts with `@` then `./`, `../`, `~/`, or an absolute-ish path.
-    // Claude only honors `@`-prefixed import lines; we match that literal shape.
-    if (/^@(\.{1,2}\/|~\/|\/)/.test(trimmed)) {
-      imports.push(trimmed)
-    }
+    if (inFence) out.push(line) // verbatim inside a fence — no strip, no @import collection
+    else region.push(line)
   }
-  return { body: noComments, imports }
+  flushRegion()
+  return { body: out.join("\n"), imports }
 }
 
 /** Cap an excerpt to {@link EXCERPT_CHAR_CAP} chars, returning the (possibly trimmed) text
@@ -466,6 +479,12 @@ export class ContextInspectorService {
     // Walk up until we pass the git root (inclusive) or hit the filesystem root.
     while (dir && dir !== prev) {
       const dirNorm = dir.replace(/\\/g, "/").replace(/\/+$/, "")
+      // BOUNDED at the git root: never read ABOVE it (that would scan unrelated projects in
+      // the home tree — outside §A.4's read set). If a git root is known and `dir` is neither
+      // the root nor a descendant of it, we've already stepped past the boundary → stop. When
+      // F IS the git root, dirname(F) is already above it, so the walk emits nothing here and
+      // tier 3 falls through to the "none" placeholder (F's own CLAUDE.md is tier 4).
+      if (rootNorm && dirNorm !== rootNorm && !dirNorm.startsWith(rootNorm + "/")) break
       const claudeMd = join(dir, "CLAUDE.md")
       if (existsSync(claudeMd)) {
         const excludePat = isExcludedAncestor(dir, excludes)
