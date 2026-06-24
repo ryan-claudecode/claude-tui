@@ -43,6 +43,15 @@ interface Props {
   /** Open the cross-session RecallPanel companion view ("Open Recall →"). Reuses the
    *  EXISTING `show_panel` "recall" type (CAPP-86 v1). */
   onOpenRecall?: () => void
+  /** CAPP-101 (P1) — the propagation nudge. True when the ACTIVE terminal's owning session's
+   *  WORKSPACE memory changed AFTER it spawned (its frozen launch inject is now stale). Drives
+   *  a quiet, STATICALLY-VISIBLE KNOWS-tier "re-prime to pull" affordance (NOT a tier-1 gate —
+   *  those never go in the rail). */
+  memoryUpdated?: boolean
+  /** CAPP-101 (P1) — the re-prime action: PROMPTS the running agent to pull the
+   *  get_session_context delta (it does NOT itself inject the finding). Absent → no live
+   *  terminal to re-prime (the affordance renders disabled). */
+  onReprime?: () => void
 }
 
 /**
@@ -76,6 +85,8 @@ export default function AgentRail({
   knows,
   onOpenContext,
   onOpenRecall,
+  memoryUpdated,
+  onReprime,
 }: Props) {
   const now = deriveNow({ hasTerminal, busy, activity })
   const cost = sumCost(blocks)
@@ -126,9 +137,11 @@ export default function AgentRail({
   }
 
   const showKnows = open && !!knows?.hasContent
+  // CAPP-101 (P1) — the propagation nudge renders only when this terminal is marked.
+  const showReprime = open && memoryUpdated === true
   // The resting "All quiet" copy shows only when EVERY surface is empty — NOW idle,
-  // no cost yet, and KNOWS has nothing. KNOWS content alone keeps the rail non-empty.
-  const empty = now.state === "idle" && costLabel == null && !showKnows
+  // no cost yet, KNOWS has nothing, AND there's no pending re-prime nudge.
+  const empty = now.state === "idle" && costLabel == null && !showKnows && !showReprime
 
   return (
     <aside className="agent-rail" aria-label="Agent Rail">
@@ -171,6 +184,35 @@ export default function AgentRail({
             </div>
           )}
         </section>
+
+        {/* CAPP-101 (P1) — the PROPAGATION NUDGE. The workspace memory changed AFTER this
+            terminal spawned, so its frozen launch inject is stale. A quiet, STATICALLY-VISIBLE
+            KNOWS-tier affordance (no hover-reveal) with an honest label + a "Re-prime" action.
+            HONEST: re-prime PROMPTS the agent to pull the get_session_context delta — it does
+            NOT itself inject the finding. NOT a tier-1 blocking gate (those never go in the
+            rail). Slots between NOW and KNOWS. */}
+        {showReprime && (
+          <section
+            className="agent-rail-section agent-rail-reprime"
+            aria-label="Workspace memory updated"
+          >
+            <div className="agent-rail-section-label">KNOWS</div>
+            <div className="agent-rail-reprime-card">
+              <div className="agent-rail-reprime-text">
+                Workspace memory updated — re-prime to pull
+              </div>
+              <button
+                type="button"
+                className="agent-rail-reprime-btn"
+                onClick={onReprime}
+                disabled={!onReprime}
+                title="Ask the running agent to pull the latest workspace memory (get_session_context)"
+              >
+                Re-prime
+              </button>
+            </div>
+          </section>
+        )}
 
         {/* KNOWS (Phase 3 — CAPP-84 × CAPP-86 v1.5) — the context digest. TWO
             sub-sections for the active session/workspace, each present only when it

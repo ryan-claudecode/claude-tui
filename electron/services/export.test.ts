@@ -414,3 +414,82 @@ describe("ExportService — regen no-op safety", () => {
     expect(r.wrote).toBe(false)
   })
 })
+
+describe("ExportService CAPP-101 (P1) — the export-settled barrier (whenSettled)", () => {
+  it("whenSettled resolves immediately when NO regen is in flight (the non-adopted/common path is a no-op)", async () => {
+    const svc = new ExportService(makeDeps({ folders: {}, instructions: {}, findings: {} }), {
+      registryDir: root,
+    })
+    let settled = false
+    // No beginRegen was called → there is nothing to await → resolves on the same turn.
+    await Promise.race([
+      svc.whenSettled("ws-1").then(() => (settled = true)),
+      new Promise((r) => setTimeout(r, 50)),
+    ])
+    expect(settled).toBe(true)
+  })
+
+  it("whenSettled BLOCKS until an in-flight regen settles, then resolves (the adopted-spawn barrier)", async () => {
+    const svc = new ExportService(makeDeps({ folders: {}, instructions: {}, findings: {} }), {
+      registryDir: root,
+    })
+    const done = svc.beginRegen("ws-1")
+    let resolved = false
+    const waiter = svc.whenSettled("ws-1").then(() => (resolved = true))
+
+    // While the regen is in flight, the barrier has NOT resolved.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(resolved).toBe(false)
+
+    // Settle the regen → the barrier resolves.
+    done()
+    await waiter
+    expect(resolved).toBe(true)
+  })
+
+  it("a barrier for W does NOT block a spawn in a DIFFERENT workspace", async () => {
+    const svc = new ExportService(makeDeps({ folders: {}, instructions: {}, findings: {} }), {
+      registryDir: root,
+    })
+    svc.beginRegen("ws-1") // in flight for ws-1, never settled
+    let otherResolved = false
+    await Promise.race([
+      svc.whenSettled("ws-2").then(() => (otherResolved = true)),
+      new Promise((r) => setTimeout(r, 50)),
+    ])
+    // ws-2 has no in-flight regen, so its barrier resolves despite ws-1 being stuck.
+    expect(otherResolved).toBe(true)
+  })
+
+  it("whenSettled drains a CHAIN of regens started while it awaits an earlier one", async () => {
+    const svc = new ExportService(makeDeps({ folders: {}, instructions: {}, findings: {} }), {
+      registryDir: root,
+    })
+    const done1 = svc.beginRegen("ws-1")
+    let resolved = false
+    const waiter = svc.whenSettled("ws-1").then(() => (resolved = true))
+
+    // Start a SECOND regen, then settle the first. The barrier must keep waiting on the second.
+    const done2 = svc.beginRegen("ws-1")
+    done1()
+    await new Promise((r) => setTimeout(r, 10))
+    expect(resolved).toBe(false)
+
+    done2()
+    await waiter
+    expect(resolved).toBe(true)
+  })
+
+  it("the untagged bucket keys on the untagged stem (null) — its barrier is independent", async () => {
+    const svc = new ExportService(makeDeps({ folders: {}, instructions: {}, findings: {} }), {
+      registryDir: root,
+    })
+    svc.beginRegen(null) // untagged in flight
+    let taggedResolved = false
+    await Promise.race([
+      svc.whenSettled("ws-1").then(() => (taggedResolved = true)),
+      new Promise((r) => setTimeout(r, 50)),
+    ])
+    expect(taggedResolved).toBe(true) // a real workspace is unaffected by the untagged regen
+  })
+})

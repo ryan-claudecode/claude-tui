@@ -255,6 +255,18 @@ export async function setupIpc(win: BrowserWindow) {
     } catch (err) {
       logWarn("export", `live regen on memory change failed: ${String(err)}`)
     }
+    // CAPP-101 (P1) — the propagation nudge: a NEW session spawned after this change gets the
+    // updated brain automatically, but an ALREADY-RUNNING terminal froze its inject at spawn.
+    // Mark every running terminal whose OWNING session's workspaceId === this workspace (SCOPED
+    // by workspaceId, NEVER getActiveId) so the renderer can surface a quiet Agent Rail KNOWS
+    // "re-prime to pull" affordance. The mark rides each affected session's worksession:updated
+    // emit (inside markWorkspaceMemoryChanged). Caught — a mark failure must never crash the
+    // mutation path.
+    try {
+      workSessionService.markWorkspaceMemoryChanged(workspaceId)
+    } catch (err) {
+      logWarn("worksession", `markWorkspaceMemoryChanged(${workspaceId}) failed: ${String(err)}`)
+    }
     if (!win.isDestroyed()) win.webContents.send("workspace:memory-changed", workspaceId)
     // The editor panel (U6) lives in the COMPANION window, NOT the main window — so the
     // change must also reach there or an open editor goes stale when another surface
@@ -450,7 +462,27 @@ export async function setupIpc(win: BrowserWindow) {
 
   // Register IPC handlers by domain (MOVE, not rewrite — see ipc/*-handlers.ts)
   registerTerminalHandlers({ sessionService, win })
-  registerWorkSessionHandlers({ workSessionService, recallService, workspaceMemoryService })
+  registerWorkSessionHandlers({
+    workSessionService,
+    recallService,
+    workspaceMemoryService,
+    // CAPP-101 (P1) — the "export settled" SPAWN BARRIER (§C). ONLY await when the workspace is
+    // ADOPTED (its workspace tier rides the user's @import file, so a fresh spawn READS that
+    // export — gate it on any in-flight regen). For a NON-adopted / non-exported workspace the
+    // inject reads the in-memory store directly, so there's nothing to settle → resolve
+    // immediately (no slow-down on the common path). The adoption scan is the SAME fresh,
+    // default-safe `injectDeps.isAdopted` the inject uses (a throw → NOT adopted → no wait).
+    awaitExportSettled: async (workspaceId: string | undefined) => {
+      let adopted = false
+      try {
+        adopted = injectDeps.isAdopted?.(workspaceId) === true
+      } catch {
+        adopted = false
+      }
+      if (!adopted) return
+      await exportService.whenSettled(workspaceId ?? null)
+    },
+  })
   registerPanelHandlers({
     panelService,
     notificationService,

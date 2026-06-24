@@ -26,6 +26,19 @@ import {
 const INTERRUPT_ABORT_MESSAGE =
   "The user interrupted this action with Stop. Do not retry or complete it. Stop now and await further instructions."
 
+/**
+ * CAPP-101 (P1) — the re-prime prompt. The workspace memory changed AFTER this terminal
+ * spawned, so its frozen launch inject is stale. This bracketed-paste / stdin prompt asks
+ * the LIVE agent to PULL the delta via get_session_context (the CAPP-97 launch-delta path
+ * returns only what changed since spawn). HONEST: this PROMPTS the pull — it does NOT itself
+ * inject the finding. We deliberately don't dump the new findings here; get_session_context
+ * is the single source of the durable brain.
+ */
+const REPRIME_PROMPT =
+  "Workspace memory was updated since you started. Call get_session_context now to pull the " +
+  "latest durable findings/instructions (it returns only what changed since you launched), then " +
+  "fold anything relevant into your current work."
+
 export interface TerminalRef {
   id: string
   name: string
@@ -76,6 +89,19 @@ export interface TerminalRef {
    * a normal terminal). reopenTerminal also skips it defensively.
    */
   isLogin?: boolean
+  /**
+   * CAPP-101 (P1) — the propagation nudge mark. Set true when this terminal's owning
+   * session's WORKSPACE memory changed AFTER the terminal spawned (so its frozen
+   * launch inject is now stale relative to the durable brain). Surfaced to the renderer
+   * (rides the `worksession:updated` snapshot → the Agent Rail KNOWS "re-prime to pull"
+   * affordance). HONEST: the change reaches the renderer chrome, NOT the running Claude
+   * process — re-priming only PROMPTS the agent to pull the delta via get_session_context,
+   * it does NOT itself inject the finding (true zero-touch propagation to a live session
+   * is out of scope for v1). Cleared on re-prime AND on any handoff/reopen/respawn (a
+   * fresh terminal already has current context). Optional/additive: legacy refs load fine
+   * (undefined → not marked).
+   */
+  pendingMemoryDelta?: boolean
 }
 
 export interface Note {
@@ -344,6 +370,17 @@ export class SessionService {
     return this.sessions.get(sessionId)?.workspaceId
   }
 
+  /**
+   * CAPP-101 (P1) — the workspaceId a NEW session would be stamped with (the currently-active
+   * workspace, or undefined for the untagged/"All" bucket) — the SAME value {@link create}
+   * uses. The IPC layer reads this to gate a `worksession:open` spawn on the export-settled
+   * barrier for the workspace the new session will OWN, BEFORE the session is created. Reads
+   * the injected getter, never a stale snapshot.
+   */
+  activeWorkspaceIdForSpawn(): string | undefined {
+    return this.getActiveWorkspaceId() ?? undefined
+  }
+
   /** Persist a terminal rename into the session's durable terminal ref. */
   private renameTerminal(terminalId: string, name: string): void {
     const s = this.sessionOf(terminalId)
@@ -409,6 +446,86 @@ export class SessionService {
         "fresh terminal inherits it. Keep it concise."
       this.terminals.write(terminalId, `\x1b[200~${prompt}\x1b[201~\r`)
     }, this.idleFlushGraceMs)
+  }
+
+  /**
+   * CAPP-101 (P1) — the propagation nudge. A workspace's memory just changed; mark every
+   * ALREADY-RUNNING terminal whose OWNING SESSION's workspaceId === `workspaceId` so the
+   * renderer can surface a quiet "re-prime to pull" affordance. The running terminal's
+   * Claude process froze its inject at spawn (the `workspace:memory-changed` push reaches
+   * only the renderer chrome — §C case (ii)); the mark + re-prime are the honest nudge.
+   *
+   * HARD SCOPING: keyed on the session's OWN `workspaceId`, NEVER `getActiveId()` — a memory
+   * change in W marks ONLY W's running terminals (a session in another workspace, or untagged
+   * when W is a real id, is never marked). `workspaceId` is a string (a real id or the untagged
+   * sentinel "__untagged__"), normalized so a session's undefined workspaceId matches the
+   * untagged bucket and nothing else.
+   *
+   * "Running" = a live PTY (lastState active|idle), excluding login terminals (an ephemeral
+   * OAuth prompt has no inject to re-prime) and dead refs (a cold/restored ref will get the
+   * current brain when it's reopened). Only emits/persists for sessions that actually changed.
+   */
+  markWorkspaceMemoryChanged(workspaceId: string): void {
+    // Normalize the public id-or-sentinel to the same scope a session's workspaceId uses:
+    // a real id matches sessions stamped with it; the untagged sentinel matches sessions with
+    // NO workspaceId. We deliberately do NOT consult getActiveId — the mark is per-session scope.
+    const isUntaggedTarget = workspaceId === "__untagged__"
+    for (const s of this.sessions.values()) {
+      const sessionScope = s.workspaceId ?? "__untagged__"
+      if (isUntaggedTarget ? sessionScope !== "__untagged__" : s.workspaceId !== workspaceId) {
+        continue
+      }
+      let changed = false
+      for (const t of s.terminals) {
+        // Skip login terminals (no inject) and non-running refs (a dead/cold ref gets the
+        // current brain on reopen). Only set the flag when it isn't already set (idempotent).
+        if (t.isLogin) continue
+        if (t.lastState !== "active" && t.lastState !== "idle") continue
+        if (t.pendingMemoryDelta) continue
+        t.pendingMemoryDelta = true
+        changed = true
+      }
+      if (changed) {
+        this.persist(s)
+        this.emit("worksession:updated", this.withEffectiveActivity(s))
+      }
+    }
+  }
+
+  /**
+   * CAPP-101 (P1) — the re-prime action (a USER affordance, NOT MCP). Bracket-paste the
+   * get_session_context PULL prompt to the running terminal via the SAME idle-flush stdin
+   * path: structured (headless) → a clean prompt to the stdin sink; xterm → the bracketed-
+   * paste keystroke idiom. It PROMPTS the agent to pull the CAPP-97 delta — it does NOT itself
+   * inject the finding. Clears the pending flag, persists + emits. No-op (false) for an unknown
+   * session/terminal, a login terminal, or a non-running ref.
+   */
+  reprimeTerminal(sessionId: string, terminalId: string): boolean {
+    const s = this.sessions.get(sessionId)
+    if (!s || !this.terminals) return false
+    const t = s.terminals.find((x) => x.id === terminalId)
+    if (!t) return false
+    if (t.isLogin || this.terminals.isLogin(terminalId)) return false
+    if (t.lastState !== "active" && t.lastState !== "idle") return false
+
+    const structured = this.terminals.isHeadless(terminalId) || t.engine === "structured"
+    // Reuse the idle-flush stdin idiom EXACTLY: structured → plain prompt (TerminalService.write
+    // routes it to the stdin sink as a user message); xterm → the bracketed-paste keystroke.
+    this.terminals.write(terminalId, structured ? REPRIME_PROMPT : `\x1b[200~${REPRIME_PROMPT}\x1b[201~\r`)
+
+    if (t.pendingMemoryDelta) {
+      t.pendingMemoryDelta = false
+      this.persist(s)
+      this.emit("worksession:updated", this.withEffectiveActivity(s))
+    }
+    return true
+  }
+
+  /** CAPP-101 (P1) — clear a terminal ref's pending-delta mark (a fresh/re-primed terminal
+   *  already has current context). Used by handoff/reopen/respawn after the ref's id is
+   *  replaced. Silent if the flag wasn't set. */
+  private clearPendingMemoryDelta(ref: TerminalRef): void {
+    if (ref.pendingMemoryDelta) ref.pendingMemoryDelta = false
   }
 
   /**
@@ -650,6 +767,7 @@ export class SessionService {
     s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: info.state as TerminalRef["lastState"], engine: info.engine, model: info.model, effort: info.effort })
     this.terminals.kill(terminalId)
     this.clearLaunchStamp(terminalId) // CAPP-97 — the retired terminal's id is dead; drop its stamp.
+    this.clearPendingMemoryDelta(old) // CAPP-101 — the retired ref is dead; the fresh one has the current brain.
     old.lastState = "dead"
     s.status = "active"
     this.logEvent(s, "handoff", `Handoff: retired "${old.name}", continued in "${info.name}"`, info.id)
@@ -676,6 +794,7 @@ export class SessionService {
     // way (undefined → the resume spawn omits `--effort`, byte-unchanged default).
     const info = this.terminals.create(ref.name, ref.cwd, s.id, ref.ccConversationId, ref.model, ref.effort)
     this.clearLaunchStamp(terminalId) // CAPP-97 — the ref's id is being replaced; drop the old stamp.
+    this.clearPendingMemoryDelta(ref) // CAPP-101 — the reopened terminal gets the CURRENT brain.
     ref.id = info.id
     // BO-4b: reopen re-derives the engine (create() routes to the headless path
     // when the engine config is structured) and honors the spawn's state, so a
@@ -888,6 +1007,7 @@ export class SessionService {
     ref.id = info.id
     ref.lastState = info.state as TerminalRef["lastState"]
     ref.engine = info.engine
+    this.clearPendingMemoryDelta(ref) // CAPP-101 — a respawn got the CURRENT brain at its inject.
     // PRESERVE the last structured model+effort across an xterm round-trip: an xterm
     // spawn carries no model/effort (createXterm ignores them), so adopting them would
     // null out the user's choices and a later switch back to structured would lose them.

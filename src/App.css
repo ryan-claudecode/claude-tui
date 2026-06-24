@@ -4202,6 +4202,49 @@ body {
   border-radius: var(--r-sm);
 }
 
+/* CAPP-101 (P1) — the propagation nudge card. A quiet, statically-visible KNOWS-tier
+   affordance (no hover-reveal — the button is always visible). Calm accent edge, honest
+   one-line copy, an always-present Re-prime button. NOT a tier-1 gate. */
+.agent-rail-reprime-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  border-left: 2px solid var(--accent);
+}
+.agent-rail-reprime-text {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-2);
+}
+.agent-rail-reprime-btn {
+  align-self: flex-start;
+  -webkit-app-region: no-drag;
+  background: var(--accent);
+  color: var(--accent-on, #fff);
+  border: none;
+  padding: 3px 10px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+.agent-rail-reprime-btn:hover {
+  background: var(--accent-bright);
+}
+.agent-rail-reprime-btn:disabled {
+  background: var(--bg-2);
+  color: var(--text-4);
+  cursor: default;
+}
+.agent-rail-reprime-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Count chips — small pills; findings/ruled-out/(provisional) each color-keyed. */
 .agent-rail-knows-chips {
   display: flex;

@@ -7,14 +7,51 @@ export function registerWorkSessionHandlers(deps: {
   workSessionService: SessionService
   recallService: RecallService
   workspaceMemoryService: WorkspaceMemoryService
+  /**
+   * CAPP-101 (P1) — the "export settled" SPAWN BARRIER (§C). Awaited BEFORE a fresh agent
+   * spawn for the spawning session's OWN workspace: for an ADOPTED workspace it blocks until
+   * any in-flight `ExportService.regenerate(W)` settles, so the spawn doesn't read a
+   * stale/torn @import-delivered export mid-regen; otherwise it resolves immediately (a true
+   * no-op — never slows the common path). Injected (not the services directly) so it stays
+   * decoupled + the handler can't accidentally re-derive the workspace from the active
+   * selection. Absent → no barrier (byte-unchanged); a throw inside is swallowed by the
+   * default-safe wrappers below so a barrier failure never blocks a spawn.
+   */
+  awaitExportSettled?: (workspaceId: string | undefined) => Promise<void>
 }) {
-  const { workSessionService, recallService, workspaceMemoryService } = deps
+  const { workSessionService, recallService, workspaceMemoryService, awaitExportSettled } = deps
+
+  /** Default-safe barrier await: no-op when unwired, and a throw never blocks the spawn. */
+  const settle = async (workspaceId: string | undefined): Promise<void> => {
+    if (!awaitExportSettled) return
+    try {
+      await awaitExportSettled(workspaceId)
+    } catch {
+      /* a barrier failure must never block a spawn */
+    }
+  }
 
   // Work-session (container) IPC -- the durable session tier above terminals
   ipcMain.handle("worksession:list", () => workSessionService.list())
-  ipcMain.handle("worksession:open", (_e, cwd?: string) => workSessionService.openSession(cwd))
-  ipcMain.handle("worksession:add-terminal", (_e, sessionId: string, cwd?: string) =>
-    workSessionService.addTerminalToSession(sessionId, cwd),
+  ipcMain.handle("worksession:open", async (_e, cwd?: string) => {
+    // CAPP-101 (P1) — a NEW session is stamped with the ACTIVE workspace at create() time, so
+    // gate the spawn on THAT workspace's export-settled barrier. (Scoped to the workspace the
+    // session will own, never an unrelated one.)
+    await settle(workSessionService.activeWorkspaceIdForSpawn())
+    return workSessionService.openSession(cwd)
+  })
+  ipcMain.handle("worksession:add-terminal", async (_e, sessionId: string, cwd?: string) => {
+    // CAPP-101 (P1) — a terminal added to an EXISTING session gates on THAT session's own
+    // workspaceId (never the active selection).
+    await settle(workSessionService.workspaceIdOf(sessionId))
+    return workSessionService.addTerminalToSession(sessionId, cwd)
+  })
+  // CAPP-101 (P1) — the re-prime action (a USER affordance, NOT MCP): bracket-paste the
+  // get_session_context PULL prompt to a running terminal whose owning session's workspace
+  // memory changed since spawn, and clear the pending-delta mark. It PROMPTS the pull — it does
+  // NOT itself inject the finding (honest, zero-magic propagation to a live session).
+  ipcMain.handle("worksession:reprime", (_e, sessionId: string, terminalId: string) =>
+    workSessionService.reprimeTerminal(sessionId, terminalId),
   )
   // CAPP-75 — list every Claude Code conversation discoverable for a folder
   // (including ones started OUTSIDE the app), newest first. Read-only.

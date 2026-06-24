@@ -695,6 +695,60 @@ test("Agent Rail KNOWS (Phase 3): renders both digests + always-visible Open con
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
 
+test("Agent Rail propagation nudge (CAPP-101 / P1): a workspace-memory change marks the running terminal → 're-prime to pull' renders, and re-prime clears it", async () => {
+  // P1 — when workspace memory changes, an ALREADY-RUNNING session froze its inject at
+  // spawn, so we mark its terminal and surface a quiet, statically-visible Agent Rail KNOWS
+  // affordance ("Workspace memory updated — re-prime to pull"). Seed a restorable UNTAGGED
+  // session (its restored terminal is running), then mutate the UNTAGGED workspace memory via
+  // the existing addWorkspaceFinding accessor — that fires onMemoryChanged → marks the running
+  // terminal → the affordance appears. Clicking Re-prime PROMPTS the pull + clears the mark
+  // (the affordance disappears). HONEST: re-prime does not inject the finding; this asserts the
+  // affordance lifecycle, not magic propagation.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-reprime-"))
+  await seedStructuredConfig(tempHome)
+  const ccId = "1eprime00-0000-4000-8000-000000000abc"
+  const cwd = join(tempHome, "work")
+  await seedSessionWithContext(tempHome, ccId, cwd)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+  // The seeded session auto-restores into a structured surface (running terminal).
+  await expect(win.locator(".agent-composer textarea")).toBeVisible({ timeout: 30_000 })
+
+  // The nudge is NOT present before any memory change.
+  await expect(win.locator(".agent-rail-reprime")).toHaveCount(0)
+
+  // Mutate the UNTAGGED workspace memory — fires onMemoryChanged → marks the running terminal.
+  await win.evaluate(async () => {
+    await (window as any).api.addWorkspaceFinding(null, "a fresh durable finding from another session", "user")
+  })
+
+  // The quiet KNOWS-tier affordance appears, statically visible (no hover needed), with the
+  // honest copy + an always-visible Re-prime button.
+  const reprime = win.locator(".agent-rail-reprime")
+  await expect(reprime).toBeVisible({ timeout: 15_000 })
+  await expect(reprime.locator(".agent-rail-reprime-text")).toContainText("Workspace memory updated")
+  await expect(reprime.locator(".agent-rail-reprime-text")).toContainText("re-prime to pull")
+  const reprimeBtn = reprime.locator(".agent-rail-reprime-btn")
+  await expect(reprimeBtn).toBeVisible()
+  await expect(reprimeBtn).toBeEnabled()
+
+  // Clicking Re-prime clears the mark → the affordance disappears.
+  await reprimeBtn.click()
+  await expect(win.locator(".agent-rail-reprime")).toHaveCount(0, { timeout: 15_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
 test("structured engine: both split panes render a usable composer (not blank xterm)", async () => {
   tempHome = await mkdtemp(join(tmpdir(), "claudetui-structured-split-"))
   await seedStructuredConfig(tempHome)

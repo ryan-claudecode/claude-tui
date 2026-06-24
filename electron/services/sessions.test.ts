@@ -1930,3 +1930,155 @@ describe("SessionService.getPromotableFindings (CAPP-90 / U2)", () => {
     expect(svc.getPromotableFinding("nope", "whatever")).toBeUndefined()
   })
 })
+
+describe("SessionService CAPP-101 (P1) — propagation nudge: mark + re-prime", () => {
+  /** Helper: spin a service whose active-workspace getter is a mutable closure, so we can
+   *  stamp different sessions with different workspaceIds (mirroring the live getActiveId seam). */
+  function makeSvc(term: FakeTerminals) {
+    let activeWs: string | null | undefined = undefined
+    const svc = new SessionService({
+      dir,
+      now: () => 1000,
+      getActiveWorkspaceId: () => activeWs,
+    })
+    svc.attachTerminals(term as any)
+    return { svc, setActiveWs: (w: string | null | undefined) => (activeWs = w) }
+  }
+
+  it("marks ONLY in-W running terminals — a terminal in another workspace is NOT marked (workspaceId-scoped, never getActiveId)", () => {
+    const term = new FakeTerminals()
+    const { svc, setActiveWs } = makeSvc(term)
+
+    // Session A in ws-1, session B in ws-2 — each spawns a running (active) terminal.
+    setActiveWs("ws-1")
+    const a = svc.openSession("/a")
+    setActiveWs("ws-2")
+    const b = svc.openSession("/b")
+
+    // Flip the ACTIVE workspace to a THIRD, UNRELATED workspace to prove the mark does
+    // not consult getActiveId: a ws-1 memory change must still mark A (ws-1), never B.
+    setActiveWs("ws-999")
+    svc.markWorkspaceMemoryChanged("ws-1")
+
+    const aTerm = svc.get(a.session.id)!.terminals.find((t) => t.id === a.terminalId)!
+    const bTerm = svc.get(b.session.id)!.terminals.find((t) => t.id === b.terminalId)!
+    expect(aTerm.pendingMemoryDelta).toBe(true)
+    expect(bTerm.pendingMemoryDelta).toBeFalsy()
+  })
+
+  it("the untagged sentinel marks ONLY untagged sessions (a real-id session is untouched)", () => {
+    const term = new FakeTerminals()
+    const { svc, setActiveWs } = makeSvc(term)
+    setActiveWs(null) // untagged session
+    const untagged = svc.openSession("/u")
+    setActiveWs("ws-1")
+    const tagged = svc.openSession("/t")
+
+    svc.markWorkspaceMemoryChanged("__untagged__")
+
+    expect(svc.get(untagged.session.id)!.terminals[0].pendingMemoryDelta).toBe(true)
+    expect(svc.get(tagged.session.id)!.terminals[0].pendingMemoryDelta).toBeFalsy()
+  })
+
+  it("does NOT mark a dead/cold terminal (a reopened ref gets the current brain on spawn)", () => {
+    const term = new FakeTerminals()
+    const { svc, setActiveWs } = makeSvc(term)
+    setActiveWs("ws-1")
+    const a = svc.create()
+    svc.addTerminal(a.id, { id: "dead-1", name: "x", cwd: "/a", lastState: "dead" })
+
+    svc.markWorkspaceMemoryChanged("ws-1")
+    expect(svc.get(a.id)!.terminals[0].pendingMemoryDelta).toBeFalsy()
+  })
+
+  it("re-prime (xterm) writes the get_session_context PULL prompt via the bracketed-paste idiom + clears the mark", () => {
+    const term = new FakeTerminals()
+    const { svc, setActiveWs } = makeSvc(term)
+    setActiveWs("ws-1")
+    const a = svc.openSession("/a") // xterm (FakeTerminals.create default)
+    svc.markWorkspaceMemoryChanged("ws-1")
+    expect(svc.get(a.session.id)!.terminals[0].pendingMemoryDelta).toBe(true)
+
+    const ok = svc.reprimeTerminal(a.session.id, a.terminalId)
+    expect(ok).toBe(true)
+
+    const write = term.writes.find((w) => w.id === a.terminalId)!
+    // xterm idiom: bracketed-paste keystroke (same shape as the idle-flush path).
+    expect(write.data.startsWith("\x1b[200~")).toBe(true)
+    expect(write.data.endsWith("\x1b[201~\r")).toBe(true)
+    expect(write.data).toContain("get_session_context")
+    // The mark is cleared after re-prime.
+    expect(svc.get(a.session.id)!.terminals[0].pendingMemoryDelta).toBeFalsy()
+  })
+
+  it("re-prime (structured) writes the PULL prompt as a CLEAN stdin message (no bracketed-paste, no CR)", () => {
+    const term = new FakeTerminals()
+    const { svc } = makeSvc(term)
+    const s = svc.create() // untagged is fine here — we test the write idiom
+    const head = term.createHeadless(undefined, "/repo", s.id)
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "idle", engine: "structured" })
+
+    const ok = svc.reprimeTerminal(s.id, head.id)
+    expect(ok).toBe(true)
+
+    const write = term.writes.find((w) => w.id === head.id)!
+    expect(write.data).not.toContain("\x1b[200~")
+    expect(write.data).not.toContain("\r")
+    expect(write.data).toContain("get_session_context")
+  })
+
+  it("the mark clears after handoff and after reopen (a fresh terminal already has current context)", () => {
+    const term = new FakeTerminals()
+    const { svc, setActiveWs } = makeSvc(term)
+    setActiveWs("ws-1")
+
+    // HANDOFF: mark, then retire-&-continue — the dead ref is unmarked, the fresh ref unmarked.
+    const a = svc.openSession("/a")
+    svc.markWorkspaceMemoryChanged("ws-1")
+    const ho = svc.handoffTerminal(a.session.id, a.terminalId)!
+    const oldRef = svc.get(a.session.id)!.terminals.find((t) => t.id === a.terminalId)
+    const freshRef = svc.get(a.session.id)!.terminals.find((t) => t.id === ho.terminalId)
+    expect(oldRef?.pendingMemoryDelta).toBeFalsy()
+    expect(freshRef?.pendingMemoryDelta).toBeFalsy()
+
+    // REOPEN: a marked, then-dead ref that's reopened comes back unmarked.
+    const b = svc.create()
+    svc.addTerminal(b.id, { id: "t-b", name: "y", cwd: "/b", lastState: "active" })
+    // stamp the session into ws-1 so the mark applies
+    ;(svc.get(b.id) as any).workspaceId = "ws-1"
+    svc.markWorkspaceMemoryChanged("ws-1")
+    expect(svc.get(b.id)!.terminals[0].pendingMemoryDelta).toBe(true)
+    // Make the ref reopenable (a reopen needs a non-login ref; lastState irrelevant to reopen).
+    const re = svc.reopenTerminal(b.id, "t-b")!
+    const reRef = svc.get(b.id)!.terminals.find((t) => t.id === re.terminalId)
+    expect(reRef?.pendingMemoryDelta).toBeFalsy()
+  })
+
+  it("re-prime is a no-op (false) for an unknown session/terminal and for a dead ref", () => {
+    const term = new FakeTerminals()
+    const { svc } = makeSvc(term)
+    const s = svc.create()
+    svc.addTerminal(s.id, { id: "dead-1", name: "x", cwd: "/a", lastState: "dead" })
+    expect(svc.reprimeTerminal("nope", "nope")).toBe(false)
+    expect(svc.reprimeTerminal(s.id, "ghost")).toBe(false)
+    expect(svc.reprimeTerminal(s.id, "dead-1")).toBe(false)
+    expect(term.writes.length).toBe(0)
+  })
+
+  it("marking is idempotent — re-running over an already-marked terminal does not re-emit", () => {
+    const term = new FakeTerminals()
+    const { svc, setActiveWs } = makeSvc(term)
+    setActiveWs("ws-1")
+    const a = svc.openSession("/a")
+    let emits = 0
+    svc.setMainWindow({
+      isDestroyed: () => false,
+      webContents: { send: (ch: string) => { if (ch === "worksession:updated") emits++ } },
+    } as any)
+    svc.markWorkspaceMemoryChanged("ws-1")
+    expect(emits).toBe(1)
+    svc.markWorkspaceMemoryChanged("ws-1") // already marked → no change → no emit
+    expect(emits).toBe(1)
+    void a
+  })
+})

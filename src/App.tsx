@@ -102,6 +102,9 @@ declare global {
         conversationId: string,
       ) => Promise<{ session: any; terminalId: string } | undefined>
       reopenTerminal: (sessionId: string, terminalId: string) => Promise<{ terminalId: string } | undefined>
+      // CAPP-101 (P1) — re-prime a running terminal whose workspace memory changed since
+      // spawn: prompts it to pull the get_session_context delta + clears the pending mark.
+      reprimeTerminal: (sessionId: string, terminalId: string) => Promise<boolean>
       closeTerminal: (sessionId: string, terminalId: string) => Promise<void>
       killWorkSession: (sessionId: string) => Promise<void>
       // CAPP-93 / U5 — delete-time Keep flow. getPromotableFindings returns the dying
@@ -681,6 +684,20 @@ export default function App() {
       .showPanel("recall", { scope: "workspace", sessionId: activeSessionId ?? undefined }, "right")
       .catch((err) => toast("error", `Couldn't open Recall: ${errMsg(err)}`))
   }, [activeSessionId])
+
+  // CAPP-101 (P1) — the propagation-nudge re-prime. The active terminal's owning session's
+  // WORKSPACE memory changed since spawn, so its frozen launch inject is stale. Re-prime
+  // PROMPTS the running agent to pull the get_session_context delta (it does NOT itself inject
+  // the finding). Clears the pending mark backend-side (rides the worksession:updated snapshot).
+  const handleReprime = useCallback(() => {
+    if (!activeSessionId || !activeTerminalId) return
+    void window.api
+      .reprimeTerminal(activeSessionId, activeTerminalId)
+      .then((ok) => {
+        if (ok) toast("info", "Asked the agent to pull the latest workspace memory.")
+      })
+      .catch((err) => toast("error", `Couldn't re-prime: ${errMsg(err)}`))
+  }, [activeSessionId, activeTerminalId])
 
   // MS-2: wire the mission-dashboard opener into the attention-jump ref so that
   // attention entries carrying missionId route to the panel (not a terminal).
@@ -1327,6 +1344,8 @@ export default function App() {
         knows={railKnows}
         onOpenContext={activeSessionId ? handleOpenRailContext : undefined}
         onOpenRecall={handleOpenRailRecall}
+        memoryUpdated={activeTerminalForRail?.pendingMemoryDelta === true}
+        onReprime={activeSessionId && activeTerminalId ? handleReprime : undefined}
       />
     </div>
   )

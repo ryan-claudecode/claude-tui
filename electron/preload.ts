@@ -39,6 +39,11 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("worksession:restore-conversation", folder, conversationId),
   reopenTerminal: (sessionId: string, terminalId: string) =>
     ipcRenderer.invoke("worksession:reopen-terminal", sessionId, terminalId),
+  // CAPP-101 (P1) — the propagation nudge re-prime: bracket-paste the get_session_context PULL
+  // prompt to a running terminal whose workspace memory changed since spawn, and clear its
+  // pending-delta mark. It PROMPTS the pull — it does NOT itself inject the finding.
+  reprimeTerminal: (sessionId: string, terminalId: string) =>
+    ipcRenderer.invoke("worksession:reprime", sessionId, terminalId),
   closeTerminal: (sessionId: string, terminalId: string) =>
     ipcRenderer.invoke("worksession:close-terminal", sessionId, terminalId),
   killWorkSession: (sessionId: string) => ipcRenderer.invoke("worksession:kill", sessionId),

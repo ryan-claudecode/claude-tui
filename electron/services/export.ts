@@ -158,6 +158,16 @@ export class ExportService {
   private now: () => number
   private deps: ExportDeps
   private registry: ExportRegistry
+  /**
+   * CAPP-101 (P1) — the "export settled" barrier state (§C). Per-workspace-key in-flight
+   * regen promises. `regenerate` is synchronous today (atomic temp-then-rename), so the
+   * common path never registers anything here and {@link whenSettled} resolves immediately —
+   * but {@link beginRegen} lets a caller (or a future async regen) mark a regen as in flight so
+   * an ADOPTED-workspace spawn can await it before reading the @import-delivered export file.
+   * Keyed by the registry key (a real id or the untagged stem), so a barrier for W never blocks
+   * a spawn in a different workspace.
+   */
+  private inFlight = new Map<string, Promise<void>>()
 
   constructor(deps: ExportDeps, opts: ExportServiceOpts = {}) {
     this.deps = deps
@@ -165,6 +175,44 @@ export class ExportService {
     this.registryPath = join(this.registryDir, "exports.json")
     this.now = opts.now ?? (() => Date.now())
     this.registry = this.load()
+  }
+
+  /**
+   * CAPP-101 (P1) — the "export settled" barrier (§C). Resolves once NO regen is in flight for
+   * this workspace, so an ADOPTED-workspace spawn doesn't read a stale/torn export mid-regen.
+   * For a NON-exported / NON-adopted workspace there's never an in-flight regen registered, so
+   * this resolves on the same microtask — a true no-op that does NOT slow the common spawn path.
+   * Awaiting many times is safe (it just re-reads the current in-flight promise).
+   */
+  async whenSettled(workspaceId: string | null): Promise<void> {
+    const key = this.keyFor(workspaceId)
+    // Drain a chain of regens that may have been started while we awaited an earlier one.
+    let p = this.inFlight.get(key)
+    while (p) {
+      await p
+      const next = this.inFlight.get(key)
+      p = next === p ? undefined : next
+    }
+  }
+
+  /**
+   * CAPP-101 (P1) — register an in-flight regen for a workspace and return a `done` callback to
+   * settle it. Lets a caller bracket an async regen so {@link whenSettled} blocks until it's done
+   * (the synchronous {@link regenerate} doesn't need this — it settles before returning). Exposed
+   * primarily for the barrier's tests + a future async exporter; the live regen seam stays sync.
+   */
+  beginRegen(workspaceId: string | null): () => void {
+    const key = this.keyFor(workspaceId)
+    let resolve!: () => void
+    const promise = new Promise<void>((r) => {
+      resolve = r
+    })
+    this.inFlight.set(key, promise)
+    return () => {
+      // Only clear if WE'RE still the current in-flight promise (a newer regen may have replaced us).
+      if (this.inFlight.get(key) === promise) this.inFlight.delete(key)
+      resolve()
+    }
   }
 
   // ── registry persistence ────────────────────────────────────────────────────────

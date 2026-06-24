@@ -34,6 +34,14 @@ export interface Terminal {
    */
   ccConversationId?: string
   activity?: string
+  /**
+   * CAPP-101 (P1) — the propagation-nudge mark (from TerminalRef.pendingMemoryDelta).
+   * True when this terminal's owning session's WORKSPACE memory changed AFTER it spawned,
+   * so its frozen launch inject is stale. Drives the Agent Rail KNOWS "re-prime to pull"
+   * affordance. Rides along the `worksession:updated` snapshot. Cleared on re-prime /
+   * handoff / reopen. Undefined → not marked.
+   */
+  pendingMemoryDelta?: boolean
 }
 
 export interface WorkSession {
