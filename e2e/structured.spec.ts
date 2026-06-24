@@ -1408,6 +1408,79 @@ test("CAPP-97: the workspace-memory editor shows a statically-visible Pin toggle
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
 
+test("CAPP-99 / E1: the workspace-memory editor's Export section enables export and surfaces a copy-able @import line", async () => {
+  // The EXPORT pillar. With no workspace selected, the editor pins to the untagged ("All")
+  // bucket — folderless, so Mode A is unavailable and Mode C is the only option, default-OFF
+  // with the machine-wide warning. Assert: the Export section + the untagged warning render
+  // statically; enabling Mode C writes the export file, flips the section to ON, and surfaces
+  // the exact absolute @import line; the "Copy line" button copies it to the clipboard.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-export-"))
+  await seedStructuredConfig(tempHome)
+  await seedUntaggedWorkspaceMemory(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  const memBtn = win.locator(".workspace-memory-btn")
+  await expect(memBtn).toBeVisible({ timeout: 15_000 })
+  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  await memBtn.click()
+  const companion = await companionPromise
+
+  const panel = companion.locator(".workspace-memory-panel")
+  await expect(panel).toBeVisible({ timeout: 15_000 })
+
+  // The Export section renders (statically visible — no hover-reveal).
+  const exportSection = panel.locator(".wmem-export")
+  await expect(exportSection).toBeVisible({ timeout: 10_000 })
+
+  // Folderless/untagged → the machine-wide warning is shown.
+  await expect(exportSection.locator(".wmem-export-warning")).toContainText(/every raw/i)
+
+  // Untagged is Mode-C-only: the Mode-A radio is absent; the Mode-C radio is present + checked.
+  await expect(exportSection.locator("input[type=radio]")).toHaveCount(1)
+
+  // Enable export (Mode C, default path). The section flips to ON and surfaces the @import line.
+  await exportSection.locator(".wmem-export-enable").click()
+  await expect(exportSection.locator(".wmem-export-status")).toContainText(/ON/i, { timeout: 15_000 })
+
+  // The exact @import line is shown (Mode C → an absolute @<path>), with a Copy button.
+  const importLine = exportSection.locator(".wmem-export-import-line")
+  await expect(importLine).toBeVisible({ timeout: 10_000 })
+  await expect(importLine).toContainText("@")
+  await expect(importLine).toContainText("workspace-memory.md")
+  const lineText = (await importLine.textContent())?.trim() ?? ""
+  expect(lineText.startsWith("@")).toBe(true)
+
+  // The "Copy line" button is statically visible and clickable (the clipboard write itself
+  // is environment-gated in headless Electron; we assert the affordance, not the OS clipboard).
+  const copyBtn = exportSection.locator(".wmem-mini", { hasText: "Copy line" })
+  await expect(copyBtn).toBeVisible()
+  await copyBtn.click()
+  // The line stays visible after the copy (the click is non-destructive).
+  await expect(importLine).toBeVisible()
+
+  // The export state persisted: read it back through the main-window accessor. The file
+  // exists and is enabled (one-directional projection of the durable store).
+  await expect(async () => {
+    const st = await win.evaluate(() => (window as any).api.getExportState(null))
+    expect(st?.enabled).toBe(true)
+    expect(st?.mode).toBe("C")
+    expect(typeof st?.importLine).toBe("string")
+  }).toPass({ timeout: 15_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
 test("CAPP-98 / I1: the always-visible 'Context' switcher button opens the READ-ONLY inspector with the honesty header", async () => {
   // The Context Inspector v1. With no workspace selected, the always-visible "Context"
   // switcher button (next to "Workspace memory", NO hover-reveal) opens the READ-ONLY

@@ -4,6 +4,7 @@ import {
   type WorkspaceMemoryRecord,
   type WorkspaceFinding,
 } from "../../lib/workspaceMemoryView"
+import type { ExportStateView } from "../../lib/exportView"
 
 /**
  * CAPP-94 / U6 — the workspace-memory EDITOR: a companion-window panel to view and
@@ -206,6 +207,104 @@ export default function WorkspaceMemoryPanel(props: Props) {
     }
   }, [addText, pinnedId])
 
+  // ── CAPP-99 / E1 — Export (workspace-tier portability) ──────────────────────────
+  const [exportState, setExportState] = useState<ExportStateView | null>(null)
+  const [exportMode, setExportMode] = useState<"A" | "C">(isUntagged ? "C" : "A")
+  const [customPath, setCustomPath] = useState("")
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const refreshExport = useCallback(async () => {
+    try {
+      const st = await window.companionApi.getExportState(pinnedId)
+      setExportState(st)
+      // A folderless/untagged workspace can only use Mode C — pin the selector there.
+      if (st.folderless) setExportMode("C")
+    } catch {
+      /* leave the last-known export state on a transient IPC failure */
+    }
+  }, [pinnedId])
+
+  useEffect(() => {
+    void refreshExport()
+  }, [refreshExport])
+
+  const handleEnableExport = useCallback(async () => {
+    if (exportBusy) return
+    setExportBusy(true)
+    setExportError(null)
+    try {
+      const res = await window.companionApi.enableExport(
+        pinnedId,
+        exportMode,
+        exportMode === "C" ? customPath.trim() || undefined : undefined,
+      )
+      if (!res.ok) {
+        setExportError(res.error ?? "Could not enable export.")
+      } else if (res.state) {
+        // Untagged registers DEFAULT-OFF (the machine-wide blast radius). Since the user
+        // clicked "Enable export" PAST the warning, honor that as the deliberate gesture and
+        // flip it ON immediately (the explicit second confirmation lives in the warning copy).
+        if (isUntagged && !res.state.enabled) {
+          const on = await window.companionApi.setUntaggedExportEnabled(true)
+          setExportState(on)
+        } else {
+          setExportState(res.state)
+        }
+      }
+    } catch (err) {
+      setExportError(String(err))
+    } finally {
+      setExportBusy(false)
+    }
+  }, [exportBusy, pinnedId, exportMode, customPath, isUntagged])
+
+  const handleDisableExport = useCallback(async () => {
+    if (exportBusy) return
+    setExportBusy(true)
+    setExportError(null)
+    try {
+      const st = await window.companionApi.disableExport(pinnedId)
+      setExportState(st)
+    } catch (err) {
+      setExportError(String(err))
+    } finally {
+      setExportBusy(false)
+    }
+  }, [exportBusy, pinnedId])
+
+  const handleToggleUntagged = useCallback(
+    async (enabled: boolean) => {
+      if (exportBusy) return
+      setExportBusy(true)
+      setExportError(null)
+      try {
+        const st = await window.companionApi.setUntaggedExportEnabled(enabled)
+        setExportState(st)
+      } catch (err) {
+        setExportError(String(err))
+      } finally {
+        setExportBusy(false)
+      }
+    },
+    [exportBusy],
+  )
+
+  const handleCopyImportLine = useCallback(async () => {
+    const line = exportState?.importLine
+    if (!line) return
+    try {
+      await navigator.clipboard.writeText(line)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard denied — the line is still visible to select manually */
+    }
+  }, [exportState])
+
+  const exportEnabled = exportState?.enabled ?? false
+
   const title = props.workspaceName?.trim()
     ? `Memory — ${props.workspaceName}`
     : isUntagged
@@ -373,6 +472,124 @@ export default function WorkspaceMemoryPanel(props: Props) {
             Add
           </button>
         </div>
+      </section>
+
+      {/* CAPP-99 / E1 — Export: materialize this workspace's tier into a user-owned file a
+          raw `claude` can @import. Every control statically visible (no hover-reveal). */}
+      <section className="wmem-section wmem-export">
+        <h3>Export (portability)</h3>
+        <p className="wmem-export-blurb">
+          Write this workspace’s memory to a file a plain <code>claude</code> can{" "}
+          <code>@import</code> — so the brain travels outside Mission Control. One-way
+          (the app overwrites the file; edits there are never read back).
+        </p>
+
+        {exportState?.untaggedWarning && (
+          <p className="wmem-export-warning" role="alert">
+            ⚠ {exportState.untaggedWarning}
+          </p>
+        )}
+
+        {exportEnabled ? (
+          <div className="wmem-export-on">
+            <div className="wmem-export-status">
+              Export is <strong>ON</strong> ({exportState?.mode === "A" ? "in-folder, gitignored" : "custom path"}).
+            </div>
+            {exportState?.path && (
+              <div className="wmem-export-path" title={exportState.path}>
+                File: <code>{exportState.path}</code>
+              </div>
+            )}
+            {exportState?.importLine && (
+              <div className="wmem-export-import">
+                <span className="wmem-export-import-label">Paste into your CLAUDE.md / CLAUDE.local.md:</span>
+                <code className="wmem-export-import-line">{exportState.importLine}</code>
+                <button
+                  type="button"
+                  className="wmem-mini"
+                  onClick={() => void handleCopyImportLine()}
+                  aria-label="Copy the @import line"
+                >
+                  {copied ? "Copied!" : "Copy line"}
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              className="wmem-mini wmem-export-disable"
+              onClick={() => void handleDisableExport()}
+              disabled={exportBusy}
+            >
+              Turn export off
+            </button>
+            {isUntagged && (
+              <button
+                type="button"
+                className="wmem-mini"
+                onClick={() => void handleToggleUntagged(false)}
+                disabled={exportBusy}
+                title="Disable the untagged (global) export"
+              >
+                Disable
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="wmem-export-off">
+            <div className="wmem-export-mode">
+              {!exportState?.folderless && (
+                <label className="wmem-export-radio">
+                  <input
+                    type="radio"
+                    name="export-mode"
+                    checked={exportMode === "A"}
+                    onChange={() => setExportMode("A")}
+                  />
+                  In-folder, gitignored (default) — writes <code>.claude-tui/workspace-memory.md</code>{" "}
+                  and adds <code>/.claude-tui/</code> to <code>.gitignore</code> first.
+                </label>
+              )}
+              <label className="wmem-export-radio">
+                <input
+                  type="radio"
+                  name="export-mode"
+                  checked={exportMode === "C"}
+                  onChange={() => setExportMode("C")}
+                />
+                Custom path — pick any file (defaults outside any repo).
+              </label>
+            </div>
+
+            {exportState?.modeANote && (
+              <p className="wmem-export-note">{exportState.modeANote}</p>
+            )}
+
+            {exportMode === "C" && (
+              <input
+                className="wmem-export-custom"
+                value={customPath}
+                onChange={(e) => setCustomPath(e.target.value)}
+                placeholder="Optional: a custom file or folder (leave blank for the default)…"
+                aria-label="Custom export path"
+              />
+            )}
+
+            <button
+              type="button"
+              className="wmem-export-enable"
+              onClick={() => void handleEnableExport()}
+              disabled={exportBusy}
+            >
+              {exportBusy ? "Working…" : "Enable export"}
+            </button>
+          </div>
+        )}
+
+        {exportError && (
+          <p className="wmem-export-error" role="alert">
+            {exportError}
+          </p>
+        )}
       </section>
     </div>
   )

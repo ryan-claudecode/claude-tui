@@ -28,6 +28,7 @@ import type {
   WorkspaceMemoryRecord,
   WorkspaceFinding,
 } from "../lib/workspaceMemoryView"
+import type { ExportStateView, EnableResultView } from "../lib/exportView"
 
 interface PanelState {
   id: string
@@ -121,6 +122,20 @@ declare global {
       // companion window) calls this on its Refresh button to re-enumerate the launch-time
       // native context + our injected primer. A `null` workspaceId is the untagged bucket.
       inspectWorkspaceContext: (workspaceId: string | null) => Promise<InspectResultView>
+      // CAPP-99 / E1 — export accessors. The export control lives in THIS companion window's
+      // WorkspaceMemoryPanel. STRICTLY one-directional (store → file): read state / trigger
+      // regen only — there is no file → store accessor. A `null` workspaceId is the untagged bucket.
+      getExportState: (workspaceId: string | null) => Promise<ExportStateView>
+      enableExport: (
+        workspaceId: string | null,
+        mode: "A" | "C",
+        customPath?: string,
+      ) => Promise<EnableResultView>
+      disableExport: (workspaceId: string | null) => Promise<ExportStateView>
+      setUntaggedExportEnabled: (enabled: boolean) => Promise<ExportStateView>
+      regenerateExport: (
+        workspaceId: string | null,
+      ) => Promise<{ ok: boolean; wrote?: boolean; error?: string }>
       getTheme: () => Promise<string>
       onThemeChanged: (cb: (mode: string) => void) => void
       removeAllListeners: (channel: string) => void

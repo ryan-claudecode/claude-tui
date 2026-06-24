@@ -24,9 +24,13 @@ import {
   buildSessionInjectWithStamp,
   assembleInjectInput,
   type SessionInjectDeps,
+  type InjectWorkspaceFinding,
 } from "./services/contextInject"
 import { resolveInjectMaxBytes } from "./config"
 import { LocalHistoryService } from "./services/localHistory"
+import { ExportService } from "./services/export"
+import { registerExportHandlers } from "./ipc/export-handlers"
+import { logWarn } from "./log"
 import { CompanionService } from "./services/companion"
 import { AttentionService } from "./services/attention"
 import { Notification } from "electron"
@@ -130,6 +134,29 @@ export const contextInspectorService = new ContextInspectorService(
   recallService,
 )
 
+// CAPP-99 / E1 — the EXPORT pillar: materialize the WORKSPACE tier (instructions + durable
+// findings) into a user-owned markdown file a raw `claude` can @import. STRICTLY one-directional
+// (app JSON → file, never read back). Mode A (in-folder, gitignore-first) + Mode C (custom path,
+// the only mode for untagged/folderless). It reads the SAME workspaceMemory + recall sources the
+// spawn inject reads — via the shared buildWorkspacePrimerBody — so the exported file and the
+// inject can never show a different workspace brain. The deps are injected so the service stays
+// decoupled + hermetically testable; `workspaceFindings` maps the recall workspace-tier union to
+// the inject finding shape (the EXACT mapping assembleInjectInput / the inspector use, so all
+// three feed off one ordered finding set). init()/wiring happen in setupIpc below.
+const exportWorkspaceFindings = (workspaceId: string | null): InjectWorkspaceFinding[] =>
+  recallService.workspaceTierEntries(workspaceId ?? undefined).map((e) => ({
+    text: e.text,
+    status: e.status === "ruled-out" ? ("ruled-out" as const) : ("active" as const),
+    ...(e.correction ? { correction: e.correction } : {}),
+    createdAt: e.createdAt,
+    ...(e.pinned ? { pinned: true } : {}),
+  }))
+export const exportService = new ExportService({
+  resolveFolder: (id) => workspaceService.resolveWorkspaceDir(id),
+  getInstructions: (id) => workspaceMemoryService.getMemory(id).instructions,
+  workspaceFindings: exportWorkspaceFindings,
+})
+
 /**
  * The attention queue (AQ-1). Constructed in setupIpc once the main window
  * exists (it needs window-focus + a renderer to push snapshots to). Exported as
@@ -211,6 +238,16 @@ export async function setupIpc(win: BrowserWindow) {
     // CAPP-95 / D1 — every memory mutation schedules a debounced local-history
     // snapshot (coalesces an edit burst into one commit). No-op until init() ran.
     localHistoryService.scheduleSnapshot("workspace memory changed")
+    // CAPP-99 / E1 — live regen: re-materialize this workspace's export off the every-mutation
+    // seam (§B.4). The recall index was just invalidated above, so the exporter reads the FRESH
+    // workspace tier. A `null`/sentinel-stem id addresses the untagged bucket. CATCH ITS OWN
+    // ERRORS — a bad export (e.g. a read-only path) must NEVER crash the memory-mutation path.
+    try {
+      const wsId = workspaceId === "__untagged__" ? null : workspaceId
+      exportService.regenerate(wsId)
+    } catch (err) {
+      logWarn("export", `live regen on memory change failed: ${String(err)}`)
+    }
     if (!win.isDestroyed()) win.webContents.send("workspace:memory-changed", workspaceId)
     // The editor panel (U6) lives in the COMPANION window, NOT the main window — so the
     // change must also reach there or an open editor goes stale when another surface
@@ -345,6 +382,12 @@ export async function setupIpc(win: BrowserWindow) {
   })
   localHistoryService.init()
 
+  // CAPP-99 / E1 — regen-on-launch: re-materialize every enabled export now (self-heals
+  // exports stale from while the app was closed; §B.0). After workSessionService.load() +
+  // discover() so the recall union + workspace folders are warm. Best-effort + isolated —
+  // regenerateAll catches per-export errors and never throws into boot.
+  exportService.regenerateAll()
+
   // Start MCP server and configure sessions to auto-connect. The MCP connection
   // is the app's entire value channel, so a startup failure must be loud — but
   // it must NOT take the app down: terminals minus MCP are degraded yet usable.
@@ -374,6 +417,7 @@ export async function setupIpc(win: BrowserWindow) {
       attentionService,
       workspaceMemoryService,
       contextInspectorService,
+      exportService,
     )
     sessionService.setMcpConfigPath(configPath)
     sessionService.setMcpServerUrl(`http://127.0.0.1:${port}/sse`)
@@ -413,6 +457,8 @@ export async function setupIpc(win: BrowserWindow) {
   })
   // CAPP-95 / D1 — local-history list/restore/snapshot/reveal.
   registerLocalHistoryHandlers({ localHistoryService, shellService })
+  // CAPP-99 / E1 — export enable/disable/regen/state (export:* channels).
+  registerExportHandlers({ exportService, workspaceService })
   registerAppHandlers({
     config,
     sessionService,

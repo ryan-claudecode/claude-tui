@@ -77,6 +77,20 @@ contextBridge.exposeInMainWorld("companionApi", {
   // workspaceId is the untagged "All" bucket. Pure read — no native-file write path.
   inspectWorkspaceContext: (workspaceId: string | null) =>
     ipcRenderer.invoke("context:inspect", workspaceId),
+  // CAPP-99 / E1 — export accessors. The export control lives in THIS companion window's
+  // WorkspaceMemoryPanel. STRICTLY one-directional (store → file): these only read state or
+  // trigger a regen — there is no file → store accessor anywhere. A `null` workspaceId is the
+  // untagged "All" bucket.
+  getExportState: (workspaceId: string | null) =>
+    ipcRenderer.invoke("export:get-state", workspaceId),
+  enableExport: (workspaceId: string | null, mode: "A" | "C", customPath?: string) =>
+    ipcRenderer.invoke("export:enable", workspaceId, mode, customPath),
+  disableExport: (workspaceId: string | null) =>
+    ipcRenderer.invoke("export:disable", workspaceId),
+  setUntaggedExportEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke("export:set-untagged-enabled", enabled),
+  regenerateExport: (workspaceId: string | null) =>
+    ipcRenderer.invoke("export:regenerate", workspaceId),
   getTheme: () => ipcRenderer.invoke("config:get-theme"),
   onThemeChanged: (cb: (mode: string) => void) =>
     ipcRenderer.on("theme:changed", (_e, mode) => cb(mode)),

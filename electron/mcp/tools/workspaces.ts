@@ -5,6 +5,7 @@ import type { TerminalIdentity } from "./shared"
 import type { SessionService } from "../../services/sessions"
 import type { WorkspaceMemoryService } from "../../services/workspaceMemory"
 import type { ContextInspectorService } from "../../services/contextInspector"
+import type { ExportService } from "../../services/export"
 import { loadConfig } from "../../config"
 
 /**
@@ -52,6 +53,8 @@ export function registerWorkspaceTools(
   workspaceMemory: WorkspaceMemoryService,
   // CAPP-98 / I1 — the READ-ONLY Context Inspector backing `inspect_workspace_context`.
   contextInspector: ContextInspectorService,
+  // CAPP-99 / E1 — the EXPORT pillar backing `export_workspace_memory`.
+  exportService: ExportService,
   // The caller's identity (bound work-session id) — the memory tools default their
   // destination workspace to the caller's session's workspace.
   identity: TerminalIdentity = {},
@@ -366,6 +369,44 @@ export function registerWorkspaceTools(
       // memory tools): the inspector is identity-bound to the caller's own workspace.
       const wsId = workspace_id ?? workSessions.get(identity.sessionId ?? "")?.workspaceId ?? null
       return json(contextInspector.inspectWorkspaceContext(wsId))
+    },
+  )
+
+  // ── Export (CAPP-99 / E1) ──────────────────────────────────────────────────────
+  // Materialize the WORKSPACE tier (standing instructions + durable findings) into a
+  // user-owned markdown file a raw `claude` can @import. STRICTLY one-directional (store
+  // → file, never read back). Mode A (in-folder, gitignore-first) is the default; Mode C
+  // (custom path) is the only mode for untagged/folderless. Identity-bound: the destination
+  // resolves to the caller's bound session's workspace, NEVER the global active selection.
+  server.tool(
+    "export_workspace_memory",
+    "Enable export of a workspace's durable memory (standing instructions + findings) to a user-owned markdown file that a plain `claude` outside Mission Control can @import — so the workspace brain travels. STRICTLY one-way: the app overwrites the file on every memory change; edits to the file are NEVER read back into the app. Mode A (default) writes <folder>/.claude-tui/workspace-memory.md and adds /.claude-tui/ to .gitignore FIRST (declining the gitignore write means no export). Mode C writes any custom path (the only option for an untagged/folderless workspace, where it is also default-OFF because wiring it machine-wide makes every raw claude eat cross-project findings). Returns the export state incl. the exact @import line to paste into your CLAUDE.md. By default it targets YOUR bound session's workspace; pass workspace_id to target a specific one.",
+    {
+      mode: z
+        .enum(["A", "C"])
+        .optional()
+        .describe("'A' = in-folder gitignored (default for a folder-bound workspace); 'C' = custom path (required for untagged/folderless)"),
+      custom_path: z
+        .string()
+        .optional()
+        .describe("Mode C only: an absolute file or folder path (default: ~/.claude-tui/exports/<workspaceId>/workspace-memory.md)"),
+      workspace_id: z
+        .string()
+        .optional()
+        .describe("Workspace id to export (default: your bound session's workspace). Rejected if unknown."),
+    },
+    async ({ mode, custom_path, workspace_id }) => {
+      if (workspace_id !== undefined && !isKnownWorkspace(workspace_id)) {
+        return text(`Workspace not found: ${workspace_id}`)
+      }
+      // NEVER fall back to the global active selection (cross-workspace write leak).
+      const wsId = workspace_id ?? workSessions.get(identity.sessionId ?? "")?.workspaceId ?? null
+      // Default mode: a folderless/untagged workspace must use Mode C; otherwise Mode A.
+      const folderless = wsId === null
+      const resolvedMode = mode ?? (folderless ? "C" : "A")
+      const result = exportService.enableExport(wsId, resolvedMode, custom_path)
+      if (!result.ok) return text(`Export not enabled: ${result.error ?? "unknown error"}`)
+      return json(result.state)
     },
   )
 }

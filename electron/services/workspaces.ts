@@ -433,7 +433,19 @@ export class WorkspaceService {
    * a known-absolute, verified directory).
    */
   getActiveWorkspaceDir(): string | null {
-    const ws = this.getActive()
+    return this.resolveWorkspaceDir(this.activeWorkspaceId)
+  }
+
+  /**
+   * CAPP-99 / E1 — resolve a SPECIFIC workspace's folder to an absolute, existing path, or
+   * null when none/folderless/stale. The same validation `getActiveWorkspaceDir` uses, but
+   * keyed by an explicit id (the exporter resolves a workspace's Mode-A landing site off its
+   * OWN id, never the active selection). `~`-prefixed dirs are expanded; a relative dir is
+   * rejected; a missing/non-directory path → null (never export into a wrong/non-existent place).
+   */
+  resolveWorkspaceDir(id: string | null): string | null {
+    if (!id) return null
+    const ws = this.workspaces.get(id)
     const dir = ws?.dir
     if (!dir) return null
     const expanded = this.expandHome(dir)

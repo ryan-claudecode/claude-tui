@@ -5818,7 +5818,8 @@ body {
   margin-top: 8px;
 }
 .wmem-save-btn,
-.wmem-add-btn {
+.wmem-add-btn,
+.wmem-export-enable {
   font-size: 12px;
   font-weight: 600;
   padding: 6px 14px;
@@ -5827,15 +5828,18 @@ body {
   background: var(--accent);
   color: var(--accent-fg, #fff);
   cursor: pointer;
+  align-self: flex-start;
   transition: background var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 .wmem-save-btn:hover:not(:disabled),
-.wmem-add-btn:hover:not(:disabled) {
+.wmem-add-btn:hover:not(:disabled),
+.wmem-export-enable:hover:not(:disabled) {
   background: var(--accent-bright);
   box-shadow: 0 0 12px var(--accent-glow);
 }
 .wmem-save-btn:disabled,
-.wmem-add-btn:disabled {
+.wmem-add-btn:disabled,
+.wmem-export-enable:disabled {
   opacity: 0.5;
   cursor: default;
   background: var(--bg-3);
@@ -5844,6 +5848,79 @@ body {
   box-shadow: none;
 }
 .wmem-dirty-hint { font-size: 11px; color: var(--accent); }
+
+/* CAPP-99 / E1 — Export section */
+.wmem-export {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 16px;
+}
+.wmem-export-blurb {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+.wmem-export-blurb code,
+.wmem-export-path code,
+.wmem-export-import-line {
+  font-family: var(--font-mono, "Cascadia Code", monospace);
+  font-size: 11px;
+  background: var(--bg-3);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.wmem-export-warning {
+  font-size: 12px;
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--warning, #c08a2a) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #c08a2a) 40%, transparent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+.wmem-export-note {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.45;
+  margin: 6px 0;
+}
+.wmem-export-error {
+  font-size: 12px;
+  color: var(--danger, #c0432a);
+  margin: 8px 0 0;
+  line-height: 1.45;
+}
+.wmem-export-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.wmem-export-radio {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.45;
+  cursor: pointer;
+}
+.wmem-export-radio input { margin-top: 2px; flex-shrink: 0; }
+.wmem-export-custom { width: 100%; margin-bottom: 10px; }
+.wmem-export-on,
+.wmem-export-off { display: flex; flex-direction: column; gap: 10px; }
+.wmem-export-status { font-size: 13px; color: var(--text-1); }
+.wmem-export-path { font-size: 12px; color: var(--text-2); word-break: break-all; }
+.wmem-export-import {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.wmem-export-import-label { font-size: 12px; color: var(--text-2); width: 100%; }
+.wmem-export-import-line { word-break: break-all; }
+
 .wmem-findings { list-style: none; margin: 0; padding: 0; }
 .wmem-finding {
   padding: 8px 0;
@@ -5901,7 +5978,8 @@ body {
   gap: 6px;
 }
 .wmem-finding-edit-input,
-.wmem-add-input {
+.wmem-add-input,
+.wmem-export-custom {
   flex: 1;
   min-width: 0;
   box-sizing: border-box;
@@ -5915,6 +5993,7 @@ body {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .wmem-finding-edit-input:focus,
+.wmem-export-custom:focus,
 .wmem-add-input:focus {
   outline: none;
   border-color: var(--accent);

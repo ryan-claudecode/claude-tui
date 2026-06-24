@@ -145,6 +145,19 @@ contextBridge.exposeInMainWorld("api", {
   // the untagged "All" bucket. Consumed by the WorkspaceSwitcher "Context" open handler.
   inspectWorkspaceContext: (workspaceId: string | null) =>
     ipcRenderer.invoke("context:inspect", workspaceId),
+  // CAPP-99 / E1 — export accessors (also on the companion preload, where the export UI
+  // lives). STRICTLY one-directional (store → file): read state / trigger regen only — no
+  // file → store accessor exists. A `null` workspaceId is the untagged "All" bucket.
+  getExportState: (workspaceId: string | null) =>
+    ipcRenderer.invoke("export:get-state", workspaceId),
+  enableExport: (workspaceId: string | null, mode: "A" | "C", customPath?: string) =>
+    ipcRenderer.invoke("export:enable", workspaceId, mode, customPath),
+  disableExport: (workspaceId: string | null) =>
+    ipcRenderer.invoke("export:disable", workspaceId),
+  setUntaggedExportEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke("export:set-untagged-enabled", enabled),
+  regenerateExport: (workspaceId: string | null) =>
+    ipcRenderer.invoke("export:regenerate", workspaceId),
   // The Keep modal's editable candidate list (the dying session's promotable notes).
   getPromotableFindings: (sessionId: string) =>
     ipcRenderer.invoke("worksession:promotable-findings", sessionId),

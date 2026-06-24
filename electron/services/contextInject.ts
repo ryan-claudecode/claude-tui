@@ -300,6 +300,65 @@ function render(
   return parts.join("\n\n")
 }
 
+// ── CAPP-99 / E1 — the SHARED workspace-tier body (anti-drift) ──────────────────────
+
+/**
+ * Order the workspace findings the ONE canonical way both the inject and the export use:
+ * pinned active first, then the remaining active (OLDEST first — foundational findings are
+ * the load-bearing rules), then ruled-out last. EXTRACTED so the inject's `planInject`
+ * priority ladder and the export's {@link buildWorkspacePrimerBody} can never disagree on
+ * which findings appear in what order — the §B keystone "one shared finding set".
+ */
+export function orderWorkspaceFindings(
+  findings: InjectWorkspaceFinding[],
+): InjectWorkspaceFinding[] {
+  const active = findings
+    .filter((f) => f.status === "active")
+    .sort((a, b) => a.createdAt - b.createdAt)
+  const pinned = active.filter((f) => f.pinned)
+  const unpinned = active.filter((f) => !f.pinned)
+  const ruledOut = findings.filter((f) => f.status === "ruled-out")
+  return [...pinned, ...unpinned, ...ruledOut]
+}
+
+/**
+ * CAPP-99 / E1 — the SHARED workspace-tier body builder. Produces ONLY the workspace-tier
+ * markdown (standing instructions + durable findings, pinned-first/active/ruled-out), with
+ * NO header — the caller wraps it (the inject wraps it in the launch header; the export
+ * wraps it in the §B.1 identity-marker header). The keystone of the export design's
+ * anti-drift requirement: the inject (via {@link planInject}) and the exporter feed off the
+ * SAME finding set ({@link orderWorkspaceFindings}) and the SAME renderers
+ * ({@link renderWorkspaceFinding}), so a `claude` reading the exported file and a `claude`
+ * reading the inject can never see a different workspace brain.
+ *
+ * Unlike the inject, the export is NOT byte-capped (a portable file the user owns has no
+ * token budget) — it materializes the FULL workspace tier. Returns "" when there is nothing
+ * durable (no instructions + no findings), so the exporter can decide whether to write.
+ */
+export function buildWorkspacePrimerBody(input: {
+  instructions: string
+  workspaceFindings: InjectWorkspaceFinding[]
+}): string {
+  const parts: string[] = []
+
+  const instructions = input.instructions.trim()
+  parts.push(`## Standing instructions\n${instructions || "_(none)_"}`)
+
+  const ordered = orderWorkspaceFindings(input.workspaceFindings)
+  if (ordered.length) {
+    parts.push(
+      `## Durable findings\n${ordered.map(renderWorkspaceFinding).join("\n")}`,
+    )
+  } else {
+    parts.push("## Durable findings\n_(none)_")
+  }
+
+  // Nothing durable at all → empty, so the exporter can skip the write.
+  if (!instructions && ordered.length === 0) return ""
+
+  return parts.join("\n\n")
+}
+
 /** One recall workspace-memory entry as the inject mapping reads it (status carried so a
  *  ruled-out finding renders struck; `pinned` flows through so truncation honors it). */
 export interface InjectSourceEntry {
