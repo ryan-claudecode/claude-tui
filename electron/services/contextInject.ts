@@ -274,3 +274,61 @@ function render(
 
   return parts.join("\n\n")
 }
+
+/** One recall workspace-memory entry as the inject mapping reads it (status carried so a
+ *  ruled-out finding renders struck; `pinned` flows through so truncation honors it). */
+export interface InjectSourceEntry {
+  text: string
+  status: "active" | "ruled-out" | "summary"
+  correction?: string
+  createdAt: number
+  pinned?: boolean
+}
+
+/** The live-service reads `buildSessionInject` needs, INJECTED by the wiring layer so the
+ *  assembly logic is unit-testable (one helper, called by both ipc.ts AND the wiring test,
+ *  not re-implemented in each). */
+export interface SessionInjectDeps {
+  /** The spawning session's OWN workspace — NEVER the active selection. */
+  workspaceIdOf: (sessionId: string) => string | undefined
+  /** The workspace's durable standing instructions. */
+  getInstructions: (workspaceId: string | null) => string
+  /** The recall union @ scope:'workspace' (the durable memory tier) for a workspace. */
+  workspaceTierEntries: (workspaceId: string | undefined) => InjectSourceEntry[]
+  /** The spawning session's own context sections. */
+  getSessionSections: (sessionId: string) => InjectSessionTier | undefined
+}
+
+/**
+ * Assemble the session inject from the live services — the EXACT logic the spawn wiring
+ * uses, extracted so it is unit-testable rather than re-implemented in ipc.ts and the
+ * test (which had drifted). Scoped off the SPAWNING session's own workspace
+ * (`deps.workspaceIdOf`), NEVER the active selection. A resume spawn → the short pointer;
+ * a bare spawn (no sessionId) → "".
+ */
+export function buildSessionInject(
+  sessionId: string | undefined,
+  opts: { resume: boolean; maxBytes?: number },
+  deps: SessionInjectDeps,
+): string {
+  if (opts.resume) {
+    return buildInjectedContext({ instructions: "", workspaceFindings: [] }, { resume: true })
+  }
+  if (!sessionId) return ""
+  const workspaceId = deps.workspaceIdOf(sessionId)
+  const workspaceFindings: InjectWorkspaceFinding[] = deps.workspaceTierEntries(workspaceId).map((e) => ({
+    text: e.text,
+    status: e.status === "ruled-out" ? "ruled-out" : "active",
+    ...(e.correction ? { correction: e.correction } : {}),
+    createdAt: e.createdAt,
+    ...(e.pinned ? { pinned: true } : {}),
+  }))
+  return buildInjectedContext(
+    {
+      instructions: deps.getInstructions(workspaceId ?? null),
+      workspaceFindings,
+      session: deps.getSessionSections(sessionId),
+    },
+    { resume: false, maxBytes: opts.maxBytes },
+  )
+}

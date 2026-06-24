@@ -65,6 +65,7 @@ function wmFinding(over: Partial<MemoryFinding> & { text: string }): MemoryFindi
     ...(over.supersededBy ? { supersededBy: over.supersededBy } : {}),
     ...(over.originSessionId != null ? { originSessionId: over.originSessionId } : {}),
     ...(over.originNoteId != null ? { originNoteId: over.originNoteId } : {}),
+    ...(over.pinned ? { pinned: true } : {}),
     promotedAt: over.promotedAt ?? t,
   }
 }
@@ -559,6 +560,27 @@ describe("RecallService — union scope + digest (CAPP-87 / U4)", () => {
     const hits = svc.recall("auth", "workspace", { workspaceId: "ws-a" })
     expect(hits.some((h) => h.source === "workspace-memory" && h.text === "durable memory about auth")).toBe(true)
     expect(hits.some((h) => h.source === "note" && h.text === "live finding about auth")).toBe(true)
+  })
+
+  it("workspaceTierEntries carries the `pinned` flag through onto the RecallEntry", () => {
+    const svc = buildSvc(
+      [],
+      [
+        {
+          workspaceId: "ws-a",
+          findings: [
+            wmFinding({ text: "pinned load-bearing rule", workspaceId: "ws-a", source: "user", pinned: true }),
+            wmFinding({ text: "ordinary unpinned finding", workspaceId: "ws-a", source: "user" }),
+          ],
+        },
+      ],
+    )
+    const entries = svc.workspaceTierEntries("ws-a")
+    const pinned = entries.find((e) => e.text === "pinned load-bearing rule")
+    const ordinary = entries.find((e) => e.text === "ordinary unpinned finding")
+    expect(pinned?.pinned).toBe(true)
+    // Unpinned findings carry no `pinned` key (omitted, not `false`).
+    expect(ordinary?.pinned).toBeUndefined()
   })
 
   it("'session' scope EXCLUDES workspace memory (synthetic id never matches a real session)", () => {

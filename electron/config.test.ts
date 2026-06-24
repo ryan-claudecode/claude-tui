@@ -11,6 +11,8 @@ import {
   resolveSkipApproval,
   resolveAgentRailOpen,
   resolvePrimerRecall,
+  resolveInjectMaxBytes,
+  DEFAULT_INJECT_MAX_BYTES,
   claudeDefaultModel,
   claudeDefaultEffort,
   type ThemeMode,
@@ -341,5 +343,31 @@ describe("resolveSkipApproval (DEV permission posture)", () => {
       JSON.stringify({ schemaVersion: 1, data: { permissions: { skipApproval: false } } }),
     )
     expect(loadConfig().permissions).toEqual({ skipApproval: false })
+  })
+})
+
+// CAPP-96 — the byte cap for the auto-loaded context payload. Pure over the config
+// object; the default backstops any absent/garbage value so the builder always has a
+// positive integer ceiling.
+describe("resolveInjectMaxBytes (CAPP-96 auto-load byte cap)", () => {
+  it("falls back to the default for absent/partial config", () => {
+    expect(resolveInjectMaxBytes(undefined)).toBe(DEFAULT_INJECT_MAX_BYTES)
+    expect(resolveInjectMaxBytes(null)).toBe(DEFAULT_INJECT_MAX_BYTES)
+    expect(resolveInjectMaxBytes({})).toBe(DEFAULT_INJECT_MAX_BYTES)
+    expect(resolveInjectMaxBytes({ context: {} })).toBe(DEFAULT_INJECT_MAX_BYTES)
+  })
+
+  it("honors a positive number and floors a fractional one", () => {
+    expect(resolveInjectMaxBytes({ context: { injectMaxBytes: 4096 } })).toBe(4096)
+    expect(resolveInjectMaxBytes({ context: { injectMaxBytes: 4096.9 } })).toBe(4096)
+  })
+
+  it("rejects non-positive / non-finite / wrong-type values → default", () => {
+    expect(resolveInjectMaxBytes({ context: { injectMaxBytes: 0 } })).toBe(DEFAULT_INJECT_MAX_BYTES)
+    expect(resolveInjectMaxBytes({ context: { injectMaxBytes: -1 } })).toBe(DEFAULT_INJECT_MAX_BYTES)
+    expect(resolveInjectMaxBytes({ context: { injectMaxBytes: Number.NaN } })).toBe(DEFAULT_INJECT_MAX_BYTES)
+    expect(resolveInjectMaxBytes({ context: { injectMaxBytes: Infinity } })).toBe(DEFAULT_INJECT_MAX_BYTES)
+    expect(resolveInjectMaxBytes({ context: { injectMaxBytes: "8192" } as never })).toBe(DEFAULT_INJECT_MAX_BYTES)
+    expect(resolveInjectMaxBytes({ context: { injectMaxBytes: null } as never })).toBe(DEFAULT_INJECT_MAX_BYTES)
   })
 })

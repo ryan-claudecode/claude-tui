@@ -15,7 +15,7 @@ import {
 import { SessionService } from "./sessions"
 import { WorkspaceMemoryService } from "./workspaceMemory"
 import { RecallService } from "./recall"
-import { buildInjectedContext, type InjectWorkspaceFinding } from "./contextInject"
+import { buildInjectedContext, buildSessionInject } from "./contextInject"
 
 vi.mock("../log", () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 
@@ -47,11 +47,13 @@ let sessions: SessionService
 let memory: WorkspaceMemoryService
 let recall: RecallService
 let activeWorkspace: string | undefined
+let injectMaxBytes: number | undefined
 
 beforeEach(() => {
   homeDir = mkdtempSync(join(tmpdir(), "capp96-"))
   spawned = []
   activeWorkspace = undefined
+  injectMaxBytes = undefined
   const spawnProc: SpawnProc = (file, args, options) => {
     const p = new FakeProc(file, args, options)
     spawned.push(p)
@@ -75,24 +77,21 @@ beforeEach(() => {
     () => memory.listWorkspaceMemory(),
   )
 
-  // The exact builder ipc.ts installs (scope off the SPAWNING session's workspaceId).
-  terminals.setContextBuilder((sessionId, { resume }) => {
-    if (resume) return buildInjectedContext({ instructions: "", workspaceFindings: [] }, { resume: true })
-    if (!sessionId) return ""
-    const workspaceId = sessions.workspaceIdOf(sessionId)
-    const mem = memory.getMemory(workspaceId ?? null)
-    const workspaceFindings: InjectWorkspaceFinding[] = recall
-      .workspaceTierEntries(workspaceId)
-      .map((e) => ({
-        text: e.text,
-        status: e.status === "ruled-out" ? "ruled-out" : "active",
-        ...(e.correction ? { correction: e.correction } : {}),
-        createdAt: e.createdAt,
-        ...(e.pinned ? { pinned: true } : {}),
-      }))
-    const session = sessions.getSessionContextSections(sessionId)
-    return buildInjectedContext({ instructions: mem.instructions, workspaceFindings, session })
-  })
+  // The REAL helper ipc.ts installs — driven through `buildSessionInject` with the live
+  // services as deps (no re-implemented closure to drift), scoped off the SPAWNING
+  // session's workspaceId, byte-capped by the (test-tunable) injectMaxBytes.
+  terminals.setContextBuilder((sessionId, { resume }) =>
+    buildSessionInject(
+      sessionId,
+      { resume, maxBytes: injectMaxBytes },
+      {
+        workspaceIdOf: (id) => sessions.workspaceIdOf(id),
+        getInstructions: (wsId) => memory.getMemory(wsId).instructions,
+        workspaceTierEntries: (wsId) => recall.workspaceTierEntries(wsId),
+        getSessionSections: (id) => sessions.getSessionContextSections(id),
+      },
+    ),
+  )
 })
 
 afterEach(() => {
@@ -176,6 +175,23 @@ describe("CAPP-96 wiring — file-backed inject + scope", () => {
     const s = sessions.create()
     terminals.createHeadless("t", homeDir, s.id)
     expect(spawned.at(-1)!.args.join(" ")).not.toContain("--append-system-prompt-file")
+  })
+
+  it("clamps the injected payload to the configured byte cap", () => {
+    activeWorkspace = "ws-A"
+    const s = sessions.create()
+    // Seed far more than the cap can hold: many non-pinned (evictable) findings.
+    for (let i = 0; i < 60; i++) {
+      memory.addFinding("ws-A", `EVICTABLE finding number ${i} with enough text to add bytes`, "user")
+    }
+    recall.invalidate()
+    injectMaxBytes = 1024
+
+    terminals.createHeadless("t", homeDir, s.id)
+    const body = readFileSync(injectedFile(spawned.at(-1)!)!, "utf8")
+    expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(1024)
+    // Eviction happened → the truncation marker is present.
+    expect(body).toContain("omitted")
   })
 
   it("the xterm path also writes the inject file + adds the flag", () => {

@@ -382,9 +382,9 @@ export class RecallService {
    * isn't double-counted (its live origin note is suppressed in `deriveRecallIndex`).
    * Reads the WARMED index (no per-spawn rebuild). Returns the shape the builder needs
    * (text/status/correction/createdAt/pinned); `createdAt` drives oldest-first ordering.
-   * NOTE: `pinned` is not carried on `RecallEntry`, so it's resolved from the live
-   * memory snapshot by `(originSessionId, originNoteId)` / text — see the wiring in ipc.ts;
-   * here we expose the recall-scoped entries and let the caller attach `pinned`.
+   * `pinned` IS carried straight through onto `RecallEntry` (set from the memory finding
+   * in `deriveRecallIndex`), so the builder reads it directly — no separate snapshot
+   * lookup needed.
    */
   workspaceTierEntries(workspaceId: string | undefined): RecallEntry[] {
     return scopeFilter(this.getIndex(), "workspace", { workspaceId }).filter(
