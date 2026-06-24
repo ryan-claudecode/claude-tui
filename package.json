@@ -5,6 +5,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "tsc -b && electron-vite build && electron .",
+    "dev:watch": "electron-vite dev --watch",
     "build": "tsc -b && electron-vite build",
     "typecheck": "tsc -b",
     "start": "electron .",
