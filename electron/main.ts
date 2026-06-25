@@ -70,7 +70,13 @@ async function createWindow() {
     mainWindow = null
   })
 
-  // Uncomment to debug: mainWindow.webContents.openDevTools()
+  // Dogfooding/debug: open DevTools on demand so the renderer console is visible
+  // without a menu (the app sets no application menu, so the default Ctrl+Shift+I
+  // accelerator is gone). PowerShell: `$env:CTUI_DEVTOOLS=1; npm run dev:watch`.
+  // Detached so it never resizes the frameless window. No-op in normal runs.
+  if (process.env.CTUI_DEVTOOLS === "1") {
+    mainWindow.webContents.openDevTools({ mode: "detach" })
+  }
 }
 
 app
