@@ -255,4 +255,35 @@ export class PanelService {
     this.mainBridge?.send("panel:hide", id) // drop from the MAIN mirror ONLY
     return true
   }
+
+  /**
+   * CAPP-110 / S3 — the companion window closed (× / OS / app teardown). Every panel
+   * that lives THERE is `surface:"window"` (only pop-outs ever flip to it), and the
+   * window destroying takes them with it — so reconcile our state:
+   *
+   *  1. **Form-safety:** resolve any pending `show_form` on a popped-out panel as
+   *     `{cancelled:true}`. The MAIN-window close paths already do this via `hide()`;
+   *     the companion close had NO equivalent, so popping a form out then closing the
+   *     companion (instead of submitting) orphaned the held-open MCP call forever.
+   *  2. **No ghost resurrection:** drop the panel from `this.panels` so a later M4
+   *     live-refresh (`update` → `route` → `sendToCompanion` → `getOrCreate`) can't
+   *     re-spawn the companion the user just closed.
+   *
+   * Routes `panel:hide` to the MAIN bridge so any stale main-mirror entry clears too
+   * (it shouldn't have one — pop-out already dropped it — but this is cheap + safe).
+   * Does NOT touch the companion bridge (the window is gone).
+   */
+  dismissWindowPanels(): void {
+    for (const [id, panel] of [...this.panels]) {
+      if (panel.surface !== "window") continue
+      this.panels.delete(id)
+      this.mainBridge?.send("panel:hide", id)
+      const resolver = this.pendingForms.get(id)
+      if (resolver) {
+        resolver({ cancelled: true })
+        this.pendingForms.delete(id)
+        this.emitEvent({ type: "form-resolved", panelId: id })
+      }
+    }
+  }
 }

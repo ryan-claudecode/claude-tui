@@ -232,9 +232,14 @@ export async function setupIpc(win: BrowserWindow) {
       // surface:"window" mission panel via panelService.update, which routes
       // panel:update to the companion. Matched on props.id (the mission id) — panels
       // carry auto-generated panel-N ids, so the mission object's id is the key.
-      for (const p of panelService.list()) {
-        if (p.surface === "window" && p.type === "mission" && p.props?.id === e.mission.id) {
-          panelService.update(p.id, e.mission)
+      // Guarded by isOpen() so a background tick NEVER spawns a closed companion via
+      // update→route→sendToCompanion→getOrCreate (the ipc.ts:293 precedent). After a
+      // companion close, dismissWindowPanels has already dropped these — belt + braces.
+      if (companionService.isOpen()) {
+        for (const p of panelService.list()) {
+          if (p.surface === "window" && p.type === "mission" && p.props?.id === e.mission.id) {
+            panelService.update(p.id, e.mission)
+          }
         }
       }
     } else {
@@ -396,6 +401,10 @@ export async function setupIpc(win: BrowserWindow) {
       if (!win.isDestroyed()) win.webContents.send(channel, ...args)
     },
   })
+  // CAPP-110 / S3 — when the companion window closes, reconcile popped-out panels:
+  // cancel any pending show_form (never orphan the held-open MCP call) and drop
+  // surface:"window" panels so a later M4 live-refresh can't resurrect a ghost window.
+  companionService.setOnClosed(() => panelService.dismissWindowPanels())
   notificationService.setMainWindow(win)
   uiService.setMainWindow(win)
 
@@ -431,10 +440,14 @@ export async function setupIpc(win: BrowserWindow) {
           // Matched on props.id (the session id). The reopen-terminal action is main-only
           // (a renderer fn can't cross IPC), so the popped-out overview omits it — exactly
           // as a companion-shown overview already does today.
-          for (const p of panelService.list()) {
-            if (p.surface === "window" && p.type === "session-overview" && p.props?.id) {
-              const ov = workSessionService.getOverview(p.props.id)
-              if (ov) panelService.update(p.id, { ...ov })
+          // Guarded by isOpen() so a session tick NEVER spawns a closed companion via
+          // update→route→sendToCompanion→getOrCreate (the ipc.ts:293 precedent).
+          if (companionService.isOpen()) {
+            for (const p of panelService.list()) {
+              if (p.surface === "window" && p.type === "session-overview" && p.props?.id) {
+                const ov = workSessionService.getOverview(p.props.id)
+                if (ov) panelService.update(p.id, { ...ov })
+              }
             }
           }
         }

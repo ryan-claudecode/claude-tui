@@ -26,9 +26,20 @@ export class CompanionService {
   private win: CompanionWindowLike | null = null
   private mainWin: BrowserWindow | null = null
   private readyPromise: Promise<void> | null = null
+  private onClosedCb: (() => void) | null = null
 
   setMainWindow(win: BrowserWindow) {
     this.mainWin = win
+  }
+
+  /**
+   * CAPP-110 / S3 — register a callback fired whenever the companion window closes
+   * (× / OS / teardown), from the single `closed` chokepoint below. `PanelService`
+   * uses it (`dismissWindowPanels`) to cancel any popped-out pending form and drop
+   * `surface:"window"` panels so a closed companion is never resurrected.
+   */
+  setOnClosed(cb: () => void) {
+    this.onClosedCb = cb
   }
 
   /**
@@ -126,6 +137,10 @@ export class CompanionService {
     win.on("closed", () => {
       this.win = null
       this.readyPromise = null
+      // CAPP-110 / S3 — the single close chokepoint for ANY companion teardown (× via
+      // companion:close → close(), OS close, app quit). Let PanelService reconcile its
+      // window-surface panels (cancel popped-out forms, drop ghosts).
+      this.onClosedCb?.()
     })
 
     return { win, ready: this.readyPromise }

@@ -184,4 +184,20 @@ describe("CompanionService readiness gate", () => {
     // The old window received nothing further.
     expect(first.sent.length).toBe(1)
   })
+
+  it("fires the onClosed callback whenever the window closes (CAPP-110 / S3)", async () => {
+    const svc = new TestCompanionService()
+    let closedCount = 0
+    svc.setOnClosed(() => closedCount++)
+
+    svc.sendToCompanion("panel:show", { id: "a" })
+    const first = svc.windows[0]
+    first.fireDidFinishLoad()
+    await flush()
+    expect(closedCount).toBe(0)
+
+    // User closes the companion → the onClosed seam fires (PanelService reconciles).
+    first.fireClosed()
+    expect(closedCount).toBe(1)
+  })
 })

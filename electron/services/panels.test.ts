@@ -215,3 +215,46 @@ describe("PanelService — popOut (CAPP-110 / S3)", () => {
     expect(env.svc.list()).toHaveLength(0)
   })
 })
+
+describe("PanelService — dismissWindowPanels on companion close (CAPP-110 / S3 review)", () => {
+  let env: ReturnType<typeof makeBridges>
+  beforeEach(() => {
+    env = makeBridges()
+  })
+
+  it("cancels a popped-out pending form so the show_form MCP call never orphans", async () => {
+    const formPromise = env.svc.showForm({ title: "Confirm?" })
+    const formId = (
+      env.main.find((c) => c.channel === "panel:show")!.args[0] as { id: string }
+    ).id
+    env.svc.popOut(formId) // form now lives in the companion (surface:"window")
+
+    // User closes the companion window (× / OS) instead of submitting → dismissWindowPanels.
+    env.svc.dismissWindowPanels()
+
+    // The promise resolves CANCELLED (not orphaned) and the panel is gone.
+    await expect(formPromise).resolves.toEqual({ cancelled: true })
+    expect(env.svc.list()).toHaveLength(0)
+  })
+
+  it("drops popped-out non-form panels (no ghost left for the M4 loop to resurrect)", () => {
+    const a = env.svc.show("markdown", { content: "# A" })
+    const b = env.svc.show("mission", { id: "m1" })
+    env.svc.popOut(a.id) // window
+    env.svc.popOut(b.id) // window
+    // A still-modal panel must SURVIVE a companion close (it lives in the main window).
+    const c = env.svc.show("table", { rows: [] })
+    expect(c.surface).toBe("modal")
+
+    env.svc.dismissWindowPanels()
+
+    // Only the modal panel remains; both window panels are dropped.
+    expect(env.svc.list().map((p) => p.id)).toEqual([c.id])
+  })
+
+  it("is a no-op when nothing is popped out (only modal panels)", () => {
+    const a = env.svc.show("markdown", { content: "# A" })
+    env.svc.dismissWindowPanels()
+    expect(env.svc.list().map((p) => p.id)).toEqual([a.id])
+  })
+})
