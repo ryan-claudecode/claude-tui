@@ -6494,7 +6494,10 @@ body {
 .modal-host-overlay {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  /* z-index 2100 (matching .kill-modal-overlay) so a panel/form modal wins over the
+     z-2000 overlays (command palette, shortcuts, mission prompt) — equal z-index let
+     their focus traps fight (CAPP-109 review). */
+  z-index: 2100;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6527,28 +6530,44 @@ body {
 }
 .modal-host-tabs::-webkit-scrollbar { display: none; }
 
+/* The pill is a CONTAINER (a real <button> for activation + a real <button> for close
+   sit inside it — sibling reals, not a role=button span nested in a button — so both are
+   keyboard-operable; CAPP-109 review). */
 .modal-host-tab {
-  padding: 5px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 12px;
+  border-radius: 20px;
+  white-space: nowrap;
+  transition: background var(--fast) var(--ease);
+}
+.modal-host-tab:hover:not(.active):not(.locked) { background: var(--bg-3); }
+.modal-host-tab.active { background: var(--accent-soft); }
+
+.modal-host-tab-label {
   font-size: 12px;
   font-weight: 500;
   color: var(--text-3);
   background: transparent;
   border: none;
-  border-radius: 20px;
+  padding: 0;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+  transition: color var(--fast) var(--ease);
 }
-.modal-host-tab:hover { color: var(--text-1); background: var(--bg-3); }
-.modal-host-tab.active { color: var(--text-0); background: var(--accent-soft); }
+.modal-host-tab-label:hover:not(:disabled) { color: var(--text-1); }
+.modal-host-tab.active .modal-host-tab-label { color: var(--text-0); }
+/* Locked behind an exclusive form — visibly inert (not a silent no-op); CAPP-109 review. */
+.modal-host-tab-label:disabled { cursor: default; opacity: 0.45; }
 
 /* Statically visible (NO hover-reveal) per the hard UI rule. */
 .modal-host-tab-close {
   font-size: 14px;
   line-height: 1;
+  color: inherit;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
   opacity: 0.6;
   cursor: pointer;
 }

@@ -203,8 +203,11 @@ export async function setupIpc(win: BrowserWindow) {
             win.moveTop()
             app.focus({ steal: true })
           }
-          // Raise the companion window on top of the main window — the form
-          // (tier-1 trigger) lives there and should be immediately actionable.
+          // CAPP-109 / S2 — a tier-1 form now renders in the main-window ModalHost
+          // (modal-by-default), which is already raised+focused above and is
+          // form-exclusive, so it's immediately actionable. We still raise the
+          // companion IF it happens to be open (a popped-out panel, S3) so a form
+          // that was moved there isn't left behind a stale companion window.
           companionService.focusIfOpen()
           onClick()
         })

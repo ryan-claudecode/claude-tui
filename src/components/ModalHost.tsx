@@ -124,27 +124,41 @@ export default function ModalHost({
       >
         {visible.length > 1 && (
           <div className="modal-host-tabs">
-            {visible.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={`modal-host-tab ${p.id === active.id ? "active" : ""}`}
-                onClick={() => onActivate(p.id)}
-              >
-                {tabLabel(p)}
+            {visible.map((p) => {
+              // A pending form is exclusive (pickActivePanel ignores the tab selection
+              // while a form is visible). Reflect that in the UI: non-form tabs are
+              // visibly LOCKED rather than silently no-opping on click (CAPP-109 review).
+              const locked = active.type === "form" && p.type !== "form"
+              return (
                 <span
-                  className="modal-host-tab-close"
-                  role="button"
-                  aria-label={`Close ${tabLabel(p)}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onClose(p.id, "tab-close")
-                  }}
+                  key={p.id}
+                  className={`modal-host-tab ${p.id === active.id ? "active" : ""} ${
+                    locked ? "locked" : ""
+                  }`}
                 >
-                  &times;
+                  <button
+                    type="button"
+                    className="modal-host-tab-label"
+                    onClick={() => onActivate(p.id)}
+                    disabled={locked}
+                    title={locked ? "Resolve the form before switching panels" : undefined}
+                  >
+                    {tabLabel(p)}
+                  </button>
+                  <button
+                    type="button"
+                    className="modal-host-tab-close"
+                    aria-label={`Close ${tabLabel(p)}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onClose(p.id, "tab-close")
+                    }}
+                  >
+                    &times;
+                  </button>
                 </span>
-              </button>
-            ))}
+              )
+            })}
           </div>
         )}
         <div className="modal-host-bar">
