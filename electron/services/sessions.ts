@@ -2,6 +2,7 @@ import { readdirSync, unlinkSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 import { parseActivityLine } from "./terminals"
+import { modelSupportsXhigh } from "./streamProtocol"
 import {
   listFolderConversations as listFolderConversationsRaw,
   type FolderConversation,
@@ -857,8 +858,13 @@ export class SessionService {
 
     // CAPP-46: a model switch PRESERVES the terminal's current effort level (pass
     // ref.effort) — one respawn primitive serves both the model and effort switches.
-    // CAPP-108: and its ultracode posture (pass ref.ultracode).
-    const info = this.respawnHeadlessRef(s, ref, model.trim(), ref.effort, ref.ultracode)
+    // CAPP-108: and its ultracode posture — BUT ultracode requires an xhigh-capable
+    // model, and the toggle hides itself on a non-xhigh model. So switching to a model
+    // that can't do xhigh must FORCE ultracode off; otherwise it'd be stranded ON
+    // (passed to a model that can't honor it) with no UI to clear it. The respawn then
+    // restores the saved --effort (no longer suppressed).
+    const keepUltra = modelSupportsXhigh(model.trim()) ? ref.ultracode : false
+    const info = this.respawnHeadlessRef(s, ref, model.trim(), ref.effort, keepUltra)
     this.logEvent(s, "spawn", `Model → ${info.model ?? model.trim()} (respawned "${ref.name}")`, info.id)
     this.persist(s)
     this.emit("worksession:updated", this.withEffectiveActivity(s))
@@ -1079,7 +1085,12 @@ export class SessionService {
     if (info.model != null) ref.model = info.model
     // Effort can legitimately be undefined (a "cleared" level) on the structured path,
     // so adopt info.effort verbatim there; the xterm path leaves ref.effort untouched.
-    if (targetEngine === "structured") ref.effort = info.effort
+    // CAPP-108 FIX: when ultracode is ON the spawn SUPPRESSES --effort, so info.effort is
+    // undefined NOT because the user cleared it but because ultracode forced xhigh. Adopting
+    // it would PERMANENTLY destroy the saved level, so toggling ultracode OFF later would
+    // restore Claude's default instead of the user's choice. Keep ref.effort intact while
+    // ultracode is on; the next non-ultracode respawn adopts the (preserved) level normally.
+    if (targetEngine === "structured" && !ultracode) ref.effort = info.effort
     // CAPP-108: ultracode is a structured-only boolean. Adopt the structured spawn's
     // resolved value verbatim (it reflects what was passed); the xterm path carries no
     // ultracode, so leave ref.ultracode untouched so a later switch back restores it.

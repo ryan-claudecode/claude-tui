@@ -2222,3 +2222,45 @@ describe("SessionService CAPP-101 (P1) — propagation nudge: mark + re-prime", 
     void a
   })
 })
+
+describe("SessionService CAPP-108 ultracode — model-switch + effort preservation (review fixes)", () => {
+  function setup() {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    // A STRUCTURED terminal on an xhigh-capable model with a saved effort level.
+    svc.addTerminal(s.id, {
+      id: "t1", name: "x", cwd: "/r", lastState: "active",
+      engine: "structured", model: "opus", effort: "high",
+    } as any)
+    return { svc, term, sessionId: s.id }
+  }
+
+  it("switching to a NON-xhigh model forces ultracode OFF (no stranded --settings)", () => {
+    const { svc, term, sessionId } = setup()
+    const on = svc.setTerminalUltracode(sessionId, "t1", true)!
+    expect(term.spawned.at(-1)!.ultracode).toBe(true)
+    // Switch to sonnet (no xhigh): ultracode must be forced OFF, not stranded ON with no UI.
+    svc.setTerminalModel(sessionId, on.terminalId, "sonnet")
+    expect(term.spawned.at(-1)!.ultracode).toBe(false)
+    expect(svc.get(sessionId)!.terminals[0].ultracode).toBeFalsy()
+  })
+
+  it("an xhigh→xhigh model switch PRESERVES ultracode (the keep branch)", () => {
+    const { svc, term, sessionId } = setup()
+    const on = svc.setTerminalUltracode(sessionId, "t1", true)!
+    svc.setTerminalModel(sessionId, on.terminalId, "opus[1m]") // still xhigh-capable
+    expect(term.spawned.at(-1)!.ultracode).toBe(true)
+  })
+
+  it("toggling ultracode ON then OFF RESTORES the saved --effort (not Claude's default)", () => {
+    const { svc, term, sessionId } = setup()
+    const on = svc.setTerminalUltracode(sessionId, "t1", true)!
+    expect(term.spawned.at(-1)!.effort).toBeUndefined() // suppressed while ultracode is on
+    expect(svc.get(sessionId)!.terminals[0].effort).toBe("high") // but the ref is kept intact
+    svc.setTerminalUltracode(sessionId, on.terminalId, false)
+    expect(term.spawned.at(-1)!.effort).toBe("high") // restored on the spawn
+    expect(svc.get(sessionId)!.terminals[0].effort).toBe("high")
+  })
+})
