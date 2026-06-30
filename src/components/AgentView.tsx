@@ -5,6 +5,7 @@ import {
   emptyTranscript,
   settleRunningTools,
   panelForBlock,
+  expandLabelForBlock,
   USER_BLOCK_KIND,
   type TranscriptBlock,
   type TranscriptState,
@@ -21,6 +22,7 @@ import { useSmoothReveal } from "../hooks/useSmoothReveal"
 import { prefersReducedMotion } from "../lib/reducedMotion"
 import AgentModelPicker from "./AgentModelPicker"
 import MarkdownView from "./MarkdownView"
+import { BlockExpandButton } from "./BlockExpandButton"
 
 /**
  * BO-12 — an in-memory cache of folded transcript state, keyed by the STABLE
@@ -572,12 +574,17 @@ function AssistantBlock({
   // also drives `agent-revealing` continuously (no per-token toggle → no rise restart).
   const active = streaming && !prefersReducedMotion()
   const shown = useSmoothReveal(block.text, active)
+  // CAPP-111 (M2) — the expand button renders ONLY when the block is SETTLED
+  // (`!streaming`), gated on the SAME stable whole-turn signal the WS5 caret +
+  // CAPP-77 reveal use (`streaming`). It must never paint over reveal-animated
+  // text or the typing caret (the stream-reveal-flicker-trap), and it sits OUTSIDE
+  // the `.markdown-body` flow (absolute, top-right) so it never disturbs layout.
+  const ex = expandLabelForBlock(block)
   return (
-    <div
-      className={assistantBlockClass(streaming, active)}
-      onClick={onExpand}
-      title="Open in markdown panel"
-    >
+    <div className={assistantBlockClass(streaming, active)}>
+      {!streaming && ex && (
+        <BlockExpandButton label={ex.label} compact={ex.compact} onExpand={onExpand} />
+      )}
       {/* WS5 — the streaming caret is a CSS `::after` on the LAST block of the
           markdown body (driven by the `.agent-streaming` class), NOT a sibling span.
           A sibling rendered AFTER the block-level `.markdown-body` wrapped onto its
@@ -649,13 +656,20 @@ export function BlockView({
       return <NeedsAuthView block={block} sessionId={sessionId} />
     case "result":
       return <ResultView result={block} onExpand={onExpand} />
-    case "raw":
+    case "raw": {
+      // CAPP-111 — explicit top-right expand button (icon-only/compact), replacing
+      // the old whole-block click-to-open. `ex` is non-null for `raw` (it has a
+      // code-panel view), but compute it through the helper so it stays the source
+      // of truth.
+      const ex = expandLabelForBlock(block)
       return (
-        <div className="agent-block agent-raw" onClick={onExpand} title="Open raw event in code panel">
+        <div className="agent-block agent-raw">
           <span className="agent-raw-tag">raw event</span>
           <code>{previewJson(block.raw)}</code>
+          {ex && <BlockExpandButton label={ex.label} compact={ex.compact} onExpand={onExpand} />}
         </div>
       )
+    }
   }
 }
 
@@ -685,24 +699,29 @@ function pickStr(v: unknown): string | undefined {
 
 function ToolView({ tool, onExpand }: { tool: ToolBlock; onExpand: () => void }) {
   const summary = toolSummary(tool.input)
+  // CAPP-111 — explicit expand button (icon-only/compact) as the last flex child,
+  // pushed right via the CSS `margin-left:auto`; replaces the old whole-block click.
+  const ex = expandLabelForBlock(tool)
   return (
-    <div
-      className={`agent-block agent-tool agent-tool-${tool.status}`}
-      onClick={onExpand}
-      title="Open tool detail"
-    >
+    <div className={`agent-block agent-tool agent-tool-${tool.status}`}>
       <span className={`agent-tool-status agent-tool-status-${tool.status}`} aria-label={tool.status} />
       <span className="agent-tool-name">{tool.name || "tool"}</span>
       {summary && <span className="agent-tool-summary">{truncate(summary, 80)}</span>}
+      {ex && <BlockExpandButton label={ex.label} compact={ex.compact} onExpand={onExpand} />}
     </div>
   )
 }
 
 function ResultView({ result, onExpand }: { result: ResultBlock; onExpand: () => void }) {
+  // CAPP-111 — explicit top-right expand button (text label), replacing the old
+  // click-to-open on `.agent-result-text`. The block root is `position:relative`
+  // and the button absolute top-right (the meta row is bottom — no collision).
+  const ex = expandLabelForBlock(result)
   return (
     <div className={`agent-block agent-result ${result.isError ? "agent-result-error" : ""}`}>
+      {ex && <BlockExpandButton label={ex.label} compact={ex.compact} onExpand={onExpand} />}
       {result.text && (
-        <div className="agent-result-text" onClick={onExpand} title="Open in markdown panel">
+        <div className="agent-result-text">
           <MarkdownView source={result.text} />
         </div>
       )}

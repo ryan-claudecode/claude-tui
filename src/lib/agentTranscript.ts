@@ -513,3 +513,33 @@ export function panelForBlock(block: TranscriptBlock): PanelRequest | null {
 
   return null
 }
+
+/**
+ * CAPP-111 (S4) — the per-block expand button's label + density, paralleling
+ * {@link panelForBlock}. Returns null for blocks with no detail view (so the
+ * button is rendered iff `panelForBlock(block) != null` — the source of truth),
+ * else `{ label, compact }`. `compact` requests an ICON-ONLY button on the dense
+ * rows (`tool` / `raw`) so the always-on control never squeezes their one-line
+ * summary; the lower-frequency prose blocks (`assistant` / `result`) carry a text
+ * label. The label tracks the RESOLVED panel type, so it never drifts from what
+ * actually opens — a drift-pin test asserts the iff against `panelForBlock`.
+ */
+export function expandLabelForBlock(
+  block: TranscriptBlock,
+): { label: string; compact: boolean } | null {
+  if (block.kind === "tool") {
+    const name = block.name.toLowerCase()
+    const isDiff = name === "edit" || name === "multiedit" || name === "write"
+    return { label: isDiff ? "Open diff" : "Open tool I/O", compact: true }
+  }
+  if (block.kind === "raw") {
+    return { label: "Open raw event", compact: true }
+  }
+  if (block.kind === "assistant") {
+    return { label: "Open in markdown", compact: false }
+  }
+  if (block.kind === "result") {
+    return { label: "Open result", compact: false }
+  }
+  return null
+}

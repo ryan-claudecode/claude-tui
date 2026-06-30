@@ -14,7 +14,9 @@ import {
   emptyTranscript,
   settleRunningTools,
   panelForBlock,
+  expandLabelForBlock,
   modelErrorFromResult,
+  type TranscriptBlock,
   type ToolBlock,
   type AssistantTextBlock,
   type ResultBlock,
@@ -414,6 +416,56 @@ describe("panelForBlock — click-to-expand routing", () => {
     const req = panelForBlock({ kind: "assistant", id: "b0", text: "# hi" })
     expect(req?.type).toBe("markdown")
     expect((req?.props as { content: string }).content).toBe("# hi")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CAPP-111 (S4) — expandLabelForBlock drift-pin: the per-block expand button is
+// rendered IFF a block has a detail view, so the helper must be in lockstep with
+// panelForBlock across EVERY block kind. This is the standing guard against the two
+// drifting (a kind growing a panel but no button, or a button with no panel).
+// ---------------------------------------------------------------------------
+describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => {
+  // One representative block per TranscriptBlock kind. The 4 with a detail view
+  // (assistant/tool/result/raw) get a label; the 5 without (user/thinking/error/
+  // model_error/needs_auth) get null — nothing regresses on them (they never had
+  // click-to-open).
+  const samples: TranscriptBlock[] = [
+    { kind: "user", id: "b", text: "hi" },
+    { kind: "assistant", id: "b", text: "# hi" },
+    { kind: "thinking", id: "b", text: "hmm" },
+    { kind: "tool", id: "b", toolUseId: "t", name: "Edit", input: { file_path: "x.ts" }, status: "done" },
+    { kind: "tool", id: "b", toolUseId: "t", name: "Bash", input: { command: "ls" }, status: "done" },
+    { kind: "error", id: "b", message: "boom" },
+    { kind: "result", id: "b", isError: false, text: "done" },
+    { kind: "model_error", id: "b", message: "model x unavailable" },
+    { kind: "needs_auth", id: "b", message: "Not logged in" },
+    { kind: "raw", id: "b", raw: { a: 1 } },
+  ]
+
+  it("returns a label EXACTLY when panelForBlock returns a request (iff), per kind", () => {
+    for (const block of samples) {
+      const hasPanel = panelForBlock(block) != null
+      const ex = expandLabelForBlock(block)
+      expect(
+        (ex != null) === hasPanel,
+        `kind ${block.kind}: expandLabelForBlock ${ex ? "labelled" : "null"} but panelForBlock ${hasPanel ? "has" : "no"} panel`,
+      ).toBe(true)
+      // When a label exists it must be a non-empty string (carried on title/aria-label).
+      if (ex) expect(ex.label.length).toBeGreaterThan(0)
+    }
+  })
+
+  it("returns the 4 expected detail-view kinds and NO others", () => {
+    const labelled = samples.filter((b) => expandLabelForBlock(b) != null).map((b) => b.kind)
+    expect(new Set(labelled)).toEqual(new Set(["assistant", "tool", "result", "raw"]))
+  })
+
+  it("marks the dense rows (tool/raw) compact and the prose blocks (assistant/result) non-compact", () => {
+    expect(expandLabelForBlock({ kind: "tool", id: "b", toolUseId: "t", name: "Bash", input: {}, status: "done" })?.compact).toBe(true)
+    expect(expandLabelForBlock({ kind: "raw", id: "b", raw: {} })?.compact).toBe(true)
+    expect(expandLabelForBlock({ kind: "assistant", id: "b", text: "" })?.compact).toBe(false)
+    expect(expandLabelForBlock({ kind: "result", id: "b", isError: false })?.compact).toBe(false)
   })
 })
 

@@ -64,6 +64,16 @@ const HOLD_SENTINEL = "__HOLD_TURN__"
  */
 const AUTH_FAIL_SENTINEL = "__AUTH_FAIL__"
 
+/**
+ * CAPP-111 (S4) — test-only opt-in: a user message containing this sentinel makes
+ * the fake emit a turn that includes TOOL blocks (an Edit + a Bash tool_use, each
+ * with its tool_result), so the structured e2e can assert the per-block expand
+ * button renders ICON-ONLY (compact) on the dense tool rows. Real `claude -p` has
+ * no such knob; it exists purely so a hermetic test can render a multi-tool
+ * transcript without a real claude.
+ */
+const TOOLS_SENTINEL = "__TOOLS_TURN__"
+
 /** Build one NDJSON line (no trailing newline — the caller adds it). */
 function line(obj: unknown): string {
   return JSON.stringify(obj)
@@ -179,6 +189,77 @@ export const fakeStreamProc: SpawnProc = (
     }, 300)
   }
 
+  /** CAPP-111 — a turn carrying TWO tool calls (Edit + Bash), each correlated with
+   *  its tool_result, then a short assistant text + result. The reducer folds the
+   *  tool_use/tool_result pairs into `tool` blocks so the e2e can assert the compact
+   *  (icon-only) expand button on the dense tool rows. */
+  const streamTools = () => {
+    emit(
+      line({
+        type: "system",
+        subtype: "init",
+        session_id: "fake-session",
+        cwd: options.cwd,
+        model: "fake-model",
+        tools: [],
+        mcp_servers: [],
+        slash_commands: ["clear", "compact", "config", "resume"],
+        skills: ["chrome-live", "deep-research"],
+        apiKeySource: "none",
+      }) + "\n",
+    )
+    // An assistant message bundling two tool_use blocks (Edit → diff panel, Bash →
+    // markdown panel) — the shapes streamEvents.ts fans out into one `tool` block each.
+    emit(
+      line({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-edit-1",
+              name: "Edit",
+              input: { file_path: "src/x.ts", old_string: "foo", new_string: "bar" },
+            },
+            { type: "tool_use", id: "tool-bash-1", name: "Bash", input: { command: "ls -la" } },
+          ],
+        },
+      }) + "\n",
+    )
+    // The correlated tool_results (a `user` message), flipping each tool to done.
+    emit(
+      line({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "tool-edit-1", content: "edited" },
+            { type: "tool_result", tool_use_id: "tool-bash-1", content: "x.ts\ny.ts" },
+          ],
+        },
+      }) + "\n",
+    )
+    emit(
+      line({
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Done with the tools." } },
+      }) + "\n",
+    )
+    emit(
+      line({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "Done with the tools.",
+        total_cost_usd: 0.001,
+        duration_ms: 100,
+        num_turns: 1,
+        usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      }) + "\n",
+    )
+  }
+
   /** CAPP-39 gate ② — replay the live UNAUTH shape: init (apiKeySource:"none") FIRES
    *  first, then the explicit auth-failure assistant + result. */
   const streamAuthFail = () => {
@@ -240,9 +321,11 @@ export const fakeStreamProc: SpawnProc = (
       // CAPP-39 — the auth-fail sentinel replays the live unauthenticated shape.
       const turn = data.includes(AUTH_FAIL_SENTINEL)
         ? streamAuthFail
-        : data.includes(HOLD_SENTINEL)
-          ? streamHeld
-          : streamReply
+        : data.includes(TOOLS_SENTINEL)
+          ? streamTools
+          : data.includes(HOLD_SENTINEL)
+            ? streamHeld
+            : streamReply
       setTimeout(turn, 0)
     },
     kill: () => {

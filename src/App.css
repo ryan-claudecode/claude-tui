@@ -2292,9 +2292,14 @@ body {
    (a `.markdown-body`, styled below ~2217), so the container no longer holds raw
    text: it's just the click-to-expand affordance. Typography/lists/code/tables/
    links all come from `.markdown-body`'s token-based rules (theme-aware). */
+/* CAPP-111 — the whole-block click-to-open is gone; the explicit top-right
+   `.agent-block-expand` button is the only trigger now. `position:relative` anchors
+   that absolute button; the right padding reserves room so a long first line /
+   heading never runs under it. */
 .agent-assistant {
   color: var(--text-0);
-  cursor: pointer;
+  position: relative;
+  padding-right: 2.2rem;
 }
 
 /* Trim the renderer's trailing block margin inside the chat so consecutive blocks
@@ -2352,13 +2357,10 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-1);
-  cursor: pointer;
   font-family: var(--mono);
   font-size: 12px;
   transition: border-color 0.15s var(--ease-out), background 0.15s var(--ease-out);
 }
-
-.agent-tool:hover { border-color: var(--border-strong); background: var(--bg-2); }
 
 .agent-tool-status {
   flex: none;
@@ -2373,7 +2375,9 @@ body {
 .agent-tool-status-error { background: var(--red); }
 
 .agent-tool-name { font-weight: 600; color: var(--text-0); }
-.agent-tool-summary { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* CAPP-111 — `min-width:0` lets the summary shrink so the trailing expand button
+   (margin-left:auto) always wins without crushing the row. */
+.agent-tool-summary { color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-tool-error { border-color: var(--red); }
 
 /* WS5 — soft chrome: errors recast from a full hard red border into a soft card
@@ -2495,6 +2499,9 @@ body {
    error cards, so a completed turn reads as a quiet summary card. */
 .agent-result {
   padding: var(--s-2) var(--s-3);
+  /* CAPP-111 — anchor the absolute top-right expand button + reserve room for it. */
+  position: relative;
+  padding-right: 2.2rem;
   margin-top: var(--s-1);
   border: 1px solid var(--border);
   border-left: 3px solid var(--border-strong);
@@ -2510,7 +2517,6 @@ body {
 
 .agent-result-text {
   color: var(--text-0);
-  cursor: pointer;
   margin-bottom: var(--s-2);
 }
 
@@ -2549,7 +2555,6 @@ body {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-3);
-  cursor: pointer;
 }
 
 .agent-raw-tag {
@@ -2562,7 +2567,62 @@ body {
   letter-spacing: 0.04em;
 }
 
-.agent-raw code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* CAPP-111 — `min-width:0` lets the code excerpt shrink so the trailing expand
+   button (margin-left:auto) keeps its slot. */
+.agent-raw code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* CAPP-111 — the per-block expand button. STATICALLY VISIBLE (full opacity at rest,
+   NEVER hover-revealed — the hard UI rule). Quiet chrome matching `.agent-cost-chip`
+   / `.agent-load-earlier-btn`: a muted border + subtle bg that brightens on hover/
+   focus (a hover STYLE change, not a hover-REVEAL). On the prose blocks
+   (assistant/result) it's absolute top-right (outside `.markdown-body` flow so it
+   never disturbs layout); on the dense flex rows (tool/raw) it's the trailing child,
+   pushed right by `margin-left:auto`. */
+.agent-block-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+  margin-left: auto;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  padding: 3px 7px;
+  cursor: pointer;
+  opacity: 1;
+  transition: border-color 0.12s var(--ease-out), color 0.12s var(--ease-out),
+    background 0.12s var(--ease-out);
+}
+.agent-block-expand:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.agent-block-expand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Icon-only (compact) variant for the dense tool/raw rows: a small square, no text. */
+.agent-block-expand.compact {
+  padding: 3px 5px;
+  gap: 0;
+}
+
+.agent-block-expand-text { white-space: nowrap; }
+
+/* On the prose blocks the button is positioned absolute in the top-right corner,
+   clear of the reserved `padding-right` on the block root. `margin-left:auto` (the
+   flex-row default above) is inert under absolute positioning — harmless. */
+.agent-assistant > .agent-block-expand,
+.agent-result > .agent-block-expand {
+  position: absolute;
+  top: var(--s-2);
+  right: var(--s-2);
+}
 
 /* Empty state */
 .empty-state {

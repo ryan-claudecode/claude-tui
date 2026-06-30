@@ -1591,3 +1591,97 @@ test("CAPP-98 / I1: the always-visible 'Context' switcher button opens the READ-
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
+
+test("CAPP-111 / S4: each block has a STATICALLY-VISIBLE top-right expand button (no whole-block click); clicking it opens the modal; assistant button is settled-gated; tool rows are icon-only", async () => {
+  // Item 2 — kill the whole-block click-to-open, add an explicit per-block button.
+  // Assert: (1) after a settled turn the assistant block carries a statically-visible
+  // (no-hover) expand button with its text label; (2) clicking it opens the panel in
+  // the main-window ModalHost (S2); (3) the whole-block click is GONE (clicking the
+  // prose body does NOT open a panel); (4) a multi-tool turn renders ICON-ONLY
+  // (compact) buttons on the dense tool rows; (5) the assistant button is ABSENT
+  // mid-stream (settled-gated, M2) and PRESENT once settled.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-expandbtn-"))
+  await seedStructuredConfig(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+  await win.locator(".sidebar-action", { hasText: "+ New session" }).click()
+
+  const composer = win.locator(".agent-composer textarea")
+  await expect(composer).toBeVisible({ timeout: 15_000 })
+
+  // Drive a normal (settling) turn so the assistant block settles with its button.
+  await composer.fill("hi")
+  await composer.press("Enter")
+  await expect(win.locator(".agent-result")).toContainText(/turn complete/i, { timeout: 15_000 })
+
+  // (1) The SETTLED assistant block's expand button is STATICALLY visible (no hover)
+  //     and carries a text label (non-compact prose block).
+  const assistantBtn = win.locator(".agent-assistant .agent-block-expand")
+  await expect(assistantBtn).toBeVisible({ timeout: 15_000 })
+  await expect(assistantBtn).toHaveAttribute("aria-label", /open in markdown/i)
+  await expect(assistantBtn.locator(".agent-block-expand-text")).toContainText(/open in markdown/i)
+  // It is NOT the compact (icon-only) variant.
+  await expect(assistantBtn).not.toHaveClass(/compact/)
+  // The result block also has a (non-compact) expand button.
+  await expect(win.locator(".agent-result .agent-block-expand")).toBeVisible()
+
+  // (3) The whole-block click is GONE: clicking the prose body does NOT open a modal.
+  await win.locator(".agent-assistant .markdown-body").click()
+  await expect(win.locator(".modal-host-overlay")).toHaveCount(0)
+
+  // (2) Clicking the explicit button opens the markdown panel in the main-window ModalHost.
+  await assistantBtn.click()
+  await expect(win.locator(".modal-host-overlay")).toBeVisible({ timeout: 15_000 })
+  await expect(win.locator(".modal-host-panel .markdown-body")).toBeVisible({ timeout: 15_000 })
+  // Close the modal (Escape) so it doesn't shadow the next assertions.
+  await win.locator(".modal-host-panel").press("Escape")
+  await expect(win.locator(".modal-host-overlay")).toHaveCount(0, { timeout: 10_000 })
+
+  // (4) Drive a multi-tool turn and assert the dense tool rows get ICON-ONLY (compact)
+  //     buttons — statically visible, no text label span, with the title/aria-label.
+  await composer.fill("__TOOLS_TURN__")
+  await composer.press("Enter")
+  // Two tool rows render (Edit + Bash). They settle to done.
+  await expect(win.locator(".agent-tool")).toHaveCount(2, { timeout: 15_000 })
+  const toolBtns = win.locator(".agent-tool .agent-block-expand")
+  await expect(toolBtns).toHaveCount(2, { timeout: 15_000 })
+  for (let i = 0; i < 2; i++) {
+    await expect(toolBtns.nth(i)).toBeVisible()
+    // Icon-only: compact class set, no visible text span.
+    await expect(toolBtns.nth(i)).toHaveClass(/compact/)
+    await expect(toolBtns.nth(i).locator(".agent-block-expand-text")).toHaveCount(0)
+    await expect(toolBtns.nth(i)).toHaveAttribute("aria-label", /open (diff|tool)/i)
+  }
+  // The Edit tool's button opens the diff panel in the modal.
+  await toolBtns.first().click()
+  await expect(win.locator(".modal-host-overlay")).toBeVisible({ timeout: 15_000 })
+  await win.locator(".modal-host-panel").press("Escape")
+  await expect(win.locator(".modal-host-overlay")).toHaveCount(0, { timeout: 10_000 })
+
+  // (5) M2 streaming-gate — drive a HELD turn: while the NEW (trailing) assistant block
+  //     streams ("Working… " + heartbeats), it is NOT settled, so it must carry NO expand
+  //     button (the button must never paint over the reveal-animated text / caret). The
+  //     already-settled prior assistant block keeps its button — assert the STREAMING one
+  //     specifically (`.agent-assistant.agent-streaming`) has none.
+  await composer.fill("__HOLD_TURN__")
+  await composer.press("Enter")
+  const streamingBlock = win.locator(".agent-assistant.agent-streaming")
+  await expect(streamingBlock).toHaveCount(1, { timeout: 15_000 })
+  await expect(streamingBlock).toContainText("Working")
+  await expect(streamingBlock.locator(".agent-block-expand")).toHaveCount(0)
+  // Stop the held turn so the fake heartbeat stops before teardown.
+  await expect(win.locator(".composer-stop")).toBeVisible({ timeout: 15_000 })
+  await win.locator(".composer-stop").click()
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
