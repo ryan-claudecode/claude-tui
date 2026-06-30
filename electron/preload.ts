@@ -267,6 +267,9 @@ const mainApi = {
   listPanels: () => ipcRenderer.invoke("panel:list"),
   hidePanel: (id: string) => ipcRenderer.invoke("panel:hide", id),
   hideAllPanels: () => ipcRenderer.invoke("panel:hide-all"),
+  // CAPP-110 / S3 — pop a modal panel out to the companion window (the ModalHost
+  // "⤢ Pop out" button). MAIN-window only, NON-MCP.
+  popOutPanel: (id: string) => ipcRenderer.invoke("panel:pop-out", id),
   submitForm: (id: string, data: Record<string, any>) =>
     ipcRenderer.send("panel:form-submit", id, data),
   // CAPP-109 / S2 — the diff / worktree-review "send review to the active session" sink,

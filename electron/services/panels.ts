@@ -21,6 +21,13 @@ export interface PanelState {
 interface CompanionBridge {
   sendToCompanion(channel: string, ...args: unknown[]): void
   close(): void
+  /**
+   * CAPP-110 / S3 — raise the companion window to the top, CREATING it if needed
+   * (the create-ALLOWED sibling of `focusIfOpen`). Optional so test bridges that
+   * don't model focus stay valid. `popOut` calls it to bring the just-popped-out
+   * panel forward.
+   */
+  focus?(): void
 }
 
 /**
@@ -225,5 +232,27 @@ export class PanelService {
       // No tracked panel (shouldn't happen) — fall back to clearing both surfaces.
       this.routeAll("panel:hide", id)
     }
+  }
+
+  /**
+   * CAPP-110 / S3 — move a modal panel OUT to the companion window (a user gesture,
+   * NOT MCP-exposed). Flips `surface` to `"window"`, re-emits `panel:show` to the
+   * companion (lazily creating the clamped companion window — S0), raises it, and
+   * drops the panel from the MAIN mirror ONLY (so the ModalHost unmounts it).
+   *
+   * CRITICAL form-safety: this sends `panel:hide` to the main bridge DIRECTLY — it
+   * MUST NOT call `this.hide(id)`, which would resolve a pending `show_form` as
+   * `{cancelled:true}` and orphan the MCP call. The panel stays in `this.panels` and
+   * the pending-form promise survives the pop-out untouched; after pop-out the
+   * companion `FormPanel` re-mounts and submits via the same `submitForm` seam.
+   */
+  popOut(id: string): boolean {
+    const panel = this.panels.get(id)
+    if (!panel) return false
+    panel.surface = "window"
+    this.companion?.sendToCompanion("panel:show", panel) // lazily creates the companion (S0)
+    this.companion?.focus?.() // raise it (CompanionService.focus — create-allowed)
+    this.mainBridge?.send("panel:hide", id) // drop from the MAIN mirror ONLY
+    return true
   }
 }

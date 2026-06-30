@@ -223,8 +223,23 @@ export async function setupIpc(win: BrowserWindow) {
   // deleteMission, the durable sidebar ✕) is forwarded as `mission:removed`.
   missionService.onEvent((e) => {
     if (win.isDestroyed()) return
-    if (e.type === "updated") win.webContents.send("mission:updated", e.mission)
-    else win.webContents.send("mission:removed", e.id)
+    if (e.type === "updated") {
+      win.webContents.send("mission:updated", e.mission)
+      // CAPP-110 / S3 (M4) — keep a POPPED-OUT mission dashboard live. usePanels'
+      // mission live-refresh is main-side-only (local setPanels) and stops driving the
+      // panel once it leaves the main mirror on pop-out; the companion has no
+      // mission:updated listener of its own. So re-emit the fresh mission to any
+      // surface:"window" mission panel via panelService.update, which routes
+      // panel:update to the companion. Matched on props.id (the mission id) — panels
+      // carry auto-generated panel-N ids, so the mission object's id is the key.
+      for (const p of panelService.list()) {
+        if (p.surface === "window" && p.type === "mission" && p.props?.id === e.mission.id) {
+          panelService.update(p.id, e.mission)
+        }
+      }
+    } else {
+      win.webContents.send("mission:removed", e.id)
+    }
   })
 
   // WS-B — push active-workspace changes to the main renderer (selection is now
@@ -408,6 +423,20 @@ export async function setupIpc(win: BrowserWindow) {
           // CAPP-95 / D1 — a durable session-store mutation also schedules a
           // debounced local-history snapshot (sessions/ is half the curated subset).
           localHistoryService.scheduleSnapshot("session store changed")
+          // CAPP-110 / S3 (M4) — keep a POPPED-OUT Session Overview live. usePanels'
+          // overview live-refresh is main-side-only and stops driving the panel once it
+          // leaves the main mirror on pop-out; the companion has no overview-refresh of
+          // its own. So recompute getOverview for any surface:"window" overview panel and
+          // push it via panelService.update (routes panel:update to the companion).
+          // Matched on props.id (the session id). The reopen-terminal action is main-only
+          // (a renderer fn can't cross IPC), so the popped-out overview omits it — exactly
+          // as a companion-shown overview already does today.
+          for (const p of panelService.list()) {
+            if (p.surface === "window" && p.type === "session-overview" && p.props?.id) {
+              const ov = workSessionService.getOverview(p.props.id)
+              if (ov) panelService.update(p.id, { ...ov })
+            }
+          }
         }
         if (!win.isDestroyed()) win.webContents.send(channel, ...args)
       },

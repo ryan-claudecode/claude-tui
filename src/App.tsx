@@ -210,6 +210,7 @@ declare global {
       showPanel: (type: string, props: Record<string, any>, position?: string) => Promise<PanelState>
       listPanels: () => Promise<PanelState[]>
       hidePanel: (id: string) => Promise<boolean>
+      popOutPanel: (id: string) => Promise<boolean>
       hideAllPanels: () => Promise<void>
       submitForm: (id: string, data: Record<string, any>) => void
       // Notifications
@@ -1174,13 +1175,17 @@ export default function App() {
       />
       {/* CAPP-109 / S2 — in-main-window modal panels (modal-by-default). Renders the
           shared PanelContent off the usePanels mirror. EVERY close path resolves a
-          pending show_form as cancelled via window.api.hidePanel. Pop-out (onPopOut) is
-          wired in S3 — until then the modal's "Pop out" button is a disabled placeholder. */}
+          pending show_form as cancelled via window.api.hidePanel.
+          CAPP-110 / S3 — `onPopOut` moves the active panel to the companion window
+          (panel:pop-out → PanelService.popOut). It does NOT call hidePanel, so a pending
+          show_form's promise survives the pop-out untouched; the panel leaves the main
+          mirror (a panel:hide drops it from usePanels) and the modal reselects/unmounts. */}
       <ModalHost
         panels={panels}
         activeId={modalActiveId}
         onActivate={setModalActiveId}
         onClose={handleModalClose}
+        onPopOut={(id) => void window.api.popOutPanel(id).catch(() => {})}
       />
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />

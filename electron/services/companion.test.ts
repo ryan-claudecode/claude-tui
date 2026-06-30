@@ -133,6 +133,28 @@ describe("CompanionService readiness gate", () => {
     expect(win.sent).toEqual([])
   })
 
+  it("focus() is allowed to CREATE the window; focusIfOpen() is NOT (CAPP-110 / S3)", async () => {
+    const svc = new TestCompanionService()
+
+    // focusIfOpen on a never-opened service must NOT create a window (the
+    // OS-notification-click contract relies on this staying create-free).
+    svc.focusIfOpen()
+    expect(svc.windows.length).toBe(0)
+
+    // focus() (the create-ALLOWED sibling, used by popOut) DOES create the window.
+    svc.focus()
+    expect(svc.windows.length).toBe(1)
+    const win = svc.windows[0]
+    win.fireDidFinishLoad()
+    await flush()
+    // focus() chains show()/moveTop() off the readiness promise (skipped under CI=1).
+    if (process.env.CI !== "1") expect(win.showCount).toBeGreaterThanOrEqual(1)
+
+    // focusIfOpen now acts (the window exists) but still creates nothing new.
+    svc.focusIfOpen()
+    expect(svc.windows.length).toBe(1)
+  })
+
   it("reopening after closed creates a new window and a fresh ready gate", async () => {
     const svc = new TestCompanionService()
 

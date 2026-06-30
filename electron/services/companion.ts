@@ -168,4 +168,23 @@ export class CompanionService {
       }
     }
   }
+
+  /**
+   * CAPP-110 / S3 — raise the companion window, CREATING it if needed. The
+   * create-ALLOWED sibling of `focusIfOpen` (which must stay create-free — the
+   * OS-notification click contract relies on it never opening a window). Used by
+   * `PanelService.popOut`, which has ALREADY queued the `panel:show` via
+   * `sendToCompanion` (so the window exists by the time this runs). Chains
+   * `show()`/`moveTop()` off the SAME readiness promise so they run only after the
+   * renderer has finished loading.
+   */
+  focus(): void {
+    const { win, ready } = this.getOrCreate()
+    ready.then(() => {
+      if (!win.isDestroyed() && process.env.CI !== "1") {
+        win.show()
+        win.moveTop()
+      }
+    })
+  }
 }

@@ -24,6 +24,9 @@ export function registerPanelHandlers(deps: {
   )
   ipcMain.handle("panel:hide", (_e, id: string) => panelService.hide(id))
   ipcMain.handle("panel:hide-all", () => panelService.hideAll())
+  // CAPP-110 / S3 — pop a modal panel out to the companion window. MAIN-window only
+  // (a user gesture, NOT MCP-exposed). Preserves a pending show_form's promise.
+  ipcMain.handle("panel:pop-out", (_e, id: string) => panelService.popOut(id))
   ipcMain.on("panel:form-submit", (_e, id: string, data: Record<string, any>) =>
     panelService.submitForm(id, data),
   )

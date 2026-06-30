@@ -22,13 +22,17 @@ interface Captured {
 function makeBridges() {
   const main: Captured[] = []
   const companion: Captured[] = []
+  let focusCount = 0
   const svc = new PanelService()
   svc.setMainBridge({ send: (channel, ...args) => main.push({ channel, args }) })
   svc.setCompanion({
     sendToCompanion: (channel, ...args) => companion.push({ channel, args }),
     close: () => {},
+    focus: () => {
+      focusCount++
+    },
   })
-  return { svc, main, companion }
+  return { svc, main, companion, focusState: () => focusCount }
 }
 
 describe("PanelService — modal-by-default routing (CAPP-109 / S2)", () => {
@@ -143,5 +147,71 @@ describe("PanelService — popped-out (surface:window) panel routes to companion
     svc.hide(panel.id)
     expect(main.map((c) => c.channel)).toContain("panel:hide")
     expect(companion.map((c) => c.channel)).toContain("panel:hide")
+  })
+})
+
+describe("PanelService — popOut (CAPP-110 / S3)", () => {
+  let env: ReturnType<typeof makeBridges>
+  beforeEach(() => {
+    env = makeBridges()
+  })
+
+  it("flips surface to 'window', emits panel:show to the companion, raises it, and hides from the MAIN mirror", () => {
+    const panel = env.svc.show("markdown", { content: "# Hi" })
+    expect(panel.surface).toBe("modal")
+    env.main.length = 0
+    env.companion.length = 0
+
+    const ok = env.svc.popOut(panel.id)
+    expect(ok).toBe(true)
+    expect(panel.surface).toBe("window")
+    // The companion gets a fresh panel:show (it lazily creates the window there).
+    expect(env.companion.map((c) => c.channel)).toEqual(["panel:show"])
+    // The companion was raised.
+    expect(env.focusState()).toBe(1)
+    // The MAIN mirror gets ONLY a panel:hide (drop the now-popped-out panel).
+    expect(env.main.map((c) => c.channel)).toEqual(["panel:hide"])
+    expect((env.main[0].args[0] as string)).toBe(panel.id)
+    // The panel is STILL tracked (popOut must not delete it — it lives in the companion now).
+    expect(env.svc.list().map((p) => p.id)).toEqual([panel.id])
+  })
+
+  it("returns false for an unknown id (no emits)", () => {
+    env.main.length = 0
+    env.companion.length = 0
+    expect(env.svc.popOut("panel-nope")).toBe(false)
+    expect(env.main).toHaveLength(0)
+    expect(env.companion).toHaveLength(0)
+  })
+
+  it("does NOT resolve a pending form — the show_form promise survives the pop-out", async () => {
+    const formPromise = env.svc.showForm({ title: "Confirm?" })
+    const formId = (
+      env.main.find((c) => c.channel === "panel:show")!.args[0] as { id: string }
+    ).id
+
+    env.svc.popOut(formId)
+
+    // The promise is STILL pending (popOut never touches pendingForms) and the form is
+    // still tracked. We prove "unresolved" by racing it against a sentinel microtask.
+    const sentinel = Symbol("pending")
+    const race = await Promise.race([
+      formPromise,
+      Promise.resolve(sentinel),
+    ])
+    expect(race).toBe(sentinel)
+    expect(env.svc.list().map((p) => p.id)).toEqual([formId])
+
+    // After pop-out, a COMPANION-side submit STILL resolves the same promise (F3 regression):
+    // submitForm routes panel:hide to BOTH surfaces so the main mirror has no zombie.
+    env.main.length = 0
+    env.companion.length = 0
+    env.svc.submitForm(formId, { ok: true })
+    await expect(formPromise).resolves.toEqual({ ok: true })
+    // The main bridge received panel:hide for the resolved form (no zombie in the mirror).
+    expect(env.main.some((c) => c.channel === "panel:hide" && c.args[0] === formId)).toBe(true)
+    // The companion mirror is also cleared.
+    expect(env.companion.some((c) => c.channel === "panel:hide" && c.args[0] === formId)).toBe(true)
+    expect(env.svc.list()).toHaveLength(0)
   })
 })
