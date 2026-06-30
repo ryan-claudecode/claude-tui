@@ -27,7 +27,7 @@ import type { PanelApi } from "../../lib/panelApi"
  * CAPP-106 / S1 — the SINGLE shared panel switch. Lifted out of `CompanionApp.tsx`
  * so BOTH the companion window AND (in S2) the main-window ModalHost render every
  * panel through ONE code path — killing the prior drift between CompanionApp, the
- * stale PanelDrawer, and the would-be modal.
+ * since-retired PanelDrawer (removed in CAPP-112), and the would-be modal.
  *
  * The contract is `(panel, api)` where `api: PanelApi` is ONE behavior object the
  * switch derives EVERY callback it threads from (this folds the six callbacks the

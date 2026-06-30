@@ -21,19 +21,6 @@ export function registerUiTools(server: McpServer, ui: UiService) {
   )
 
   server.tool(
-    "toggle_panel_drawer",
-    "Collapse or expand the ClaudeTUI panel drawer (the side/bottom panel area). Omit `collapsed` to toggle. Only has a visible effect when at least one panel is open.",
-    {
-      collapsed: z.boolean().optional().describe("true = collapsed, false = expanded, omit = toggle"),
-    },
-    async ({ collapsed }) => {
-      ui.setPanelDrawer(collapsed)
-      const label = collapsed === undefined ? "toggled" : collapsed ? "collapsed" : "expanded"
-      return { content: [{ type: "text" as const, text: `Panel drawer ${label}` }] }
-    },
-  )
-
-  server.tool(
     "open_command_palette",
     "Open or close the ClaudeTUI command palette (the Ctrl+Shift+P fuzzy action menu). Omit `open` to toggle.",
     {

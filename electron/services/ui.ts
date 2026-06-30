@@ -33,11 +33,6 @@ export class UiService {
     this.emit("ui:focus-mode", enabled)
   }
 
-  /** Toggle/set whether the panel drawer is collapsed. */
-  setPanelDrawer(collapsed?: boolean) {
-    this.emit("ui:drawer", collapsed)
-  }
-
   /** Toggle/set the command palette overlay. */
   setCommandPalette(open?: boolean) {
     this.emit("ui:command-palette", open)

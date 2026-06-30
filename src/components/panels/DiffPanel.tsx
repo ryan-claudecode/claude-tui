@@ -10,7 +10,8 @@ interface FileDiff {
 interface Props {
   files?: FileDiff[]
   // Sends the built review request to the active session. Returns false when
-  // there's no active session to receive it. Injected by PanelDrawer/App.
+  // there's no active session to receive it. Injected by the panel host
+  // (the companion window / the main-window ModalHost) via the PanelApi.
   onSend?: (text: string) => boolean
 }
 

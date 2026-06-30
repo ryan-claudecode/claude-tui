@@ -427,8 +427,6 @@ const mainApi = {
   // The boolean payload is the desired state; `undefined`/`null` means toggle.
   onUiFocusMode: (callback: (enabled?: boolean) => void) =>
     ipcRenderer.on("ui:focus-mode", (_e, enabled) => callback(enabled ?? undefined)),
-  onUiDrawer: (callback: (collapsed?: boolean) => void) =>
-    ipcRenderer.on("ui:drawer", (_e, collapsed) => callback(collapsed ?? undefined)),
   onUiCommandPalette: (callback: (open?: boolean) => void) =>
     ipcRenderer.on("ui:command-palette", (_e, open) => callback(open ?? undefined)),
   onUiShortcutsHelp: (callback: (open?: boolean) => void) =>
