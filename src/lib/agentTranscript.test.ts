@@ -461,11 +461,26 @@ describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => 
     expect(new Set(labelled)).toEqual(new Set(["assistant", "tool", "result", "raw"]))
   })
 
-  it("marks the dense rows (tool/raw) compact and the prose blocks (assistant/result) non-compact", () => {
+  // Exhaustiveness tie to the union (CAPP-111 review nit): a Record keyed by the
+  // FULL TranscriptBlock["kind"] union — the compiler errors if a kind is missing or
+  // unknown, so a newly added 10th kind can't silently dodge the drift-pin. The test
+  // then forces that kind into `samples` too.
+  const KIND_COVERAGE: Record<TranscriptBlock["kind"], true> = {
+    user: true, assistant: true, thinking: true, tool: true, error: true,
+    result: true, model_error: true, needs_auth: true, raw: true,
+  }
+  it("samples cover EVERY TranscriptBlock kind (so no kind dodges the drift-pin)", () => {
+    const sampled = new Set(samples.map((b) => b.kind))
+    for (const kind of Object.keys(KIND_COVERAGE) as Array<TranscriptBlock["kind"]>) {
+      expect(sampled.has(kind), `kind ${kind} missing from drift-pin samples`).toBe(true)
+    }
+  })
+
+  it("marks every block's expand button compact (icon-only ⤢; CAPP-111 review)", () => {
     expect(expandLabelForBlock({ kind: "tool", id: "b", toolUseId: "t", name: "Bash", input: {}, status: "done" })?.compact).toBe(true)
     expect(expandLabelForBlock({ kind: "raw", id: "b", raw: {} })?.compact).toBe(true)
-    expect(expandLabelForBlock({ kind: "assistant", id: "b", text: "" })?.compact).toBe(false)
-    expect(expandLabelForBlock({ kind: "result", id: "b", isError: false })?.compact).toBe(false)
+    expect(expandLabelForBlock({ kind: "assistant", id: "b", text: "" })?.compact).toBe(true)
+    expect(expandLabelForBlock({ kind: "result", id: "b", isError: false })?.compact).toBe(true)
   })
 })
 

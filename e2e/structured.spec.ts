@@ -1624,15 +1624,20 @@ test("CAPP-111 / S4: each block has a STATICALLY-VISIBLE top-right expand button
   await composer.press("Enter")
   await expect(win.locator(".agent-result")).toContainText(/turn complete/i, { timeout: 15_000 })
 
-  // (1) The SETTLED assistant block's expand button is STATICALLY visible (no hover)
-  //     and carries a text label (non-compact prose block).
+  // (1) The SETTLED assistant block's expand button is STATICALLY visible (no hover) —
+  //     an icon-only ⤢ whose label rides on aria-label/title (CAPP-111 review: all
+  //     blocks are compact so the absolute prose button never overruns its first line).
   const assistantBtn = win.locator(".agent-assistant .agent-block-expand")
   await expect(assistantBtn).toBeVisible({ timeout: 15_000 })
   await expect(assistantBtn).toHaveAttribute("aria-label", /open in markdown/i)
-  await expect(assistantBtn.locator(".agent-block-expand-text")).toContainText(/open in markdown/i)
-  // It is NOT the compact (icon-only) variant.
-  await expect(assistantBtn).not.toHaveClass(/compact/)
-  // The result block also has a (non-compact) expand button.
+  await expect(assistantBtn).toHaveClass(/compact/)
+  await expect(assistantBtn.locator(".agent-block-expand-text")).toHaveCount(0)
+  // NO hover-reveal (the HARD UI rule): the button is full-opacity AT REST, with no
+  // prior hover. toBeVisible() ignores opacity, so read computed opacity directly —
+  // this is the assertion that would catch an opacity:0 + :hover regression.
+  const restOpacity = await assistantBtn.evaluate((el) => getComputedStyle(el).opacity)
+  expect(restOpacity).toBe("1")
+  // The result block also has an (icon-only) expand button.
   await expect(win.locator(".agent-result .agent-block-expand")).toBeVisible()
 
   // (3) The whole-block click is GONE: clicking the prose body does NOT open a modal.

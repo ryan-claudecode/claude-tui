@@ -713,9 +713,10 @@ function ToolView({ tool, onExpand }: { tool: ToolBlock; onExpand: () => void })
 }
 
 function ResultView({ result, onExpand }: { result: ResultBlock; onExpand: () => void }) {
-  // CAPP-111 — explicit top-right expand button (text label), replacing the old
+  // CAPP-111 — explicit top-right icon-only expand button, replacing the old
   // click-to-open on `.agent-result-text`. The block root is `position:relative`
-  // and the button absolute top-right (the meta row is bottom — no collision).
+  // and the button absolute top-right (icon-only fits the reserved gutter clear of
+  // the meta row / cost chips — CAPP-111 review).
   const ex = expandLabelForBlock(result)
   return (
     <div className={`agent-block agent-result ${result.isError ? "agent-result-error" : ""}`}>
