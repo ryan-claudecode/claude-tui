@@ -1,6 +1,7 @@
-import { BrowserWindow } from "electron"
+import { BrowserWindow, screen } from "electron"
 import { join } from "path"
 import { getThemeMode } from "../config"
+import { placeCompanion } from "./companionPlacement"
 
 /**
  * The small surface of a companion window that CompanionService actually uses.
@@ -31,6 +32,36 @@ export class CompanionService {
   }
 
   /**
+   * Resolve the companion window's top-left DIP position next to the main window,
+   * clamped into the work area of the display the main window mostly lives on.
+   *
+   * Overridable so TestCompanionService can stub it WITHOUT ever calling the real
+   * `screen` API — that's how the existing FakeWindow seam in companion.test.ts
+   * stays intact (the readiness-gate tests construct fakes with no Electron screen
+   * available). The pure DIP math lives in companionPlacement.ts; this thin wrapper
+   * is the ONLY thing that touches `screen`, so it's the one spot tests must avoid.
+   */
+  protected computePlacement(size: { width: number; height: number }): {
+    x?: number
+    y?: number
+  } {
+    const main = this.mainWin?.getBounds()
+    if (!main) return {} // no main window → let Electron center the companion
+    // Pick the display by the main window's CENTER, not its origin: a window
+    // straddling two monitors should anchor the companion to the one it mostly
+    // occupies. getDisplayNearestPoint always returns a live display, so this is
+    // safe even if `main` is maximized or a monitor was just unplugged.
+    const center = {
+      x: main.x + Math.floor(main.width / 2),
+      y: main.y + Math.floor(main.height / 2),
+    }
+    const display = screen.getDisplayNearestPoint(center)
+    // workArea (not bounds) excludes the taskbar/dock so we don't tuck the
+    // companion under it.
+    return placeCompanion(main, size, display.workArea)
+  }
+
+  /**
    * Constructs the real companion BrowserWindow and starts loading its content.
    * Overridable in tests to inject a fake window (the only test seam — production
    * behavior is unchanged).
@@ -39,16 +70,17 @@ export class CompanionService {
     const mode = getThemeMode()
     const bg = mode === "dark" ? "#1c1814" : mode === "cold-dark" ? "#0b0e14" : "#f8f4ed"
 
-    // Position next to main window
-    const mainBounds = this.mainWin?.getBounds()
-    const x = mainBounds ? mainBounds.x + mainBounds.width + 8 : undefined
-    const y = mainBounds?.y
+    // Position next to main window, CLAMPED into the nearest display's work area
+    // so the companion never lands off-screen (the old `main.x + main.width + 8`
+    // had no clamp — a main window near the right edge pushed it out of view).
+    const size = { width: 680, height: 860 }
+    const { x, y } = this.computePlacement(size)
 
     const win = new BrowserWindow({
       // Roomier default so diff/code/table panels aren't cramped next to the
       // larger main window (rich panels benefit from the extra height).
-      width: 680,
-      height: 860,
+      width: size.width,
+      height: size.height,
       minWidth: 380,
       minHeight: 320,
       x,
