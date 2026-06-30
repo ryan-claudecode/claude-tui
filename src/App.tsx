@@ -17,6 +17,7 @@ import WindowControls from "./components/WindowControls"
 import type { TranscriptCache } from "./components/AgentView"
 import PermissionPrompt from "./components/PermissionPrompt"
 import KillSessionModal from "./components/KillSessionModal"
+import ModalHost from "./components/ModalHost"
 import SplitView from "./components/SplitView"
 import DropZone from "./components/DropZone"
 import { usePermissions } from "./hooks/usePermissions"
@@ -634,6 +635,20 @@ export default function App() {
     createMission,
   } = usePanels(refreshOverviewsRef, activeSession, missionsListOpen, allMissions)
 
+  // CAPP-109 / S2 — the ModalHost renders panels IN the main window (modal-by-default).
+  // `modalActiveId` is the renderer-side tab selection; null = the form-exclusive default
+  // (a pending form always wins regardless). EVERY close path goes through
+  // window.api.hidePanel(id) so a pending show_form resolves {cancelled:true} (never
+  // orphan the MCP call). The main mirror (`panels`) drops the panel when the
+  // panel:hide IPC arrives back via usePanels.
+  const [modalActiveId, setModalActiveId] = useState<string | null>(null)
+  const handleModalClose = useCallback((id: string) => {
+    void window.api.hidePanel(id).catch(() => {})
+    // If the closed panel was the explicit selection, drop it so the form-exclusive
+    // default takes over (or the modal unmounts when nothing is left).
+    setModalActiveId((cur) => (cur === id ? null : cur))
+  }, [])
+
   // Agent Rail KNOWS (Phase 3 — CAPP-84 × CAPP-86 v1.5) — the two context digests
   // (this-session overview + cross-session recall) for the rail's KNOWS section. A
   // pure lens over the EXISTING getSessionOverview + recallSummary accessors; no new
@@ -1156,6 +1171,16 @@ export default function App() {
         sessionId={pendingKillId}
         sessionName={pendingKillName}
         onClose={() => setPendingKillId(null)}
+      />
+      {/* CAPP-109 / S2 — in-main-window modal panels (modal-by-default). Renders the
+          shared PanelContent off the usePanels mirror. EVERY close path resolves a
+          pending show_form as cancelled via window.api.hidePanel. Pop-out (onPopOut) is
+          wired in S3 — until then the modal's "Pop out" button is a disabled placeholder. */}
+      <ModalHost
+        panels={panels}
+        activeId={modalActiveId}
+        onActivate={setModalActiveId}
+        onClose={handleModalClose}
       />
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />

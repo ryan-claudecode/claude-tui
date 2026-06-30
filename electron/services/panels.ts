@@ -8,11 +8,30 @@ export interface PanelState {
   height?: number
   props: Record<string, any>
   visible: boolean
+  /**
+   * CAPP-109 / S2 — which surface a panel lives on. **Default `"modal"`** — a fresh
+   * panel renders in the in-main-window ModalHost and NEVER touches the companion
+   * bridge (so a `show_panel`/`show_form` no longer auto-creates the companion window).
+   * `"window"` is set ONLY by `popOut` (S3), after which `route` ALSO emits to the
+   * companion so the popped-out panel mirrors there.
+   */
+  surface: "modal" | "window"
 }
 
 interface CompanionBridge {
   sendToCompanion(channel: string, ...args: unknown[]): void
   close(): void
+}
+
+/**
+ * CAPP-109 / S2 — the MAIN-window bridge (a thin `{ send }` over the main
+ * `BrowserWindow.webContents`). `route` ALWAYS writes here so the ModalHost mirror
+ * (usePanels) stays current — this is the modal-by-default surface. Wired in `ipc.ts`
+ * via `setMainBridge` BEFORE any IPC handler that can call `show` and before the MCP
+ * server starts (the modal path has no lazy-create mask, so ordering is load-bearing).
+ */
+export interface MainBridge {
+  send(channel: string, ...args: unknown[]): void
 }
 
 /** Where a form originated — the MCP caller's bound work-session/terminal. */
@@ -33,6 +52,7 @@ export type PanelEvent =
 export class PanelService {
   private panels = new Map<string, PanelState>()
   private companion: CompanionBridge | null = null
+  private mainBridge: MainBridge | null = null
   private nextId = 1
 
   // Pending form submissions: panelId -> resolver. Used by form panels so the
@@ -57,6 +77,17 @@ export class PanelService {
     this.companion = companion
   }
 
+  /**
+   * CAPP-109 / S2 — wire the MAIN-window bridge. MUST be called (in `ipc.ts`) BEFORE
+   * any IPC handler that can call `show` is registered AND before the MCP server starts
+   * (an early/auto-restore `show_panel` would otherwise be silently dropped — the modal
+   * path has no lazy-create mask like the companion's). See the ordering comment + the
+   * no-bridge log/assert in `show`.
+   */
+  setMainBridge(bridge: MainBridge) {
+    this.mainBridge = bridge
+  }
+
   /** @deprecated Use setCompanion instead. Kept temporarily for any stray callers. */
   setMainWindow(_win: BrowserWindow) {
     // no-op — companion bridge replaces this
@@ -64,6 +95,39 @@ export class PanelService {
 
   private sendToCompanion(channel: string, ...args: unknown[]) {
     this.companion?.sendToCompanion(channel, ...args)
+  }
+
+  /**
+   * CAPP-109 / S2 — route a PANEL-scoped event. ALWAYS emit to the main bridge (the
+   * ModalHost mirror is the default surface); ALSO emit to the companion when this panel
+   * was popped out (`surface === "window"`). A default-`modal` panel therefore never
+   * touches the companion bridge → the companion window is never auto-created.
+   */
+  private route(panel: PanelState, channel: string, ...args: unknown[]) {
+    if (this.mainBridge) {
+      this.mainBridge.send(channel, ...args)
+    } else if (channel === "panel:show") {
+      // M5/B.2 — a `show` fired before the main bridge was wired. The modal can't render
+      // it (the mirror never received it). Loud, but non-fatal. This should be impossible
+      // given the `ipc.ts` wiring order; the log makes a regression in that order visible.
+      console.error(
+        "[PanelService] route(panel:show) with no main bridge — setMainBridge must be " +
+          "wired before any show-capable handler/MCP start (CAPP-109 / B.2).",
+      )
+    }
+    if (panel.surface === "window") {
+      this.sendToCompanion(channel, ...args)
+    }
+  }
+
+  /**
+   * CAPP-109 / S2 — route a PANEL-LESS event (`panel:hide-all`). No `panel` to key off,
+   * so emit to the main bridge ALWAYS and to the companion unconditionally — `hide-all`
+   * is a harmless clear-everything signal even if the companion is closed.
+   */
+  private routeAll(channel: string, ...args: unknown[]) {
+    this.mainBridge?.send(channel, ...args)
+    this.sendToCompanion(channel, ...args)
   }
 
   show(type: string, props: Record<string, any>, position?: string): PanelState {
@@ -74,9 +138,11 @@ export class PanelService {
       position: position === "bottom" ? "bottom" : "right",
       props,
       visible: true,
+      // CAPP-109 / S2 — modal-by-default. Pop-out (S3) flips this to "window".
+      surface: "modal",
     }
     this.panels.set(id, panel)
-    this.sendToCompanion("panel:show", panel)
+    this.route(panel, "panel:show", panel)
     return panel
   }
 
@@ -84,7 +150,7 @@ export class PanelService {
     const panel = this.panels.get(id)
     if (!panel) return false
     panel.props = { ...panel.props, ...props }
-    this.sendToCompanion("panel:update", { id, props: panel.props })
+    this.route(panel, "panel:update", { id, props: panel.props })
     return true
   }
 
@@ -93,7 +159,7 @@ export class PanelService {
     if (!panel) return false
     panel.visible = false
     this.panels.delete(id)
-    this.sendToCompanion("panel:hide", id)
+    this.route(panel, "panel:hide", id)
     // If a form was waiting on this panel, resolve it as cancelled
     const resolver = this.pendingForms.get(id)
     if (resolver) {
@@ -105,8 +171,8 @@ export class PanelService {
   }
 
   hideAll(): void {
-    for (const id of this.panels.keys()) {
-      this.sendToCompanion("panel:hide", id)
+    for (const [, panel] of this.panels) {
+      this.route(panel, "panel:hide", panel.id)
     }
     this.panels.clear()
     for (const [id, resolver] of this.pendingForms) {
@@ -114,7 +180,7 @@ export class PanelService {
       this.emitEvent({ type: "form-resolved", panelId: id })
     }
     this.pendingForms.clear()
-    this.sendToCompanion("panel:hide-all")
+    this.routeAll("panel:hide-all")
   }
 
   list(): PanelState[] {
@@ -146,7 +212,18 @@ export class PanelService {
       this.pendingForms.delete(id)
       this.emitEvent({ type: "form-resolved", panelId: id })
     }
+    // CAPP-109 / S2 (F3) — capture the panel and ROUTE `panel:hide` to BOTH surfaces
+    // (per the panel's surface) BEFORE deleting it, so neither the main mirror nor the
+    // companion keeps a zombie of the now-resolved form. Previously this notified the
+    // companion ONLY — after a popped-out submit the main mirror kept the panel
+    // `visible:true` and a ModalHost could re-select it. Capture first (delete drops it).
+    const panel = this.panels.get(id)
     this.panels.delete(id)
-    this.sendToCompanion("panel:hide", id)
+    if (panel) {
+      this.route(panel, "panel:hide", id)
+    } else {
+      // No tracked panel (shouldn't happen) — fall back to clearing both surfaces.
+      this.routeAll("panel:hide", id)
+    }
   }
 }

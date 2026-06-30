@@ -269,6 +269,11 @@ const mainApi = {
   hideAllPanels: () => ipcRenderer.invoke("panel:hide-all"),
   submitForm: (id: string, data: Record<string, any>) =>
     ipcRenderer.send("panel:form-submit", id, data),
+  // CAPP-109 / S2 — the diff / worktree-review "send review to the active session" sink,
+  // used by the main-window ModalHost's PanelApi.sendToSession wrapper. Fire-and-forget
+  // (mirrors the companion's `companion:send-to-session`); the handler writes to the
+  // active terminal. The ModalHost wraps this to return `true` to match the PanelApi shape.
+  sendToSession: (text: string) => ipcRenderer.send("companion:send-to-session", text),
 
   // Mission orchestration
   createMission: (goal: string, cwd: string, autonomy?: string) =>

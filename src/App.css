@@ -397,6 +397,8 @@ body {
   .workspace-create-panel,
   .restore-convo-overlay,
   .restore-convo-panel,
+  .modal-host-overlay,
+  .modal-host-panel,
   .workspace-menu {
     animation: none;
   }
@@ -6482,6 +6484,132 @@ body {
   color: var(--red);
 }
 .kill-modal-delete:hover:not(:disabled) { background: var(--red); color: #fff; }
+
+/* ============================================================
+   CAPP-109 / S2 — ModalHost: in-main-window modal panels.
+   Clones the kill-modal overlay idiom; tabs mirror .companion-tab.
+   z-index 2000 clears the companion-presence pill (TabBar, z~50);
+   all controls (tabs, pop-out, ×) are statically visible (no hover-reveal).
+   ============================================================ */
+.modal-host-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-5);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: drop-fade 0.12s var(--ease-out);
+}
+
+.modal-host-panel {
+  width: min(820px, calc(100vw - 64px));
+  max-height: min(80vh, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), 0 0 0 1px var(--accent-soft);
+  animation: cmdk-pop 0.16s var(--ease-out);
+  overflow: hidden;
+}
+
+.modal-host-tabs {
+  display: flex;
+  gap: var(--s-1);
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: var(--s-2) var(--s-3) 0;
+}
+.modal-host-tabs::-webkit-scrollbar { display: none; }
+
+.modal-host-tab {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  border-radius: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.modal-host-tab:hover { color: var(--text-1); background: var(--bg-3); }
+.modal-host-tab.active { color: var(--text-0); background: var(--accent-soft); }
+
+/* Statically visible (NO hover-reveal) per the hard UI rule. */
+.modal-host-tab-close {
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.modal-host-tab-close:hover { opacity: 1; }
+
+.modal-host-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-host-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-0);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The pop-out + close buttons — statically visible (full opacity at rest). */
+.modal-host-popout {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.modal-host-popout:hover:not(:disabled) {
+  color: var(--text-0);
+  border-color: var(--border-strong);
+  background: var(--bg-2);
+}
+.modal-host-popout:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.modal-host-close {
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color var(--fast) var(--ease);
+}
+.modal-host-close:hover { color: var(--text-0); }
+
+.modal-host-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s-4);
+}
 
 /* ============================================================
    WS-D — Create-workspace modal (main window)

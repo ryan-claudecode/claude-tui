@@ -684,13 +684,13 @@ test("Agent Rail KNOWS (Phase 3): renders both digests + always-visible Open con
     "allow MUST return updatedInput",
   )
 
-  // Clicking "Open Recall →" opens the companion RecallPanel — which renders in a
-  // SEPARATE companion BrowserWindow, so capture that new window and assert the panel
-  // (its always-visible search box) mounts there.
-  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  // CAPP-109 / S2 — panels are now modal-by-default: "Open Recall →" renders the
+  // RecallPanel IN the main window's ModalHost (no companion auto-pop). Assert the panel
+  // (its always-visible search box) mounts inside the modal.
   await openRecall.click()
-  const companion = await companionPromise
-  await expect(companion.locator(".recall-panel .recall-search")).toBeVisible({ timeout: 15_000 })
+  await expect(win.locator(".modal-host-panel .recall-panel .recall-search")).toBeVisible({
+    timeout: 15_000,
+  })
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
@@ -1315,12 +1315,10 @@ test("CAPP-94 / U6: the workspace-memory editor opens from the switcher, renders
   const memBtn = win.locator(".workspace-memory-btn")
   await expect(memBtn).toBeVisible({ timeout: 15_000 })
 
-  // It opens the editor in the SEPARATE companion BrowserWindow — capture that window.
-  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  // CAPP-109 / S2 — the editor now opens IN the main window's ModalHost (modal-by-default).
   await memBtn.click()
-  const companion = await companionPromise
 
-  const panel = companion.locator(".workspace-memory-panel")
+  const panel = win.locator(".modal-host-panel .workspace-memory-panel")
   await expect(panel).toBeVisible({ timeout: 15_000 })
 
   // Instructions section: a textarea seeded from the record + an explicit Save button.
@@ -1367,11 +1365,10 @@ test("CAPP-94 / U6: the workspace-memory editor opens from the switcher, renders
   // The new finding row appears (4 total).
   await expect(panel.locator(".wmem-finding")).toHaveCount(4, { timeout: 10_000 })
 
-  // CROSS-WINDOW LIVE-REFRESH (CAPP-94 review fix): mutate the SAME bucket from the MAIN
-  // window. The open companion editor must update via the `workspace:memory-changed` push
-  // forwarded to the companion window — NOT an in-panel optimistic update (this add did
-  // not originate in the panel). Before the fix the push only reached the main window, so
-  // the editor stayed stale; this asserts it now refreshes cross-window.
+  // LIVE-REFRESH (CAPP-94 review fix; CAPP-109/S2 — now same-window): mutate the SAME
+  // bucket from the MAIN window. The open editor (now in the main-window ModalHost) must
+  // update via the `workspace:memory-changed` push — NOT an in-panel optimistic update
+  // (this add did not originate in the panel). Asserts the editor refreshes off the push.
   await win.evaluate(() =>
     (window as any).api.addWorkspaceFinding(null, "added from the main window", "user"),
   )
@@ -1415,11 +1412,10 @@ test("CAPP-97: the workspace-memory editor shows a statically-visible Pin toggle
 
   const memBtn = win.locator(".workspace-memory-btn")
   await expect(memBtn).toBeVisible({ timeout: 15_000 })
-  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  // CAPP-109 / S2 — opens in the main-window ModalHost (modal-by-default).
   await memBtn.click()
-  const companion = await companionPromise
 
-  const panel = companion.locator(".workspace-memory-panel")
+  const panel = win.locator(".modal-host-panel .workspace-memory-panel")
   await expect(panel).toBeVisible({ timeout: 15_000 })
 
   // One STATICALLY-visible Pin control per finding row (no hover-reveal — HARD rule).
@@ -1486,11 +1482,10 @@ test("CAPP-99 / E1: the workspace-memory editor's Export section enables export 
 
   const memBtn = win.locator(".workspace-memory-btn")
   await expect(memBtn).toBeVisible({ timeout: 15_000 })
-  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  // CAPP-109 / S2 — opens in the main-window ModalHost (modal-by-default).
   await memBtn.click()
-  const companion = await companionPromise
 
-  const panel = companion.locator(".workspace-memory-panel")
+  const panel = win.locator(".modal-host-panel .workspace-memory-panel")
   await expect(panel).toBeVisible({ timeout: 15_000 })
 
   // The Export section renders (statically visible — no hover-reveal).
@@ -1565,12 +1560,10 @@ test("CAPP-98 / I1: the always-visible 'Context' switcher button opens the READ-
   await expect(ctxBtn).toBeVisible({ timeout: 15_000 })
   await expect(ctxBtn).toContainText("Context")
 
-  // It opens the READ-ONLY inspector in the SEPARATE companion BrowserWindow.
-  const companionPromise = app.waitForEvent("window", { timeout: 15_000 })
+  // CAPP-109 / S2 — the READ-ONLY inspector now opens IN the main-window ModalHost.
   await ctxBtn.click()
-  const companion = await companionPromise
 
-  const panel = companion.locator(".context-inspector-panel")
+  const panel = win.locator(".modal-host-panel .context-inspector-panel")
   await expect(panel).toBeVisible({ timeout: 15_000 })
 
   // The verbatim honesty header is present (v1 must NOT overclaim).

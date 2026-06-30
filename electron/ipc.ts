@@ -366,6 +366,18 @@ export async function setupIpc(win: BrowserWindow) {
 
   companionService.setMainWindow(win)
   panelService.setCompanion(companionService)
+  // CAPP-109 / S2 (M5 / B.2) — wire the MAIN-window panel bridge HERE, and it MUST stay
+  // ordered BEFORE: (a) the MCP server start below (which exposes show_panel/show_form),
+  // and (b) registerPanelHandlers (the panel:show IPC). The modal is the default panel
+  // surface and — unlike the companion's lazy-create path — has NO mask for a `show`
+  // that fires before its sink exists, so a `show_panel` arriving before this line would
+  // be silently dropped from the main mirror. If this is ever reordered after a
+  // show-capable handler/MCP start, `PanelService.route` logs a loud error.
+  panelService.setMainBridge({
+    send: (channel, ...args) => {
+      if (!win.isDestroyed()) win.webContents.send(channel, ...args)
+    },
+  })
   notificationService.setMainWindow(win)
   uiService.setMainWindow(win)
 
