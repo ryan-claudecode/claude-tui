@@ -20,7 +20,7 @@ import { AttentionService, type AttentionDeps } from "./attention"
 import type { PanelService } from "./panels"
 import type { NotificationService } from "./notifications"
 import type { MissionService } from "./mission"
-import { HEADLESS_FLAGS, DEFAULT_MODEL, EFFORT_LEVELS, PERMISSION_PROMPT_TOOL, userMessage, type StreamEvent } from "./streamProtocol"
+import { HEADLESS_FLAGS, DEFAULT_MODEL, EFFORT_LEVELS, ULTRACODE_SETTINGS, modelSupportsXhigh, PERMISSION_PROMPT_TOOL, userMessage, type StreamEvent } from "./streamProtocol"
 import * as fx from "./streamEvents.fixtures"
 
 // Keep the headless stderr warning out of the real log dir.
@@ -1480,5 +1480,159 @@ describe("CAPP-46 createHeadless — --effort on the spawn args", () => {
 
   it("EFFORT_LEVELS are the five probed levels in picker order", () => {
     expect(EFFORT_LEVELS).toEqual(["low", "medium", "high", "xhigh", "max"])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CAPP-108 — Ultracode control on the headless spawn. A per-session BOOLEAN: ON
+// appends `--settings '{"ultracode":true}'` (the inline JSON is single-quoted by
+// the argv-safe shellWrap so it round-trips) and OMITS `--effort` (ultracode forces
+// xhigh — passing both is undefined). OFF omits `--settings` (byte-unchanged).
+// ---------------------------------------------------------------------------
+
+describe("CAPP-108 createHeadless — ultracode --settings on the spawn args", () => {
+  it("getUltracode() defaults to false (off)", () => {
+    const { svc } = makeHeadlessService()
+    expect(svc.getUltracode()).toBe(false)
+  })
+
+  it("a fresh spawn with ultracode OFF OMITS --settings entirely (default byte-unchanged) and returns false", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const info = svc.createHeadless("t", process.cwd())
+    expect(spawned[0].args.join(" ")).not.toContain("--settings")
+    expect(spawned[0].args.join(" ")).not.toContain("ultracode")
+    expect(info.ultracode).toBe(false)
+    // list() surfaces the posture so the renderer toggle can show it.
+    expect(svc.list().find((t) => t.id === info.id)?.ultracode).toBe(false)
+  })
+
+  it("ultracode ON appends --settings with the {\"ultracode\":true} payload and returns true", () => {
+    const { svc, spawned } = makeHeadlessService()
+    // signature: createHeadless(name, cwd, sessionId, resumeConvId, allowedTools, model, effort, ultracode)
+    const info = svc.createHeadless("t", process.cwd(), undefined, undefined, undefined, undefined, undefined, true)
+    const joined = spawned[0].args.join(" ")
+    expect(joined).toContain("--settings")
+    // The exact JSON payload survives the argv-safe shellWrap quoting intact.
+    expect(joined).toContain(ULTRACODE_SETTINGS)
+    expect(ULTRACODE_SETTINGS).toBe(`{"ultracode":true}`)
+    expect(info.ultracode).toBe(true)
+    expect(svc.list().find((t) => t.id === info.id)?.ultracode).toBe(true)
+  })
+
+  it("ultracode ON SUPPRESSES --effort even when an effort level is passed (ultracode forces xhigh; both is undefined)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const info = svc.createHeadless("t", process.cwd(), undefined, undefined, undefined, "opus", "high", true)
+    const joined = spawned[0].args.join(" ")
+    expect(joined).toContain("--settings")
+    expect(joined).toContain(ULTRACODE_SETTINGS)
+    // --effort is NOT also passed when ultracode is on.
+    expect(joined).not.toContain("--effort")
+    expect(info.effort).toBeUndefined()
+    expect(info.ultracode).toBe(true)
+    // --model still coexists.
+    expect(joined).toContain("--model opus")
+  })
+
+  it("ultracode ON suppresses the CONFIG default effort too (setEffort then ultracode → no --effort)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    svc.setEffort("max")
+    const info = svc.createHeadless("t", process.cwd(), undefined, undefined, undefined, undefined, undefined, true)
+    expect(spawned[0].args.join(" ")).not.toContain("--effort")
+    expect(spawned[0].args.join(" ")).toContain(ULTRACODE_SETTINGS)
+    expect(info.ultracode).toBe(true)
+  })
+
+  it("ultracode OFF with an effort level passes --effort and NOT --settings", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const info = svc.createHeadless("t", process.cwd(), undefined, undefined, undefined, undefined, "high", false)
+    const joined = spawned[0].args.join(" ")
+    expect(joined).toContain("--effort high")
+    expect(joined).not.toContain("--settings")
+    expect(info.ultracode).toBe(false)
+    expect(info.effort).toBe("high")
+  })
+
+  it("setUltracode(true) makes new terminals spawn WITH ultracode (the default posture)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    svc.setUltracode(true)
+    expect(svc.getUltracode()).toBe(true)
+    const info = svc.createHeadless("t", process.cwd())
+    expect(spawned[0].args.join(" ")).toContain(ULTRACODE_SETTINGS)
+    expect(info.ultracode).toBe(true)
+  })
+
+  it("an explicit per-terminal ultracode=false OVERRIDES the default-on posture", () => {
+    const { svc, spawned } = makeHeadlessService()
+    svc.setUltracode(true)
+    const info = svc.createHeadless("t", process.cwd(), undefined, undefined, undefined, undefined, undefined, false)
+    expect(spawned[0].args.join(" ")).not.toContain("--settings")
+    expect(info.ultracode).toBe(false)
+  })
+
+  it("RESUME path: --resume <id> and --settings ultracode COEXIST (ultracode re-applied on every resume spawn)", () => {
+    const root = mkdtempSync(join(tmpdir(), "capp108-resume-"))
+    const cwd = process.cwd()
+    const dir = join(root, encodeProjectDir(cwd))
+    mkdirSync(dir, { recursive: true })
+    const convId = "resume-capp108-1"
+    writeFileSync(join(dir, `${convId}.jsonl`), "{}")
+
+    const { svc, spawned } = makeHeadlessService()
+    ;(svc as unknown as { ccProjectsRoot: string }).ccProjectsRoot = root
+    svc.createHeadless("t", cwd, undefined, convId, undefined, undefined, undefined, true)
+
+    const joined = spawned[0].args.join(" ")
+    expect(joined).toContain(`--resume ${convId}`)
+    expect(joined).toContain(ULTRACODE_SETTINGS)
+  })
+
+  it("the xterm (legacy PTY) path does NOT pass --settings — byte-unchanged", () => {
+    const { svc, ptys, procs } = makeDualService()
+    svc.setEngine("xterm") // CAPP-39 gate ④ — xterm is no longer the default; opt in
+    svc.setUltracode(true) // even with the default on, the xterm path ignores it
+    svc.create("t", process.cwd())
+    expect(procs).toHaveLength(0)
+    expect(ptys[0].args.join(" ")).not.toContain("--settings")
+    expect(ptys[0].args.join(" ")).not.toContain("ultracode")
+  })
+
+  it("engine=structured create() threads the ultracode arg through to the headless spawn", () => {
+    const { svc, procs } = makeDualService()
+    svc.setEngine("structured")
+    const info = svc.create("t", process.cwd(), undefined, undefined, undefined, undefined, true)
+    expect(procs[0].args.join(" ")).toContain(ULTRACODE_SETTINGS)
+    expect(info.ultracode).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CAPP-108 — the modelSupportsXhigh helper that gates the ultracode toggle.
+// ---------------------------------------------------------------------------
+
+describe("CAPP-108 modelSupportsXhigh", () => {
+  it("xhigh-capable models (opus / opus[1m] / fable-5) return true", () => {
+    expect(modelSupportsXhigh("opus")).toBe(true)
+    expect(modelSupportsXhigh("opus[1m]")).toBe(true)
+    expect(modelSupportsXhigh("fable-5")).toBe(true)
+    expect(modelSupportsXhigh("fable-5-20260101")).toBe(true)
+    // Pinned opus ids pass by prefix.
+    expect(modelSupportsXhigh("opus-4-8")).toBe(true)
+  })
+
+  it("non-xhigh models (sonnet / haiku) return false", () => {
+    expect(modelSupportsXhigh("sonnet")).toBe(false)
+    expect(modelSupportsXhigh("haiku")).toBe(false)
+  })
+
+  it("an empty/undefined model defaults to opus (DEFAULT_MODEL) → true (fresh terminal shows the toggle)", () => {
+    expect(modelSupportsXhigh(undefined)).toBe(true)
+    expect(modelSupportsXhigh("")).toBe(true)
+    expect(modelSupportsXhigh("   ")).toBe(true)
+    expect(DEFAULT_MODEL).toBe("opus")
+  })
+
+  it("is case-insensitive", () => {
+    expect(modelSupportsXhigh("OPUS")).toBe(true)
+    expect(modelSupportsXhigh("Sonnet")).toBe(false)
   })
 })

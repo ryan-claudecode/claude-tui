@@ -12,6 +12,8 @@ interface PaneTerminal {
   model?: string
   /** CAPP-46 — the terminal's current --effort level, surfaced to the pane's effort picker. */
   effort?: string
+  /** CAPP-108 — the terminal's current ultracode posture, surfaced to the pane's toggle. */
+  ultracode?: boolean
   /** BO-12 — the terminal's Claude Code conversation id (for transcript rehydrate). */
   ccConversationId?: string
 }
@@ -79,6 +81,7 @@ function PaneContent({
         sessionId={sessionId ?? null}
         model={term.model}
         effort={term.effort}
+        ultracode={term.ultracode}
         ccConversationId={term.ccConversationId}
         transcriptCache={transcriptCache}
         active

@@ -3,6 +3,7 @@ import SlashCommandPicker from "./SlashCommandPicker"
 import { useSlashPicker } from "../hooks/useSlashPicker"
 import AgentModelPicker from "./AgentModelPicker"
 import AgentEffortPicker from "./AgentEffortPicker"
+import AgentUltracodeToggle from "./AgentUltracodeToggle"
 
 interface Props {
   /** The structured (headless) terminal this composer feeds. */
@@ -14,6 +15,9 @@ interface Props {
   model?: string
   /** CAPP-46 — the terminal's current `--effort` level (driven by the effort picker). */
   effort?: string
+  /** CAPP-108 — the terminal's current ultracode posture (driven by the toggle;
+   *  the toggle only renders for xhigh-capable models). */
+  ultracode?: boolean
   /**
    * BO-10 — the agent is generating a turn or parked on a permission prompt. While
    * busy, Send is disabled (writing to a blocked stdin would silently buffer unread
@@ -52,6 +56,7 @@ export default function AgentComposer({
   sessionId = null,
   model,
   effort,
+  ultracode,
   busy = false,
   switching = false,
   rawViewDisabled = false,
@@ -292,6 +297,14 @@ export default function AgentComposer({
             sessionId={sessionId}
             terminalId={terminalId}
             effort={effort}
+            variant="composer"
+            onSwitched={onSwitched}
+          />
+          <AgentUltracodeToggle
+            sessionId={sessionId}
+            terminalId={terminalId}
+            model={model}
+            ultracode={ultracode}
             variant="composer"
             onSwitched={onSwitched}
           />

@@ -7088,6 +7088,55 @@ body {
 .agent-model-picker-select:disabled,
 .agent-effort-picker-select:disabled { opacity: 0.5; cursor: default; }
 
+/* CAPP-108 — the Ultracode toggle, adjacent to the effort picker. A statically
+   visible label + on/off switch + a one-line cost caution. Inherits the picker
+   label treatment so the control set reads as one cluster. */
+.agent-ultracode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  font-size: 11px;
+  color: var(--text-2);
+}
+.agent-ultracode-toggle-label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  color: var(--text-3);
+}
+.agent-ultracode-toggle-switch {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-0);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease-out),
+    background var(--fast) var(--ease-out),
+    color var(--fast) var(--ease-out);
+}
+.agent-ultracode-toggle-switch:hover { border-color: var(--accent); background: var(--bg-3); }
+.agent-ultracode-toggle-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.agent-ultracode-toggle-switch:disabled { opacity: 0.5; cursor: default; }
+/* ON state — accent-filled so the elevated (and costly) mode is unmistakable. */
+.agent-ultracode-toggle-switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+.agent-ultracode-toggle-caution {
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 360px;
+}
+
 /* CAPP-39 gate ③ — the raw-view escape-hatch button, sitting beside the model
    picker in the composer controls row. Quiet by default; reveals the accent on hover. */
 /* WS4 — softened to match the control set: control radius, subtle press, smooth fade. */
@@ -7375,18 +7424,25 @@ body {
    legacy header treatment so the row reads as light secondary chrome. They inherit
    the shared picker/raw-view styling above; this only tightens type + padding. */
 .agent-model-picker-composer,
-.agent-effort-picker-composer {
+.agent-effort-picker-composer,
+.agent-ultracode-toggle-composer {
   font-size: 10px;
 }
 .agent-model-picker-composer .agent-model-picker-label,
-.agent-effort-picker-composer .agent-effort-picker-label {
+.agent-effort-picker-composer .agent-effort-picker-label,
+.agent-ultracode-toggle-composer .agent-ultracode-toggle-label {
   font-size: 9px;
 }
 .agent-model-picker-composer .agent-model-picker-select,
 .agent-effort-picker-composer .agent-effort-picker-select,
+.agent-ultracode-toggle-composer .agent-ultracode-toggle-switch,
 .agent-raw-view-btn-composer {
   font-size: 10px;
   padding: 2px 7px;
+}
+.agent-ultracode-toggle-composer .agent-ultracode-toggle-caution {
+  font-size: 9px;
+  max-width: 300px;
 }
 
 /* ------------------------------------------------------------------ */

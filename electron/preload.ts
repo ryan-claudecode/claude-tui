@@ -93,6 +93,10 @@ const mainApi = {
   // resumes the chat); a blank value clears it (the respawn omits --effort).
   setTerminalEffort: (sessionId: string, terminalId: string, effort: string) =>
     ipcRenderer.invoke("worksession:set-terminal-effort", sessionId, terminalId, effort),
+  // CAPP-108 — toggle a structured terminal's ultracode posture (respawns + resumes
+  // the chat); ON adds `--settings '{"ultracode":true}'` + omits --effort.
+  setTerminalUltracode: (sessionId: string, terminalId: string, ultracode: boolean) =>
+    ipcRenderer.invoke("worksession:set-terminal-ultracode", sessionId, terminalId, ultracode),
   // CAPP-39 gate ③ — the per-terminal raw-view escape hatch: toggle one terminal
   // between the structured and xterm engines at runtime (respawns + resumes the chat).
   // Returns the new terminal id so the caller re-points the active selection.

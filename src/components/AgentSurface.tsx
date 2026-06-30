@@ -13,6 +13,9 @@ interface Props {
   /** CAPP-46 — the terminal's current `--effort` level (shown in + driven by the
    *  header effort picker); undefined when no level is set. */
   effort?: string
+  /** CAPP-108 — the terminal's current ultracode posture (driven by the toggle in
+   *  the composer controls row; only renders for xhigh-capable models). */
+  ultracode?: boolean
   /** BO-12 — the terminal's Claude Code conversation id (for transcript rehydrate). */
   ccConversationId?: string
   /** BO-12 — the shared, cross-pane transcript cache. */
@@ -54,6 +57,7 @@ export default function AgentSurface({
   sessionId,
   model,
   effort,
+  ultracode,
   ccConversationId,
   transcriptCache,
   active,
@@ -100,6 +104,7 @@ export default function AgentSurface({
         sessionId={sessionId}
         model={model}
         effort={effort}
+        ultracode={ultracode}
         busy={busy}
         switching={switching}
         rawViewDisabled={!sessionId || busy || switching}

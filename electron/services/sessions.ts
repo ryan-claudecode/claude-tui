@@ -75,6 +75,17 @@ export interface TerminalRef {
    * the spawn omits `--effort`, byte-unchanged default).
    */
   effort?: string
+  /**
+   * CAPP-108 — true when this STRUCTURED terminal runs with ultracode ON (the spawn
+   * added `--settings '{"ultracode":true}'` and OMITTED `--effort`). Set from the
+   * spawn's returned info at every spawn/handoff/reopen/ultracode-switch; persisted
+   * so a restore (`reopenTerminal`) RE-PASSES it — ultracode is SESSION-ONLY, so it
+   * must ride on every `--resume` spawn or it's silently lost. Surfaced to the
+   * renderer (flows through `list()`/`withEffectiveActivity`'s `...t` spread) so the
+   * in-app toggle shows the current state. Optional/additive: legacy refs load fine
+   * (undefined → off → the spawn omits `--settings`, byte-unchanged default).
+   */
+  ultracode?: boolean
   /** Rich-presence "what this terminal is doing now" line (Claude self-reports it). */
   activity?: string
   /** Epoch ms when `activity` was last set. */
@@ -234,24 +245,26 @@ export interface TerminalLike {
   // match the real TerminalService so call sites stay arg-compatible). `model` is
   // optional on the returned info (test mocks may omit it → undefined flows to
   // TerminalRef.model). CAPP-46: `effort` is the next positional arg and likewise
-  // optional on the returned info; when unset the spawn OMITS `--effort`.
-  create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string }
+  // optional on the returned info; when unset the spawn OMITS `--effort`. CAPP-108:
+  // `ultracode` is the next positional BOOLEAN arg (the spawn adds `--settings`
+  // ultracode + omits `--effort` when true); likewise optional on the returned info.
+  create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string, ultracode?: boolean): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; ultracode?: boolean }
   /** BO-5: structured (headless) spawn — used by handoff/model-switch to retire-&-
    *  continue a structured terminal with a structured replacement. BO-6: `model`
-   *  is the 6th arg (after `allowedTools`); CAPP-46: `effort` is the 7th arg, both
-   *  matching the real TerminalService. */
-  createHeadless(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, allowedTools?: string[], model?: string, effort?: string): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string }
+   *  is the 6th arg (after `allowedTools`); CAPP-46: `effort` is the 7th arg;
+   *  CAPP-108: `ultracode` is the 8th arg, all matching the real TerminalService. */
+  createHeadless(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, allowedTools?: string[], model?: string, effort?: string, ultracode?: boolean): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; ultracode?: boolean }
   /** CAPP-39 gate ②: spawn a one-time INTERACTIVE `claude /login` xterm terminal
    *  (the structured engine can't show the OAuth UI). Always engine:"xterm" and
    *  isLogin:true (so the container marks the ref and excludes it from the
    *  agent-terminal machinery). */
-  createLogin(name?: string, cwd?: string, sessionId?: string): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; isLogin?: boolean }
+  createLogin(name?: string, cwd?: string, sessionId?: string): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; ultracode?: boolean; isLogin?: boolean }
   /** CAPP-39 gate ③: spawn a terminal on the legacy interactive PTY (xterm)
    *  transport REGARDLESS of the global engine — the raw-view escape hatch's
    *  structured→xterm spawn. `resumeConvId` keeps the SAME conversation; `model`
-   *  (and CAPP-46 `effort`) are accepted for call-site parity but ignored on the
-   *  xterm path. */
-  createXterm(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string }
+   *  (CAPP-46 `effort`, CAPP-108 `ultracode`) are accepted for call-site parity but
+   *  ignored on the xterm path. */
+  createXterm(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string, ultracode?: boolean): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; ultracode?: boolean }
   /** BO-5: is this terminal headless? Lets the container branch xterm-vs-structured. */
   isHeadless(id: string): boolean
   /** CAPP-39 gate ②: is this terminal the one-time interactive `claude /login` PTY?
@@ -615,6 +628,7 @@ export class SessionService {
       lastState: info.state as TerminalRef["lastState"],
       engine: info.engine,
       model: info.model,
+      ultracode: info.ultracode, // CAPP-108 — carry the spawn's ultracode posture.
       // The conversation id IS known up front (we are resuming it), so record it on
       // the ref immediately — the spawn's bindConversation also re-emits a `convo`
       // event, but stamping it here makes a later reopen/handoff correct even before
@@ -679,7 +693,8 @@ export class SessionService {
     // BO-4b: record the actual engine, and honor the spawn's own state (structured
     // terminals park idle on spawn — they're waiting for the first message — while
     // xterm spawns active). Source of truth is the spawn, not a hardcoded "active".
-    s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: info.state as TerminalRef["lastState"], engine: info.engine, model: info.model })
+    // CAPP-108: carry the spawn's resolved ultracode posture onto the ref.
+    s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: info.state as TerminalRef["lastState"], engine: info.engine, model: info.model, ultracode: info.ultracode })
     s.status = "active"
     this.logEvent(s, "spawn", `Spawned terminal "${info.name}"`, info.id)
     this.persist(s)
@@ -764,10 +779,12 @@ export class SessionService {
     // user's mode is preserved; it inherits state via get_session_context on entry.
     // BO-6: a structured replacement also inherits the retired terminal's `--model`;
     // CAPP-46: and its `--effort` level (undefined → the replacement omits `--effort`).
+    // CAPP-108: and its ultracode posture (true → the replacement re-adds `--settings`
+    // ultracode + omits `--effort`).
     const info = structured
-      ? this.terminals.createHeadless(undefined, old.cwd, s.id, undefined, undefined, old.model, old.effort)
+      ? this.terminals.createHeadless(undefined, old.cwd, s.id, undefined, undefined, old.model, old.effort, old.ultracode)
       : this.terminals.create(undefined, old.cwd, s.id)
-    s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: info.state as TerminalRef["lastState"], engine: info.engine, model: info.model, effort: info.effort })
+    s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: info.state as TerminalRef["lastState"], engine: info.engine, model: info.model, effort: info.effort, ultracode: info.ultracode })
     this.terminals.kill(terminalId)
     this.clearLaunchStamp(terminalId) // CAPP-97 — the retired terminal's id is dead; drop its stamp.
     this.clearPendingMemoryDelta(old) // CAPP-101 — the retired ref is dead; the fresh one has the current brain.
@@ -795,7 +812,10 @@ export class SessionService {
     // resume spawn (overriding the transcript's saved-model pin — the core fix);
     // the xterm path ignores it. CAPP-46: re-pass the persisted `effort` the same
     // way (undefined → the resume spawn omits `--effort`, byte-unchanged default).
-    const info = this.terminals.create(ref.name, ref.cwd, s.id, ref.ccConversationId, ref.model, ref.effort)
+    // CAPP-108: re-pass the persisted `ultracode` — it is SESSION-ONLY, so without
+    // re-passing it on the `--resume` spawn the agent silently loses ultracode after
+    // a restart. true → the resume spawn re-adds `--settings` ultracode + omits `--effort`.
+    const info = this.terminals.create(ref.name, ref.cwd, s.id, ref.ccConversationId, ref.model, ref.effort, ref.ultracode)
     this.clearLaunchStamp(terminalId) // CAPP-97 — the ref's id is being replaced; drop the old stamp.
     this.clearPendingMemoryDelta(ref) // CAPP-101 — the reopened terminal gets the CURRENT brain.
     ref.id = info.id
@@ -806,6 +826,7 @@ export class SessionService {
     ref.engine = info.engine
     ref.model = info.model
     ref.effort = info.effort
+    ref.ultracode = info.ultracode // CAPP-108 — adopt the resume spawn's ultracode posture.
     s.status = "active"
     this.persist(s)
     this.emit("worksession:updated", this.withEffectiveActivity(s))
@@ -836,7 +857,8 @@ export class SessionService {
 
     // CAPP-46: a model switch PRESERVES the terminal's current effort level (pass
     // ref.effort) — one respawn primitive serves both the model and effort switches.
-    const info = this.respawnHeadlessRef(s, ref, model.trim(), ref.effort)
+    // CAPP-108: and its ultracode posture (pass ref.ultracode).
+    const info = this.respawnHeadlessRef(s, ref, model.trim(), ref.effort, ref.ultracode)
     this.logEvent(s, "spawn", `Model → ${info.model ?? model.trim()} (respawned "${ref.name}")`, info.id)
     this.persist(s)
     this.emit("worksession:updated", this.withEffectiveActivity(s))
@@ -866,10 +888,46 @@ export class SessionService {
     if (!structured) return undefined
 
     // A blank/undefined effort clears the level (respawn omits `--effort`). The
-    // respawn PRESERVES the terminal's current model (pass ref.model).
+    // respawn PRESERVES the terminal's current model (pass ref.model) AND ultracode
+    // (pass ref.ultracode). CAPP-108 note: if ultracode is ON the spawn SUPPRESSES
+    // `--effort` regardless, so picking an effort while ultracode is on has no effect
+    // until ultracode is turned off (the UI gates the two so this rarely arises).
     const next = typeof effort === "string" && effort.trim() ? effort.trim() : undefined
-    const info = this.respawnHeadlessRef(s, ref, ref.model, next)
+    const info = this.respawnHeadlessRef(s, ref, ref.model, next, ref.ultracode)
     this.logEvent(s, "spawn", `Effort → ${info.effort ?? "default"} (respawned "${ref.name}")`, info.id)
+    this.persist(s)
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
+    return { terminalId: info.id }
+  }
+
+  /**
+   * CAPP-108 — toggle a STRUCTURED terminal's ultracode posture (the in-app
+   * toggle). Mirrors {@link setTerminalEffort}: headless `claude -p` has no
+   * in-protocol way to flip a session setting, so the only mechanism is to
+   * RESPAWN — kill the proc and spawn a fresh one that resumes the SAME conversation
+   * (`--resume <ccConversationId>`) with `--settings '{"ultracode":true}'` added (or
+   * removed). The chat history carries over via resume; ultracode is session-only,
+   * so the respawn is exactly how it takes. The choice is persisted on the ref so it
+   * survives a later restart (reopenTerminal re-passes it). When turning ultracode
+   * ON the spawn also OMITS `--effort` (ultracode forces xhigh — passing both is
+   * undefined). No-op (undefined) for an unknown session/terminal or an xterm
+   * terminal (the legacy path has no `--settings` knob). Kill BEFORE respawn so two
+   * procs never hold the same transcript at once.
+   */
+  setTerminalUltracode(sessionId: string, terminalId: string, ultracode: boolean): { terminalId: string } | undefined {
+    const s = this.sessions.get(sessionId)
+    if (!s || !this.terminals) return undefined
+    const ref = s.terminals.find((t) => t.id === terminalId)
+    if (!ref) return undefined
+    // Only structured terminals carry ultracode (`--settings`); an xterm PTY has no such knob.
+    const structured = this.terminals.isHeadless(terminalId) || ref.engine === "structured"
+    if (!structured) return undefined
+
+    const next = ultracode === true
+    // The respawn PRESERVES the terminal's current model + effort (pass ref.model /
+    // ref.effort); when ultracode is on the spawn suppresses `--effort` anyway.
+    const info = this.respawnHeadlessRef(s, ref, ref.model, ref.effort, next)
+    this.logEvent(s, "spawn", `Ultracode → ${info.ultracode ? "on" : "off"} (respawned "${ref.name}")`, info.id)
     this.persist(s)
     this.emit("worksession:updated", this.withEffectiveActivity(s))
     return { terminalId: info.id }
@@ -937,8 +995,9 @@ export class SessionService {
         !this.terminals.isHeadless(ref.id)
       if (tornDown) return undefined
 
-      // CAPP-46: an interrupt preserves BOTH the current model AND effort level.
-      const info = this.respawnHeadlessRef(s, ref, ref.model, ref.effort)
+      // CAPP-46: an interrupt preserves the current model AND effort level.
+      // CAPP-108: and the ultracode posture.
+      const info = this.respawnHeadlessRef(s, ref, ref.model, ref.effort, ref.ultracode)
       this.logEvent(
         s,
         "spawn",
@@ -971,8 +1030,9 @@ export class SessionService {
     ref: TerminalRef,
     model: string | undefined,
     effort: string | undefined,
-  ): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string } {
-    return this.respawnRefWithEngine(s, ref, "structured", model, effort)
+    ultracode: boolean | undefined,
+  ): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; ultracode?: boolean } {
+    return this.respawnRefWithEngine(s, ref, "structured", model, effort, ultracode)
   }
 
   /**
@@ -1000,13 +1060,14 @@ export class SessionService {
     targetEngine: RenderingEngine,
     model: string | undefined,
     effort: string | undefined,
-  ): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string } {
+    ultracode: boolean | undefined,
+  ): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; ultracode?: boolean } {
     const cc = ref.ccConversationId
     this.terminals!.kill(ref.id)
     const info =
       targetEngine === "structured"
-        ? this.terminals!.createHeadless(ref.name, ref.cwd, s.id, cc, undefined, model, effort)
-        : this.terminals!.createXterm(ref.name, ref.cwd, s.id, cc, model, effort)
+        ? this.terminals!.createHeadless(ref.name, ref.cwd, s.id, cc, undefined, model, effort, ultracode)
+        : this.terminals!.createXterm(ref.name, ref.cwd, s.id, cc, model, effort, ultracode)
     ref.id = info.id
     ref.lastState = info.state as TerminalRef["lastState"]
     ref.engine = info.engine
@@ -1019,6 +1080,10 @@ export class SessionService {
     // Effort can legitimately be undefined (a "cleared" level) on the structured path,
     // so adopt info.effort verbatim there; the xterm path leaves ref.effort untouched.
     if (targetEngine === "structured") ref.effort = info.effort
+    // CAPP-108: ultracode is a structured-only boolean. Adopt the structured spawn's
+    // resolved value verbatim (it reflects what was passed); the xterm path carries no
+    // ultracode, so leave ref.ultracode untouched so a later switch back restores it.
+    if (targetEngine === "structured") ref.ultracode = info.ultracode
     s.status = "active"
     return info
   }
@@ -1084,7 +1149,8 @@ export class SessionService {
 
     // CAPP-46: carry the current effort across the engine swap (preserved on the
     // xterm side, re-applied on the structured side) so a round-trip restores it.
-    const info = this.respawnRefWithEngine(s, ref, targetEngine, ref.model, ref.effort)
+    // CAPP-108: carry ultracode the same way (structured-only; preserved across xterm).
+    const info = this.respawnRefWithEngine(s, ref, targetEngine, ref.model, ref.effort, ref.ultracode)
     this.logEvent(
       s,
       "spawn",

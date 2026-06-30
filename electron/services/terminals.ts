@@ -15,6 +15,7 @@ import { readTranscriptEvents } from "./transcriptHistory"
 import {
   HEADLESS_FLAGS,
   DEFAULT_MODEL,
+  ULTRACODE_SETTINGS,
   userMessage,
   PERMISSION_PROMPT_TOOL,
   PERMISSION_REQUEST_CHANNEL,
@@ -324,6 +325,15 @@ export interface TerminalInfo {
    */
   effort?: string
   /**
+   * CAPP-108 — true when this STRUCTURED terminal was spawned with ultracode ON
+   * (the spawn appends `--settings '{"ultracode":true}'` and OMITS `--effort`,
+   * since ultracode forces xhigh). Surfaced to the renderer so the in-app toggle
+   * shows the current state, and persisted on the terminal ref so a restore/respawn
+   * re-passes it (ultracode is session-only, so it must ride on every `--resume`
+   * spawn). Undefined/false for an xterm PTY (the legacy path takes no `--settings`).
+   */
+  ultracode?: boolean
+  /**
    * CAPP-39 gate ② — true for the one-time interactive `claude /login` terminal
    * (see {@link TerminalService.createLogin}). The container uses it to mark the
    * persisted ref so the login terminal is excluded from idle-flush/broadcast and
@@ -500,6 +510,9 @@ interface HeadlessTerminal {
   /** CAPP-46 — the `--effort` this headless proc was spawned with, or undefined
    *  when no level was picked (the spawn then omitted `--effort`). */
   effort?: string
+  /** CAPP-108 — true when this headless proc was spawned with ultracode ON
+   *  (`--settings '{"ultracode":true}'`; `--effort` is omitted in that case). */
+  ultracode?: boolean
   /** Reassembles NDJSON across stdout chunks. */
   buffer: LineBuffer
   /** Whether an `init` event has been seen — drives the needs-auth signal. */
@@ -690,6 +703,16 @@ export class TerminalService {
    * behavior is byte-unchanged.
    */
   private defaultEffort: string | undefined = undefined
+  /**
+   * CAPP-108 — the default ultracode posture new STRUCTURED terminals spawn with.
+   * A per-terminal `ultracode` passed to create()/createHeadless() (the toggle
+   * respawn or a persisted ref on restore) overrides this. FALSE by default: when
+   * ultracode is off AND none is passed, the spawn OMITS `--settings`, so the
+   * default behavior is byte-unchanged. There is no config seam for this yet (it's
+   * a per-session knob); the field exists so the spawn path has one consistent
+   * resolve point mirroring {@link defaultEffort}.
+   */
+  private defaultUltracode = false
   /**
    * DEV-skip-permissions — when true (DEFAULT), a STRUCTURED (headless) spawn uses
    * `--dangerously-skip-permissions` and OMITS the BO-3 `--permission-prompt-tool`
@@ -1036,6 +1059,20 @@ export class TerminalService {
   }
 
   /**
+   * CAPP-108 — set the default ultracode posture new structured terminals spawn
+   * with. Coerced to a strict boolean so a malformed value can only ever degrade to
+   * off (the spawn then omits `--settings`, byte-unchanged default).
+   */
+  setUltracode(on: boolean): void {
+    this.defaultUltracode = on === true
+  }
+
+  /** CAPP-108 test/inspection accessor — the default ultracode posture new terminals currently use. */
+  getUltracode(): boolean {
+    return this.defaultUltracode
+  }
+
+  /**
    * DEV-skip-permissions — set the structured permission posture (wired from
    * config.permissions.skipApproval in ipc.ts via {@link resolveSkipApproval}).
    * true (default) = `--dangerously-skip-permissions`, no BO-3 gate; false = the
@@ -1142,7 +1179,7 @@ export class TerminalService {
     }
   }
 
-  create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string): TerminalInfo {
+  create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string, ultracode?: boolean): TerminalInfo {
     // BO-4a ENGINE SWITCH: when configured for the structured transport a new
     // terminal is a HEADLESS stream-json process (createHeadless) rather than an
     // interactive PTY. The xterm branch below is byte-behavior-unchanged — the
@@ -1152,7 +1189,7 @@ export class TerminalService {
     // way; the xterm branch deliberately IGNORES both (the legacy interactive path
     // takes no `--model`/`--effort`).
     if (this.engine === "structured") {
-      return this.createHeadless(name, cwd, sessionId, resumeConvId, undefined, model, effort)
+      return this.createHeadless(name, cwd, sessionId, resumeConvId, undefined, model, effort, ultracode)
     }
 
     // The legacy interactive PTY path. Factored into spawnXterm so the
@@ -1184,6 +1221,8 @@ export class TerminalService {
     sessionId?: string,
     resumeConvId?: string,
     _model?: string,
+    _effort?: string,
+    _ultracode?: boolean,
   ): TerminalInfo {
     return this.spawnXterm(name, cwd, sessionId, resumeConvId)
   }
@@ -1324,6 +1363,7 @@ export class TerminalService {
     allowedTools?: string[],
     model?: string,
     effort?: string,
+    ultracode?: boolean,
   ): TerminalInfo {
     const { id, sessionName, sessionCwd } = this.mintTerminal(name, cwd)
 
@@ -1338,13 +1378,26 @@ export class TerminalService {
     // default; both fall back to the `opus` alias, never to no model.
     const resolvedModel = (typeof model === "string" && model.trim()) || this.defaultModel
     args.push("--model", resolvedModel)
+    // CAPP-108 — the ultracode knob (a per-session BOOLEAN). When ON, the spawn
+    // appends `--settings '{"ultracode":true}'` (the inline JSON is single-quoted
+    // by the argv-safe shellWrap, so its `{ } " :` round-trip intact — no temp
+    // file). Ultracode forces xhigh reasoning internally, so when it's ON we OMIT
+    // `--effort` entirely (passing both is undefined behavior — see below). A
+    // per-terminal `ultracode` (toggle respawn / persisted ref) wins over the
+    // default; FALSE → the spawn omits `--settings` (byte-unchanged default).
+    const resolvedUltracode = ultracode != null ? ultracode === true : this.defaultUltracode
     // CAPP-46 — the reasoning `--effort` knob. UNLIKE `--model` this is CONDITIONAL:
     // a per-terminal `effort` (picker respawn / persisted ref) wins over the config
     // default, but when NEITHER is set the flag is OMITTED entirely so the default
     // spawn is byte-unchanged (Claude uses its own built-in effort default). There's
-    // no resume-pin bug, so there's nothing to force on the resume path.
-    const resolvedEffort = (typeof effort === "string" && effort.trim()) || this.defaultEffort
+    // no resume-pin bug, so there's nothing to force on the resume path. CAPP-108:
+    // when ultracode is ON `--effort` is SUPPRESSED — ultracode already forces xhigh
+    // and passing both is undefined.
+    const resolvedEffort = resolvedUltracode
+      ? undefined
+      : (typeof effort === "string" && effort.trim()) || this.defaultEffort
     if (resolvedEffort) args.push("--effort", resolvedEffort)
+    if (resolvedUltracode) args.push("--settings", ULTRACODE_SETTINGS)
     // DEV-skip-permissions — DEV POSTURE, RELEASE BLOCKER. When skipApproval is
     // true (the owner-locked default), the structured spawn skips the per-tool
     // approval gate with `--dangerously-skip-permissions` (matching the legacy
@@ -1399,6 +1452,7 @@ export class TerminalService {
       proc,
       model: resolvedModel,
       effort: resolvedEffort,
+      ultracode: resolvedUltracode,
       buffer: new LineBuffer(),
       sawInit: false,
       // BO-4b NO-INPUT IDLE: a freshly spawned `claude -p` (stream-json input)
@@ -1459,7 +1513,7 @@ export class TerminalService {
       this.teardownHeadless(id, { synthAuth: false })
     })
 
-    const info: TerminalInfo = { id, name: sessionName, cwd: sessionCwd, state: "idle", engine: "structured", model: resolvedModel, effort: resolvedEffort }
+    const info: TerminalInfo = { id, name: sessionName, cwd: sessionCwd, state: "idle", engine: "structured", model: resolvedModel, effort: resolvedEffort, ultracode: resolvedUltracode }
     this.emitEvent({ type: "created", info })
 
     this.bindConversation(id, sessionCwd, args, resumeConvId)
@@ -2091,6 +2145,7 @@ export class TerminalService {
       engine: "structured" as const,
       model: s.model,
       effort: s.effort,
+      ultracode: s.ultracode,
       isLogin: s.isLogin,
     }))
     return [...ptys, ...headless]

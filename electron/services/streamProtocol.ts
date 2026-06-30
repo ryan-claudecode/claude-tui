@@ -75,6 +75,47 @@ export const DEFAULT_MODEL = "opus"
 export const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"]
 
 // ---------------------------------------------------------------------------
+// Ultracode control (CAPP-108) — a per-session BOOLEAN knob for the headless
+// engine. Ultracode is a Claude Code SESSION SETTING (xhigh reasoning + auto
+// dynamic-workflows), enabled by passing `--settings '{"ultracode":true}'` on the
+// spawn. It is NOT `--effort` (that flag only takes low/medium/high/xhigh/max);
+// ultracode forces xhigh internally, so when ultracode is ON the spawn OMITS
+// `--effort` (passing both is undefined behavior). The flag was live-verified on
+// this machine's `claude` (v2.1.170: `--settings <file-or-json>` exists).
+//
+// The JSON STRING (with `{ } " :` metachars) is passed INLINE; the CAPP-96
+// argv-safe shellWrap quoting (quotePowerShellArg / quotePosixArg) wraps it as
+// '{"ultracode":true}' so it round-trips through the shell intact — no temp file,
+// no quoting risk (the value has no interior single quote to escape). This module
+// is zero-runtime-dep, so the renderer toggle and the main process share ONE
+// source of truth for the settings payload + the xhigh-model gate.
+// ---------------------------------------------------------------------------
+
+/** CAPP-108 — the inline `--settings` JSON value that enables ultracode. The
+ *  argv-safe shellWrap single-quotes it through the shell, so it lands on the
+ *  `claude` command line as `'{"ultracode":true}'`. */
+export const ULTRACODE_SETTINGS = `{"ultracode":true}`
+
+/** CAPP-108 — model alias/id prefixes that support `xhigh` reasoning (and thus can
+ *  honor ultracode, which forces xhigh). Matched case-insensitively by prefix so
+ *  `opus`, `opus[1m]`, and pinned `opus-…` / `fable-5-…` ids all resolve; Sonnet
+ *  and Haiku are deliberately absent. */
+export const XHIGH_MODELS: readonly string[] = ["opus", "fable-5", "fable5"]
+
+/**
+ * CAPP-108 — does the given `--model` (alias or pinned id) support `xhigh`
+ * reasoning? Gates the ultracode toggle's visibility (ultracode forces xhigh, so a
+ * non-xhigh model can't honor it). Fable 5 / Opus 4.8 / Opus 4.7 support xhigh;
+ * Sonnet / Haiku do not. An empty/undefined model defaults to the `opus` alias
+ * (DEFAULT_MODEL), which DOES support xhigh, so a fresh terminal shows the toggle.
+ * Case-insensitive, matched by prefix so `opus[1m]` and pinned ids pass.
+ */
+export function modelSupportsXhigh(model?: string): boolean {
+  const m = (model && model.trim() ? model : DEFAULT_MODEL).trim().toLowerCase()
+  return XHIGH_MODELS.some((x) => m.startsWith(x))
+}
+
+// ---------------------------------------------------------------------------
 // Output: the typed event union the parser produces
 // ---------------------------------------------------------------------------
 

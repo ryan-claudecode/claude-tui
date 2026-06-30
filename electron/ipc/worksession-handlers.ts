@@ -160,6 +160,14 @@ export function registerWorkSessionHandlers(deps: {
     (_e, sessionId: string, terminalId: string, effort: string) =>
       workSessionService.setTerminalEffort(sessionId, terminalId, effort),
   )
+  // CAPP-108 — toggle a structured terminal's ultracode posture (respawns it,
+  // resuming the same conversation with `--settings '{"ultracode":true}'` added/
+  // removed; ON also omits --effort since ultracode forces xhigh).
+  ipcMain.handle(
+    "worksession:set-terminal-ultracode",
+    (_e, sessionId: string, terminalId: string, ultracode: boolean) =>
+      workSessionService.setTerminalUltracode(sessionId, terminalId, ultracode),
+  )
 
   // CAPP-39 gate ③ — the per-terminal raw-view escape hatch: toggle one terminal
   // between the structured and xterm engines at runtime, resuming the same

@@ -24,6 +24,10 @@ export interface Terminal {
    *  for xterm or when no level is set. Flows to the renderer via the `{...t}` spread
    *  in SessionService.withEffectiveActivity. */
   effort?: string
+  /** CAPP-108 — true when a structured terminal runs with ultracode ON (from
+   *  TerminalRef.ultracode); shown in + driven by the in-app ultracode toggle.
+   *  Undefined/false for xterm or when off. Flows via the `{...t}` spread. */
+  ultracode?: boolean
   /**
    * BO-12 — the Claude Code conversation id this terminal is bound to (from
    * TerminalRef.ccConversationId; already flows to the renderer via the `{...t}`

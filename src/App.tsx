@@ -252,6 +252,8 @@ declare global {
       setTerminalModel: (sessionId: string, terminalId: string, model: string) => Promise<{ terminalId: string } | undefined>
       // CAPP-46 — switch a structured terminal's --effort level (respawns + resumes the chat)
       setTerminalEffort: (sessionId: string, terminalId: string, effort: string) => Promise<{ terminalId: string } | undefined>
+      // CAPP-108 — toggle a structured terminal's ultracode posture (respawns + resumes the chat)
+      setTerminalUltracode: (sessionId: string, terminalId: string, ultracode: boolean) => Promise<{ terminalId: string } | undefined>
       // CAPP-39 gate ③ — per-terminal raw-view escape hatch: toggle one terminal between
       // the structured and xterm engines at runtime (respawns + resumes the chat).
       setTerminalEngine: (sessionId: string, terminalId: string, targetEngine: "xterm" | "structured") => Promise<{ terminalId: string } | undefined>
@@ -1284,6 +1286,7 @@ export default function App() {
                     sessionId={activeSessionId}
                     model={t.model}
                     effort={t.effort}
+                    ultracode={t.ultracode}
                     ccConversationId={t.ccConversationId}
                     transcriptCache={transcriptCacheRef.current}
                     active={t.id === activeTerminalId}

@@ -630,7 +630,7 @@ describe("SessionService.status", () => {
 class FakeTerminals {
   private n = 0
   killed: string[] = []
-  spawned: Array<{ id: string; name?: string; cwd?: string; sessionId?: string; resumeConvId?: string; headless?: boolean; login?: boolean; xterm?: boolean; model?: string; effort?: string }> = []
+  spawned: Array<{ id: string; name?: string; cwd?: string; sessionId?: string; resumeConvId?: string; headless?: boolean; login?: boolean; xterm?: boolean; model?: string; effort?: string; ultracode?: boolean }> = []
   private cb: ((e: any) => void) | null = null
   writes: Array<{ id: string; data: string }> = []
   output = new Map<string, string>()
@@ -654,21 +654,26 @@ class FakeTerminals {
   // BO-6: model is the 5th arg on create() and the 6th on createHeadless()
   // (after allowedTools); CAPP-46: effort is the next positional arg on each,
   // matching the real TerminalService positions.
-  create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string) {
+  create(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string, ultracode?: boolean) {
     if (this.structuredEngine) {
       // Mirror create()'s structured routing: createHeadless(name, cwd, sessionId,
-      // resumeConvId, allowedTools=undefined, model, effort).
-      return this.createHeadless(name, cwd, sessionId, resumeConvId, undefined, model, effort)
+      // resumeConvId, allowedTools=undefined, model, effort, ultracode).
+      return this.createHeadless(name, cwd, sessionId, resumeConvId, undefined, model, effort, ultracode)
     }
     const id = `live-${++this.n}`
-    this.spawned.push({ id, name, cwd, sessionId, resumeConvId, model, effort })
-    return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const, engine: "xterm" as const, model, effort }
+    this.spawned.push({ id, name, cwd, sessionId, resumeConvId, model, effort, ultracode })
+    return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const, engine: "xterm" as const, model, effort, ultracode }
   }
-  createHeadless(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, _allowedTools?: string[], model?: string, effort?: string) {
+  // CAPP-108: ultracode is the 8th arg on createHeadless. When ON the real service
+  // omits --effort (ultracode forces xhigh); the fake mirrors that so effort-vs-
+  // ultracode preservation assertions hold.
+  createHeadless(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, _allowedTools?: string[], model?: string, effort?: string, ultracode?: boolean) {
     const id = `head-${++this.n}`
     this.headlessIds.add(id)
-    this.spawned.push({ id, name, cwd, sessionId, resumeConvId, headless: true, model, effort })
-    return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const, engine: "structured" as const, model, effort }
+    const resolvedUltracode = ultracode === true
+    const resolvedEffort = resolvedUltracode ? undefined : effort
+    this.spawned.push({ id, name, cwd, sessionId, resumeConvId, headless: true, model, effort: resolvedEffort, ultracode: resolvedUltracode })
+    return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const, engine: "structured" as const, model, effort: resolvedEffort, ultracode: resolvedUltracode }
   }
   // CAPP-39 gate ② — a one-time interactive `claude /login` xterm terminal.
   createLogin(name?: string, cwd?: string, sessionId?: string) {
@@ -681,7 +686,7 @@ class FakeTerminals {
   // raw-view escape hatch). Returns NO model/effort (an xterm path has no --model/
   // --effort), exactly like the real createXterm, so the model/effort-preservation
   // assertions are exercised.
-  createXterm(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, _model?: string, _effort?: string) {
+  createXterm(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, _model?: string, _effort?: string, _ultracode?: boolean) {
     const id = `xterm-${++this.n}`
     this.spawned.push({ id, name, cwd, sessionId, resumeConvId, xterm: true })
     return { id, name: name ?? id, cwd: cwd ?? "/", state: "active" as const, engine: "xterm" as const }
@@ -1122,6 +1127,128 @@ describe("SessionService.setTerminalEffort (CAPP-46)", () => {
     svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured" })
     expect(svc.setTerminalEffort("nope", head.id, "high")).toBeUndefined()
     expect(svc.setTerminalEffort(s.id, "nope", "high")).toBeUndefined()
+  })
+})
+
+describe("SessionService.setTerminalUltracode (CAPP-108)", () => {
+  it("respawns a structured terminal: kills old, resumes the SAME convo with ultracode ON, suppresses effort, preserves model", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id, undefined, undefined, "opus", "high")
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured", model: "opus", effort: "high" })
+    term.emit({ type: "convo", id: head.id, ccConversationId: "conv-keep" })
+
+    const r = svc.setTerminalUltracode(s.id, head.id, true)
+
+    expect(term.killed).toContain(head.id)
+    const last = term.spawned[term.spawned.length - 1]
+    expect(last.headless).toBe(true)
+    expect(last.resumeConvId).toBe("conv-keep")
+    expect(last.ultracode).toBe(true)
+    // ultracode ON forces xhigh, so --effort is suppressed (effort cleared on the spawn).
+    expect(last.effort).toBeUndefined()
+    expect(last.model).toBe("opus")
+    // The ref is updated in place.
+    expect(r?.terminalId).toBe(last.id)
+    const ref = svc.get(s.id)!.terminals.find((t) => t.id === last.id)
+    expect(ref?.ultracode).toBe(true)
+    expect(ref?.model).toBe("opus")
+  })
+
+  it("turning ultracode OFF resumes the same convo with ultracode false (no --settings)", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id, undefined, undefined, "opus", undefined, true)
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured", model: "opus", ultracode: true })
+    term.emit({ type: "convo", id: head.id, ccConversationId: "conv-keep" })
+
+    const r = svc.setTerminalUltracode(s.id, head.id, false)
+    const last = term.spawned[term.spawned.length - 1]
+    expect(last.ultracode).toBe(false)
+    const ref = svc.get(s.id)!.terminals.find((t) => t.id === r?.terminalId)
+    expect(ref?.ultracode).toBe(false)
+  })
+
+  it("is a no-op for an xterm (non-structured) terminal — it has no --settings knob", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    expect(svc.setTerminalUltracode(session.id, terminalId, true)).toBeUndefined()
+    expect(term.killed).not.toContain(terminalId)
+  })
+
+  it("returns undefined for an unknown session / terminal", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id)
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured" })
+    expect(svc.setTerminalUltracode("nope", head.id, true)).toBeUndefined()
+    expect(svc.setTerminalUltracode(s.id, "nope", true)).toBeUndefined()
+  })
+
+  it("PERSISTS ultracode: it survives a fresh service load (round-trip)", () => {
+    const a = new SessionService({ dir, now: () => 1 })
+    const term = new FakeTerminals()
+    a.attachTerminals(term as any)
+    const s = a.create()
+    const head = term.createHeadless(undefined, "/repo", s.id, undefined, undefined, "opus", undefined, true)
+    a.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured", model: "opus", ultracode: true })
+
+    const b = new SessionService({ dir, now: () => 2 })
+    b.load()
+    const ref = b.get(s.id)!.terminals.find((t) => t.id === head.id)
+    expect(ref?.ultracode).toBe(true)
+  })
+
+  it("RE-APPLIES ultracode on reopen (a resume spawn): the ref's ultracode rides through to the spawn args", () => {
+    const term = new FakeTerminals()
+    term.structuredEngine = true // reopen's create() routes to the headless spawn
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    // A dead structured terminal ref carrying ultracode + a captured convo id.
+    svc.addTerminal(s.id, {
+      id: "head-dead",
+      name: "x",
+      cwd: "/repo",
+      lastState: "dead",
+      engine: "structured",
+      model: "opus",
+      ultracode: true,
+      ccConversationId: "conv-reopen",
+    })
+
+    const r = svc.reopenTerminal(s.id, "head-dead")
+    expect(r?.terminalId).toBeTruthy()
+    const last = term.spawned[term.spawned.length - 1]
+    // reopen re-passes the persisted ultracode (session-only → must ride every resume spawn).
+    expect(last.ultracode).toBe(true)
+    expect(last.resumeConvId).toBe("conv-reopen")
+    // The ref adopts the spawn's posture.
+    const ref = svc.get(s.id)!.terminals.find((t) => t.id === r?.terminalId)
+    expect(ref?.ultracode).toBe(true)
+  })
+
+  it("a handoff carries the retired terminal's ultracode to the replacement (re-applied on the fresh spawn)", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id, undefined, undefined, "opus", undefined, true)
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured", model: "opus", ultracode: true })
+
+    const r = svc.handoffTerminal(s.id, head.id)
+    expect(r?.terminalId).toBeTruthy()
+    const last = term.spawned[term.spawned.length - 1]
+    expect(last.headless).toBe(true)
+    expect(last.ultracode).toBe(true)
   })
 })
 
