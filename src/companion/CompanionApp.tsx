@@ -1,29 +1,8 @@
-import { useState, useEffect, useRef } from "react"
-import DiffPanel from "../components/panels/DiffPanel"
-import FormPanel from "../components/panels/FormPanel"
-import ImagePanel from "../components/panels/ImagePanel"
-import MarkdownPanel from "../components/panels/MarkdownPanel"
-import TablePanel from "../components/panels/TablePanel"
-import TestPanel from "../components/panels/TestPanel"
-import ChartPanel from "../components/panels/ChartPanel"
-import TreePanel from "../components/panels/TreePanel"
-import TimelinePanel from "../components/panels/TimelinePanel"
-import GitPanel from "../components/panels/GitPanel"
-import KanbanPanel from "../components/panels/KanbanPanel"
-import NotesPanel from "../components/panels/NotesPanel"
-import StatPanel from "../components/panels/StatPanel"
-import LogPanel from "../components/panels/LogPanel"
-import ProgressPanel from "../components/panels/ProgressPanel"
-import CodePanel from "../components/panels/CodePanel"
-import HeatmapPanel from "../components/panels/HeatmapPanel"
-import MissionPanel from "../components/panels/MissionPanel"
-import SessionOverviewPanel from "../components/panels/SessionOverviewPanel"
-import RecallPanel from "../components/panels/RecallPanel"
-import WorktreeReviewPanel, { type ReviewActionResult } from "../components/panels/WorktreeReviewPanel"
-import WorkspaceMemoryPanel from "../components/panels/WorkspaceMemoryPanel"
-import ContextInspectorPanel, {
-  type InspectResultView,
-} from "../components/panels/ContextInspectorPanel"
+import { useState, useEffect, useRef, useMemo } from "react"
+import PanelContent, { tabLabel } from "../components/panels/PanelContent"
+import { type ReviewActionResult } from "../components/panels/WorktreeReviewPanel"
+import { type InspectResultView } from "../components/panels/ContextInspectorPanel"
+import type { PanelApi } from "../lib/panelApi"
 import type {
   WorkspaceMemoryRecord,
   WorkspaceFinding,
@@ -36,33 +15,6 @@ interface PanelState {
   position: "right" | "bottom"
   props: Record<string, any>
   visible: boolean
-}
-
-const PANEL_LABELS: Record<string, string> = {
-  diff: "Diff", form: "Form", image: "Image", markdown: "Markdown",
-  table: "Table", test: "Tests", chart: "Chart", tree: "Tree",
-  timeline: "Timeline", git: "Git", kanban: "Kanban", notes: "Notes",
-  stat: "Stats", log: "Log", progress: "Progress", code: "Code",
-  heatmap: "Heatmap", mission: "Mission", "session-overview": "Overview",
-  "worktree-review": "Review", recall: "Recall", "workspace-memory": "Memory",
-  "context-inspector": "Context",
-}
-
-function tabLabel(p: PanelState): string {
-  const base = PANEL_LABELS[p.type] ?? p.type
-  if (p.type === "session-overview" && typeof p.props?.name === "string" && p.props.name) {
-    return p.props.name
-  }
-  if (p.type === "worktree-review" && typeof p.props?.title === "string" && p.props.title) {
-    return `Review: ${p.props.title}`
-  }
-  if (p.type === "workspace-memory" && typeof p.props?.workspaceName === "string" && p.props.workspaceName) {
-    return `Memory: ${p.props.workspaceName}`
-  }
-  if (p.type === "context-inspector" && typeof p.props?.workspaceName === "string" && p.props.workspaceName) {
-    return `Context: ${p.props.workspaceName}`
-  }
-  return base
 }
 
 declare global {
@@ -213,6 +165,42 @@ export default function CompanionApp() {
 
   const panel = panels.find((p) => p.id === activeId) ?? panels[panels.length - 1]
 
+  // CAPP-106 / S1 — build a PanelApi over `window.companionApi` ONCE. The shared
+  // PanelContent switch derives every per-panel callback from this single object (it
+  // folds the previously-inline six companion callbacks + the #19-23 panel accessors).
+  // `sendToSession` returns true to match the PanelApi contract — companionApi's is
+  // fire-and-forget (no active-session signal back over the wire).
+  const api = useMemo<PanelApi>(() => {
+    const c = window.companionApi
+    return {
+      sendToSession: (text) => { c.sendToSession(text); return true },
+      missionStop: (id) => c.missionStop(id),
+      missionPause: (id) => c.missionPause(id),
+      approveWorktreeTask: (m, t) => c.approveWorktreeTask(m, t),
+      rejectWorktreeTask: (m, t, reason) => c.rejectWorktreeTask(m, t, reason),
+      recall: (query, scope, sessionId) => c.recall(query, scope, sessionId),
+      openSessionOverview: (sessionId) => c.openSessionOverview(sessionId),
+      promoteSessionToWorkspace: (sessionId) => c.promoteSessionToWorkspace(sessionId),
+      getWorkspaceMemory: (workspaceId) => c.getWorkspaceMemory(workspaceId),
+      setWorkspaceInstructions: (workspaceId, text) => c.setWorkspaceInstructions(workspaceId, text),
+      addWorkspaceFinding: (workspaceId, text, source) => c.addWorkspaceFinding(workspaceId, text, source),
+      editWorkspaceFinding: (workspaceId, findingId, text) => c.editWorkspaceFinding(workspaceId, findingId, text),
+      deleteWorkspaceFinding: (workspaceId, findingId) => c.deleteWorkspaceFinding(workspaceId, findingId),
+      setWorkspaceFindingPinned: (workspaceId, findingId, pinned) => c.setWorkspaceFindingPinned(workspaceId, findingId, pinned),
+      onWorkspaceMemoryChanged: (cb) => c.onWorkspaceMemoryChanged(cb),
+      getExportState: (workspaceId) => c.getExportState(workspaceId),
+      enableExport: (workspaceId, mode, customPath) => c.enableExport(workspaceId, mode, customPath),
+      disableExport: (workspaceId) => c.disableExport(workspaceId),
+      setUntaggedExportEnabled: (enabled) => c.setUntaggedExportEnabled(enabled),
+      regenerateExport: (workspaceId) => c.regenerateExport(workspaceId),
+      getAdoptionState: (workspaceId) => c.getAdoptionState(workspaceId),
+      wireImportBlock: (workspaceId) => c.wireImportBlock(workspaceId),
+      unwireImportBlock: (workspaceId) => c.unwireImportBlock(workspaceId),
+      setExportSelfWired: (workspaceId, selfWired) => c.setExportSelfWired(workspaceId, selfWired),
+      inspectWorkspaceContext: (workspaceId) => c.inspectWorkspaceContext(workspaceId),
+    }
+  }, [])
+
   if (panels.length === 0) {
     return (
       <div className="companion-empty">
@@ -263,64 +251,8 @@ export default function CompanionApp() {
         </div>
       </div>
       <div className="companion-body">
-        {panel && <PanelContent
-          panel={panel}
-          onSendToSession={(text) => { window.companionApi.sendToSession(text); return true }}
-          onMissionStop={(id) => window.companionApi.missionStop(id)}
-          onMissionPause={(id) => window.companionApi.missionPause(id)}
-          onApproveWorktree={(m, t) =>
-            // Swallow IPC failures to null so the panel shows its inline error
-            // state rather than rejecting the click handler (P0-5 — never silent).
-            window.companionApi.approveWorktreeTask(m, t).catch(() => null)}
-          onRejectWorktree={(m, t, reason) =>
-            window.companionApi.rejectWorktreeTask(m, t, reason).catch(() => null)}
-        />}
+        {panel && <PanelContent panel={panel} api={api} />}
       </div>
     </div>
   )
-}
-
-function PanelContent({
-  panel, onSendToSession, onMissionStop, onMissionPause, onApproveWorktree, onRejectWorktree,
-}: {
-  panel: PanelState
-  onSendToSession?: (text: string) => boolean
-  onMissionStop?: (id: string) => void
-  onMissionPause?: (id: string) => void
-  onApproveWorktree?: (missionId: string, taskId: string) => Promise<ReviewActionResult | null>
-  onRejectWorktree?: (missionId: string, taskId: string, reason?: string) => Promise<ReviewActionResult | null>
-}) {
-  switch (panel.type) {
-    case "diff": return <DiffPanel {...panel.props} onSend={onSendToSession} />
-    case "form": return <FormPanel panelId={panel.id} {...panel.props} />
-    case "image": return <ImagePanel {...panel.props} />
-    case "markdown": return <MarkdownPanel {...panel.props} />
-    case "table": return <TablePanel {...panel.props} />
-    case "test": return <TestPanel {...panel.props} />
-    case "chart": return <ChartPanel {...panel.props} />
-    case "tree": return <TreePanel {...panel.props} />
-    case "timeline": return <TimelinePanel {...panel.props} />
-    case "git": return <GitPanel {...panel.props} />
-    case "kanban": return <KanbanPanel {...panel.props} />
-    case "notes": return <NotesPanel {...panel.props} />
-    case "stat": return <StatPanel {...panel.props} />
-    case "log": return <LogPanel {...panel.props} />
-    case "progress": return <ProgressPanel {...panel.props} />
-    case "code": return <CodePanel {...panel.props} />
-    case "heatmap": return <HeatmapPanel {...(panel.props as any)} />
-    case "mission": return <MissionPanel {...panel.props} onStop={onMissionStop} onPause={onMissionPause} />
-    case "session-overview": return <SessionOverviewPanel {...(panel.props as any)} />
-    case "recall": return <RecallPanel {...(panel.props as any)} />
-    case "workspace-memory": return <WorkspaceMemoryPanel {...(panel.props as any)} />
-    case "context-inspector": return <ContextInspectorPanel {...(panel.props as any)} />
-    case "worktree-review": return (
-      <WorktreeReviewPanel
-        {...panel.props}
-        onSend={onSendToSession}
-        onApprove={onApproveWorktree}
-        onReject={onRejectWorktree}
-      />
-    )
-    default: return <pre className="panel-raw">{JSON.stringify(panel.props, null, 2)}</pre>
-  }
 }

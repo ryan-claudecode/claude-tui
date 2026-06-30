@@ -466,6 +466,9 @@ export async function setupIpc(win: BrowserWindow) {
     workSessionService,
     recallService,
     workspaceMemoryService,
+    // CAPP-106 / S1 (F1) — lets `worksession:open-overview` SHOW the fetched overview as a
+    // panel (the main-window parity for the companion's openSessionOverview).
+    panelService,
     // CAPP-101 (P1) — the "export settled" SPAWN BARRIER (§C). ONLY await when the workspace is
     // ADOPTED (its workspace tier rides the user's @import file, so a fresh spawn READS that
     // export — gate it on any in-flight regen). For a NON-adopted / non-exported workspace the

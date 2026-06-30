@@ -5,6 +5,7 @@ import {
   type WorkspaceFinding,
 } from "../../lib/workspaceMemoryView"
 import type { ExportStateView, AdoptionStateView } from "../../lib/exportView"
+import type { PanelApi } from "../../lib/panelApi"
 
 /**
  * CAPP-94 / U6 — the workspace-memory EDITOR: a companion-window panel to view and
@@ -24,11 +25,32 @@ import type { ExportStateView, AdoptionStateView } from "../../lib/exportView"
  * visible (HARD project rule).
  */
 
-// This panel runs in the COMPANION window and calls `window.companionApi` (NOT
-// `window.api`). The authoritative `companionApi` type — including the workspace-
-// memory accessors + the onWorkspaceMemoryChanged listener — is declared in
-// CompanionApp.tsx (the companion renderer's global). Both files are part of the
-// same companion build, so that declaration applies here.
+// CAPP-106 / S1 — this panel no longer reaches for `window.companionApi` directly. It
+// receives a `PanelApi` (`api` prop) so it works identically in EITHER the companion
+// window (api over companionApi) OR the main-window modal (api over window.api). The
+// memory/export/adoption accessors + the onWorkspaceMemoryChanged listener all flow
+// through `api`.
+
+/** The slice of `PanelApi` this panel uses (memory mutators + export + adoption). */
+type WorkspaceMemoryApi = Pick<
+  PanelApi,
+  | "getWorkspaceMemory"
+  | "setWorkspaceInstructions"
+  | "addWorkspaceFinding"
+  | "editWorkspaceFinding"
+  | "deleteWorkspaceFinding"
+  | "setWorkspaceFindingPinned"
+  | "onWorkspaceMemoryChanged"
+  | "getExportState"
+  | "enableExport"
+  | "disableExport"
+  | "setUntaggedExportEnabled"
+  | "regenerateExport"
+  | "getAdoptionState"
+  | "wireImportBlock"
+  | "unwireImportBlock"
+  | "setExportSelfWired"
+>
 
 interface Props {
   /** The PINNED target workspace: a real id, or `null`/undefined for the untagged
@@ -41,9 +63,13 @@ interface Props {
    *  record fields (`instructions`, `findings`) ride in via the panel props spread. */
   instructions?: string
   findings?: WorkspaceFinding[]
+  /** CAPP-106 / S1 — the bridge (companion OR main window). The panel calls every
+   *  mutator through this; absent → it degrades (no live data, mutations are no-ops). */
+  api?: WorkspaceMemoryApi
 }
 
 export default function WorkspaceMemoryPanel(props: Props) {
+  const api = props.api
   // Capture the pinned target ONCE. The ref guarantees every mutation uses the
   // open-time workspace even if a future prop re-push (live-refresh) re-renders us.
   const pinnedRef = useRef<string | null>(props.workspaceId ?? null)
@@ -79,15 +105,16 @@ export default function WorkspaceMemoryPanel(props: Props) {
   // instructions DRAFT from the backend when the user isn't mid-edit AND hasn't an
   // unsaved local edit (so a remote change never clobbers a draft they're typing).
   const refresh = useCallback(async () => {
+    if (!api) return
     try {
-      const rec = await window.companionApi.getWorkspaceMemory(pinnedId)
+      const rec = await api.getWorkspaceMemory(pinnedId)
       setRecord(rec)
       setSavedInstr(rec.instructions)
       setInstrText((cur) => (cur === savedInstrRef.current ? rec.instructions : cur))
     } catch {
       /* leave the last-known record on a transient IPC failure */
     }
-  }, [pinnedId])
+  }, [pinnedId, api])
 
   // A ref mirror of savedInstr so `refresh` can compare without depending on it (and
   // re-subscribing the live listener on every save).
@@ -103,7 +130,8 @@ export default function WorkspaceMemoryPanel(props: Props) {
   // panel matches when it equals pinnedId.
   useEffect(() => {
     void refresh()
-    const off = window.companionApi.onWorkspaceMemoryChanged((changedId) => {
+    if (!api) return
+    const off = api.onWorkspaceMemoryChanged((changedId) => {
       // Match the pinned target. Untagged matches the null-equivalent push (null OR the
       // sentinel stem) DIRECTLY — not via record state — so there is no mount-race window
       // where the first push could arrive before the record is populated.
@@ -114,17 +142,17 @@ export default function WorkspaceMemoryPanel(props: Props) {
     })
     return off
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinnedId, isUntagged])
+  }, [pinnedId, isUntagged, api])
 
   const rows = useMemo(() => deriveFindingRows(record?.findings ?? []), [record])
 
   const instrDirty = instrText !== savedInstr
 
   const handleSaveInstructions = useCallback(async () => {
-    if (savingInstr) return
+    if (savingInstr || !api) return
     setSavingInstr(true)
     try {
-      const rec = await window.companionApi.setWorkspaceInstructions(pinnedId, instrText)
+      const rec = await api.setWorkspaceInstructions(pinnedId, instrText)
       setRecord(rec)
       setSavedInstr(rec.instructions)
       setInstrText(rec.instructions)
@@ -133,7 +161,7 @@ export default function WorkspaceMemoryPanel(props: Props) {
     } finally {
       setSavingInstr(false)
     }
-  }, [pinnedId, instrText, savingInstr])
+  }, [pinnedId, instrText, savingInstr, api])
 
   const beginEdit = useCallback((f: WorkspaceFinding) => {
     setEditingId(f.id)
@@ -145,9 +173,9 @@ export default function WorkspaceMemoryPanel(props: Props) {
     if (!id) return
     const text = editText.trim()
     setEditingId(null)
-    if (!text) return // a blank edit is a no-op (use Delete to remove)
+    if (!text || !api) return // a blank edit is a no-op (use Delete to remove)
     try {
-      await window.companionApi.editWorkspaceFinding(pinnedId, id, text)
+      await api.editWorkspaceFinding(pinnedId, id, text)
       // The onWorkspaceMemoryChanged push re-fetches; do an optimistic local update too
       // so the row reflects instantly even if the push lags.
       setRecord((prev) =>
@@ -158,12 +186,13 @@ export default function WorkspaceMemoryPanel(props: Props) {
     } catch {
       /* push-refresh reconciles */
     }
-  }, [editingId, editText, pinnedId])
+  }, [editingId, editText, pinnedId, api])
 
   const handleDelete = useCallback(
     async (id: string) => {
+      if (!api) return
       try {
-        await window.companionApi.deleteWorkspaceFinding(pinnedId, id)
+        await api.deleteWorkspaceFinding(pinnedId, id)
         setRecord((prev) =>
           prev ? { ...prev, findings: prev.findings.filter((f) => f.id !== id) } : prev,
         )
@@ -171,7 +200,7 @@ export default function WorkspaceMemoryPanel(props: Props) {
         /* push-refresh reconciles */
       }
     },
-    [pinnedId],
+    [pinnedId, api],
   )
 
   // CAPP-97 — pin/unpin a finding. A pinned finding is the only thing never evicted
@@ -180,9 +209,10 @@ export default function WorkspaceMemoryPanel(props: Props) {
   // update; the onWorkspaceMemoryChanged push re-fetches to reconcile.
   const handleTogglePin = useCallback(
     async (f: WorkspaceFinding) => {
+      if (!api) return
       const next = !f.pinned
       try {
-        await window.companionApi.setWorkspaceFindingPinned(pinnedId, f.id, next)
+        await api.setWorkspaceFindingPinned(pinnedId, f.id, next)
         setRecord((prev) =>
           prev
             ? { ...prev, findings: prev.findings.map((x) => (x.id === f.id ? { ...x, pinned: next } : x)) }
@@ -192,20 +222,20 @@ export default function WorkspaceMemoryPanel(props: Props) {
         /* push-refresh reconciles */
       }
     },
-    [pinnedId],
+    [pinnedId, api],
   )
 
   const handleAdd = useCallback(async () => {
     const text = addText.trim()
-    if (!text) return
+    if (!text || !api) return
     setAddText("")
     try {
-      const f = await window.companionApi.addWorkspaceFinding(pinnedId, text, "user")
+      const f = await api.addWorkspaceFinding(pinnedId, text, "user")
       setRecord((prev) => (prev ? { ...prev, findings: [...prev.findings, f] } : prev))
     } catch {
       /* push-refresh reconciles */
     }
-  }, [addText, pinnedId])
+  }, [addText, pinnedId, api])
 
   // ── CAPP-99 / E1 — Export (workspace-tier portability) ──────────────────────────
   const [exportState, setExportState] = useState<ExportStateView | null>(null)
@@ -216,26 +246,27 @@ export default function WorkspaceMemoryPanel(props: Props) {
   const [copied, setCopied] = useState(false)
 
   const refreshExport = useCallback(async () => {
+    if (!api) return
     try {
-      const st = await window.companionApi.getExportState(pinnedId)
+      const st = await api.getExportState(pinnedId)
       setExportState(st)
       // A folderless/untagged workspace can only use Mode C — pin the selector there.
       if (st.folderless) setExportMode("C")
     } catch {
       /* leave the last-known export state on a transient IPC failure */
     }
-  }, [pinnedId])
+  }, [pinnedId, api])
 
   useEffect(() => {
     void refreshExport()
   }, [refreshExport])
 
   const handleEnableExport = useCallback(async () => {
-    if (exportBusy) return
+    if (exportBusy || !api) return
     setExportBusy(true)
     setExportError(null)
     try {
-      const res = await window.companionApi.enableExport(
+      const res = await api.enableExport(
         pinnedId,
         exportMode,
         exportMode === "C" ? customPath.trim() || undefined : undefined,
@@ -247,7 +278,7 @@ export default function WorkspaceMemoryPanel(props: Props) {
         // clicked "Enable export" PAST the warning, honor that as the deliberate gesture and
         // flip it ON immediately (the explicit second confirmation lives in the warning copy).
         if (isUntagged && !res.state.enabled) {
-          const on = await window.companionApi.setUntaggedExportEnabled(true)
+          const on = await api.setUntaggedExportEnabled(true)
           setExportState(on)
         } else {
           setExportState(res.state)
@@ -258,29 +289,29 @@ export default function WorkspaceMemoryPanel(props: Props) {
     } finally {
       setExportBusy(false)
     }
-  }, [exportBusy, pinnedId, exportMode, customPath, isUntagged])
+  }, [exportBusy, pinnedId, exportMode, customPath, isUntagged, api])
 
   const handleDisableExport = useCallback(async () => {
-    if (exportBusy) return
+    if (exportBusy || !api) return
     setExportBusy(true)
     setExportError(null)
     try {
-      const st = await window.companionApi.disableExport(pinnedId)
+      const st = await api.disableExport(pinnedId)
       setExportState(st)
     } catch (err) {
       setExportError(String(err))
     } finally {
       setExportBusy(false)
     }
-  }, [exportBusy, pinnedId])
+  }, [exportBusy, pinnedId, api])
 
   const handleToggleUntagged = useCallback(
     async (enabled: boolean) => {
-      if (exportBusy) return
+      if (exportBusy || !api) return
       setExportBusy(true)
       setExportError(null)
       try {
-        const st = await window.companionApi.setUntaggedExportEnabled(enabled)
+        const st = await api.setUntaggedExportEnabled(enabled)
         setExportState(st)
       } catch (err) {
         setExportError(String(err))
@@ -288,7 +319,7 @@ export default function WorkspaceMemoryPanel(props: Props) {
         setExportBusy(false)
       }
     },
-    [exportBusy],
+    [exportBusy, api],
   )
 
   const handleCopyImportLine = useCallback(async () => {
@@ -311,24 +342,25 @@ export default function WorkspaceMemoryPanel(props: Props) {
   const [wireMsg, setWireMsg] = useState<string | null>(null)
 
   const refreshAdoption = useCallback(async () => {
+    if (!api) return
     try {
-      const st = await window.companionApi.getAdoptionState(pinnedId)
+      const st = await api.getAdoptionState(pinnedId)
       setAdoption(st)
     } catch {
       /* leave the last-known adoption state on a transient IPC failure */
     }
-  }, [pinnedId])
+  }, [pinnedId, api])
 
   useEffect(() => {
     void refreshAdoption()
   }, [refreshAdoption, exportState])
 
   const handleWire = useCallback(async () => {
-    if (wireBusy) return
+    if (wireBusy || !api) return
     setWireBusy(true)
     setWireMsg(null)
     try {
-      const res = await window.companionApi.wireImportBlock(pinnedId)
+      const res = await api.wireImportBlock(pinnedId)
       if (!res.ok) setWireMsg(res.error ?? "Could not wire the import.")
       else if (res.status === "already") setWireMsg("Already wired — no change.")
       else setWireMsg("Wired into CLAUDE.local.md.")
@@ -338,14 +370,14 @@ export default function WorkspaceMemoryPanel(props: Props) {
     } finally {
       setWireBusy(false)
     }
-  }, [wireBusy, pinnedId, refreshAdoption])
+  }, [wireBusy, pinnedId, refreshAdoption, api])
 
   const handleUnwire = useCallback(async () => {
-    if (wireBusy) return
+    if (wireBusy || !api) return
     setWireBusy(true)
     setWireMsg(null)
     try {
-      const res = await window.companionApi.unwireImportBlock(pinnedId)
+      const res = await api.unwireImportBlock(pinnedId)
       if (!res.ok) setWireMsg(res.error ?? "Could not unwire the import.")
       else if (res.status === "absent") setWireMsg("No Mission Control import block found.")
       else setWireMsg("Removed our import block from CLAUDE.local.md.")
@@ -355,15 +387,15 @@ export default function WorkspaceMemoryPanel(props: Props) {
     } finally {
       setWireBusy(false)
     }
-  }, [wireBusy, pinnedId, refreshAdoption])
+  }, [wireBusy, pinnedId, refreshAdoption, api])
 
   const handleToggleSelfWired = useCallback(
     async (selfWired: boolean) => {
-      if (wireBusy) return
+      if (wireBusy || !api) return
       setWireBusy(true)
       setWireMsg(null)
       try {
-        await window.companionApi.setExportSelfWired(pinnedId, selfWired)
+        await api.setExportSelfWired(pinnedId, selfWired)
         await refreshAdoption()
       } catch (err) {
         setWireMsg(String(err))
@@ -371,7 +403,7 @@ export default function WorkspaceMemoryPanel(props: Props) {
         setWireBusy(false)
       }
     },
-    [wireBusy, pinnedId, refreshAdoption],
+    [wireBusy, pinnedId, refreshAdoption, api],
   )
 
   const title = props.workspaceName?.trim()

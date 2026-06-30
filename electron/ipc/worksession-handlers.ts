@@ -2,11 +2,19 @@ import { ipcMain } from "electron"
 import type { SessionService } from "../services/sessions"
 import type { RecallService, RecallScope } from "../services/recall"
 import type { WorkspaceMemoryService, PromoteEntry } from "../services/workspaceMemory"
+import type { PanelService } from "../services/panels"
 
 export function registerWorkSessionHandlers(deps: {
   workSessionService: SessionService
   recallService: RecallService
   workspaceMemoryService: WorkspaceMemoryService
+  /**
+   * CAPP-106 / S1 (F1) — used ONLY by `worksession:open-overview` to SHOW the fetched
+   * overview as a panel (the main-window parity for the companion's `openSessionOverview`,
+   * which RecallPanel's session-header click drives). Injected so the handler stays
+   * decoupled from the panel layer; absent → open-overview is a no-op returning null.
+   */
+  panelService?: PanelService
   /**
    * CAPP-101 (P1) — the "export settled" SPAWN BARRIER (§C). Awaited BEFORE a fresh agent
    * spawn for the spawning session's OWN workspace: for an ADOPTED workspace it blocks until
@@ -19,7 +27,8 @@ export function registerWorkSessionHandlers(deps: {
    */
   awaitExportSettled?: (workspaceId: string | undefined) => Promise<void>
 }) {
-  const { workSessionService, recallService, workspaceMemoryService, awaitExportSettled } = deps
+  const { workSessionService, recallService, workspaceMemoryService, awaitExportSettled, panelService } =
+    deps
 
   /** Default-safe barrier await: no-op when unwired, and a throw never blocks the spawn. */
   const settle = async (workspaceId: string | undefined): Promise<void> => {
@@ -116,6 +125,16 @@ export function registerWorkSessionHandlers(deps: {
   ipcMain.handle("worksession:overview", (_e, sessionId: string) =>
     workSessionService.getOverview(sessionId),
   )
+  // CAPP-106 / S1 (F1) — fetch a session's overview and SHOW it as a panel. The
+  // main-window parity for the companion's `openSessionOverview` (RecallPanel's
+  // session-header click). From the main-window modal this is recursive-by-design:
+  // it opens ANOTHER panel into the same host. Returns the new panel (or null when
+  // there's no overview / no panel layer wired).
+  ipcMain.handle("worksession:open-overview", (_e, sessionId: string) => {
+    const overview = workSessionService.getOverview(sessionId)
+    if (!overview || !panelService) return null
+    return panelService.show("session-overview", overview, "right")
+  })
   ipcMain.handle("worksession:timeline", (_e, sessionId: string) =>
     workSessionService.getSessionTimeline(sessionId),
   )

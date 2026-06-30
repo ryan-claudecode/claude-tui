@@ -1,12 +1,19 @@
 import { useState, useEffect, useMemo, useRef } from "react"
+import type { PanelApi } from "../../lib/panelApi"
 
 /**
- * CAPP-86 — "The Lexicon" RecallPanel (companion window). A read-only cross-session
- * search over every finding + summary the work sessions have accumulated. A search
- * box + always-visible status filters; results are grouped by their owning session,
- * and a session header click-opens that session's Overview. NO hover-reveal — every
- * control (the search box, the filter pills, the "Open overview" button) is always
- * visible.
+ * CAPP-86 — "The Lexicon" RecallPanel. A read-only cross-session search over every
+ * finding + summary the work sessions have accumulated. A search box + always-visible
+ * status filters; results are grouped by their owning session, and a session header
+ * click-opens that session's Overview. NO hover-reveal — every control (the search box,
+ * the filter pills, the "Open overview" button) is always visible.
+ *
+ * CAPP-106 / S1 — the panel no longer reaches for `window.companionApi` directly; it
+ * receives a `PanelApi` (`api` prop) so it renders identically in EITHER the companion
+ * window (api over companionApi) OR the main-window modal (api over window.api). The
+ * `api` is OPTIONAL by design: when absent (a hermetic harness, or a host that never
+ * built one — the A.4 NEGATIVE CONTROL), the panel degrades to a blank/disabled box and
+ * NEVER throws.
  */
 
 type RecallStatus = "active" | "ruled-out" | "summary"
@@ -32,24 +39,8 @@ interface RecallHit {
 
 type StatusFilter = "all" | "active" | "ruled-out"
 
-interface RecallApi {
-  recall: (
-    query: string,
-    scope?: "session" | "workspace" | "all",
-    sessionId?: string,
-  ) => Promise<RecallHit[]>
-  openSessionOverview: (sessionId: string) => Promise<unknown>
-}
-
-function recallApi(): RecallApi | undefined {
-  // The companion preload exposes these on companionApi; guard so the panel renders
-  // (degraded) even if invoked in a context without them (e.g. a hermetic harness).
-  const api = (window as unknown as { companionApi?: Partial<RecallApi> }).companionApi
-  if (api && typeof api.recall === "function" && typeof api.openSessionOverview === "function") {
-    return api as RecallApi
-  }
-  return undefined
-}
+/** The slice of `PanelApi` this panel uses. When absent → degraded/disabled (A.4). */
+type RecallApi = Pick<PanelApi, "recall" | "openSessionOverview">
 
 export interface RecallPanelProps {
   /** Optional initial query (e.g. when Claude opens the panel pre-seeded). */
@@ -58,9 +49,13 @@ export interface RecallPanelProps {
   scope?: "session" | "workspace" | "all"
   /** The caller's session id, so 'workspace'/'session' scope resolves correctly. */
   sessionId?: string
+  /** CAPP-106 / S1 — the bridge (companion OR main window). Optional: when absent the
+   *  panel degrades to a blank/disabled box (the A.4 negative control) — never throws. */
+  api?: RecallApi
 }
 
 export default function RecallPanel(props: RecallPanelProps) {
+  const api = props.api
   const [query, setQuery] = useState(props.query ?? "")
   const [scope, setScope] = useState<"session" | "workspace" | "all">(props.scope ?? "workspace")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
@@ -71,7 +66,6 @@ export default function RecallPanel(props: RecallPanelProps) {
   // Debounce the live search so each keystroke doesn't fire an IPC round-trip.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    const api = recallApi()
     if (debounceRef.current) clearTimeout(debounceRef.current)
     const q = query.trim()
     if (!q) {
@@ -96,7 +90,7 @@ export default function RecallPanel(props: RecallPanelProps) {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [query, scope, props.sessionId])
+  }, [query, scope, props.sessionId, api])
 
   const filtered = useMemo(() => {
     if (statusFilter === "all") return hits
@@ -120,7 +114,7 @@ export default function RecallPanel(props: RecallPanelProps) {
   }, [filtered])
 
   const openOverview = (sessionId: string) => {
-    recallApi()?.openSessionOverview(sessionId)
+    api?.openSessionOverview(sessionId)
   }
 
   return (

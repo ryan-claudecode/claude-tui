@@ -1,7 +1,12 @@
 import { useState, useCallback } from "react"
 import type { ContextSourceView, InspectResultView } from "../../lib/contextInspectorView"
+import type { PanelApi } from "../../lib/panelApi"
 
 export type { ContextSourceView, InspectResultView } from "../../lib/contextInspectorView"
+
+/** The slice of `PanelApi` this panel uses (the read-only Refresh re-read). When
+ *  absent → Refresh is a no-op and the seed result stays put (CAPP-106 / S1). */
+type ContextInspectorApi = Pick<PanelApi, "inspectWorkspaceContext">
 
 /**
  * CAPP-98 / I1 — the Context Inspector panel (READ-ONLY).
@@ -32,6 +37,9 @@ export interface ContextInspectorProps {
   workspaceName?: string
   /** The seed inspection result (fetched main-side at open). */
   result: InspectResultView
+  /** CAPP-106 / S1 — the bridge (companion OR main window). Optional; absent → the
+   *  Refresh button is a no-op and the seed result stays put (never throws). */
+  api?: ContextInspectorApi
 }
 
 /** The verbatim honesty header (design doc §A.2) — v1 must NOT overclaim. */
@@ -95,17 +103,17 @@ export default function ContextInspectorPanel(props: ContextInspectorProps) {
   const [refreshing, setRefreshing] = useState(false)
 
   const handleRefresh = useCallback(async () => {
-    if (refreshing) return
+    if (refreshing || !props.api) return
     setRefreshing(true)
     try {
-      const fresh = await window.companionApi.inspectWorkspaceContext(workspaceId)
+      const fresh = await props.api.inspectWorkspaceContext(workspaceId)
       if (fresh) setResult(fresh)
     } catch {
       // A read-only inspection failure is non-fatal — keep the last good result.
     } finally {
       setRefreshing(false)
     }
-  }, [workspaceId, refreshing])
+  }, [workspaceId, refreshing, props.api])
 
   return (
     <div className="context-inspector-panel">

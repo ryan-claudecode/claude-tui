@@ -8,7 +8,11 @@ import {
   type PermissionDecision,
 } from "./services/streamProtocol"
 
-contextBridge.exposeInMainWorld("api", {
+// CAPP-106 / S1 — capture the exposed object in a const so its INFERRED shape can be
+// exported (`MainApi`) and structurally checked against `PanelApi` by the parity GATE
+// (src/lib/panelApiParity.test.ts). The build fails if window.api ever lacks a method a
+// behavior panel needs — the standing guard against the F1 class of drift.
+const mainApi = {
   // Platform info (used by renderer for cross-platform key mapping)
   platform: process.platform,
 
@@ -64,6 +68,17 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("worksession:recall-summary", scope, sessionId),
   getSessionOverview: (sessionId: string) =>
     ipcRenderer.invoke("worksession:overview", sessionId),
+  // CAPP-106 / S1 (F1) — main-window parity for the two previously companion-ONLY
+  // PanelApi accessors. openSessionOverview fetches a session's overview and SHOWS it
+  // as a panel (recursive-by-design from the modal — RecallPanel's session-header click);
+  // promoteSessionToWorkspace promotes a session's findings into its OWNING workspace
+  // (resolved main-side from the bare sessionId — the SessionOverviewPanel "Push context
+  // to workspace" button). The parity GATE (src/lib/panelApiParity.test.ts) fails the
+  // build if either is missing from window.api.
+  openSessionOverview: (sessionId: string) =>
+    ipcRenderer.invoke("worksession:open-overview", sessionId),
+  promoteSessionToWorkspace: (sessionId: string) =>
+    ipcRenderer.invoke("worksession:promote-to-workspace", sessionId),
   getSessionTimeline: (sessionId: string) =>
     ipcRenderer.invoke("worksession:timeline", sessionId),
   handoffTerminal: (sessionId: string, terminalId: string) =>
@@ -423,4 +438,10 @@ contextBridge.exposeInMainWorld("api", {
 
   // Cleanup
   removeAllListeners: (channel: string) => ipcRenderer.removeAllListeners(channel),
-})
+}
+
+/** The inferred shape of the main-window bridge — consumed ONLY by the type-parity GATE
+ *  (src/lib/panelApiParity.test.ts). Type-only; never imported at runtime by the renderer. */
+export type MainApi = typeof mainApi
+
+contextBridge.exposeInMainWorld("api", mainApi)

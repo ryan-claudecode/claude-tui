@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron"
 
-contextBridge.exposeInMainWorld("companionApi", {
+// CAPP-106 / S1 — capture the exposed object in a const so its INFERRED shape can be
+// exported (`CompanionApi`) and structurally checked against `PanelApi` by the parity
+// GATE (src/lib/panelApiParity.test.ts).
+const companionApi = {
   onPanelShow: (cb: (panel: any) => void) =>
     ipcRenderer.on("panel:show", (_e, panel) => cb(panel)),
   onPanelUpdate: (cb: (payload: { id: string; props: any }) => void) =>
@@ -112,4 +115,10 @@ contextBridge.exposeInMainWorld("companionApi", {
   windowMinimize: () => ipcRenderer.send("companion:minimize"),
   windowMaximize: () => ipcRenderer.send("companion:maximize"),
   windowClose: () => ipcRenderer.send("companion:close"),
-})
+}
+
+/** The inferred shape of the companion-window bridge — consumed ONLY by the type-parity
+ *  GATE (src/lib/panelApiParity.test.ts). Type-only; never imported at runtime. */
+export type CompanionApi = typeof companionApi
+
+contextBridge.exposeInMainWorld("companionApi", companionApi)

@@ -1,9 +1,14 @@
 import { useState, useCallback } from "react"
 import ReactMarkdown from "react-markdown"
+import type { PanelApi } from "../../lib/panelApi"
 
 interface RuledOut { id: string; text: string; correction?: string }
 interface Note { id: string; text: string }
 interface TermRow { id: string; name: string; lastState: string; activity?: string }
+
+/** The slice of `PanelApi` this panel uses. When absent → the push button errors out
+ *  inline rather than throwing (CAPP-106 / S1). */
+type OverviewApi = Pick<PanelApi, "promoteSessionToWorkspace">
 
 export interface OverviewProps {
   id: string
@@ -15,6 +20,9 @@ export interface OverviewProps {
   provisionalFindings: Note[]
   terminals: TermRow[]
   onReopenTerminal?: (terminalId: string) => void
+  /** CAPP-106 / S1 — the bridge (companion OR main window). Optional; when absent the
+   *  "Push context to workspace" button degrades to an inline error, never a throw. */
+  api?: OverviewApi
 }
 
 export default function SessionOverviewPanel(props: OverviewProps) {
@@ -30,7 +38,11 @@ export default function SessionOverviewPanel(props: OverviewProps) {
     if (pushState === "busy" || pushState === "done") return
     setPushState("busy")
     try {
-      const res = await window.companionApi.promoteSessionToWorkspace(id)
+      if (!props.api) {
+        setPushState("error")
+        return
+      }
+      const res = await props.api.promoteSessionToWorkspace(id)
       if (res?.ok) {
         setPushedCount(res.count)
         setPushState("done")
@@ -40,7 +52,7 @@ export default function SessionOverviewPanel(props: OverviewProps) {
     } catch {
       setPushState("error")
     }
-  }, [id, pushState])
+  }, [id, pushState, props.api])
 
   const hasFindings = notes.length > 0 || ruledOut.length > 0
 
