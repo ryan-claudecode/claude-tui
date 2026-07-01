@@ -13,8 +13,10 @@ interface Props {
    *  gate so a config-declared xhigh model also shows the toggle. Absent → built-ins only. */
   extraXhigh?: string[]
   /** CAPP-117 — the terminal's current `--effort`. Ultracode forces xhigh, so the
-   *  toggle also HIDES when an explicit non-xhigh effort is selected (they'd fight):
-   *  visible requires `!effort || effort === "xhigh"`. */
+   *  toggle also HIDES when an explicit non-xhigh effort is selected (they'd fight)
+   *  — but ONLY while ultracode is OFF. An ACTIVE ultracode always renders (there
+   *  must never be an invisible active state the user can't turn off): visible
+   *  requires `!effort || effort === "xhigh" || ultracode`. */
   effort?: string
   /** The terminal's current ultracode posture (true = on). */
   ultracode?: boolean
@@ -41,8 +43,14 @@ interface Props {
  * so the toggle is HIDDEN (a) for a non-xhigh model (Sonnet / Haiku) via
  * {@link modelSupportsXhigh}, AND (b) when an explicit non-xhigh `--effort` is selected
  * (CAPP-117) — the two would fight (ultracode wins, silently no-op'ing the picked
- * effort), so we don't offer ultracode there. Visible requires
- * `!effort || effort === "xhigh"`.
+ * effort), so we don't offer ultracode there. EXCEPTION to (b): when ultracode is
+ * currently ON the toggle ALWAYS renders — the effort gate only suppresses OFFERING
+ * ultracode, never hides an active one. CAPP-108 deliberately preserves `ref.effort`
+ * while ultracode is ON (the spawn suppresses it; it's restored on toggle-off), so a
+ * persisted `ultracode:true` + non-xhigh effort is a real state; hiding the toggle
+ * there would strand ultracode active with no control to see it or turn it off.
+ * The model gate has no such exception: a non-xhigh model can't have ultracode ON
+ * (setTerminalModel forces it off on the switch).
  */
 export default function AgentUltracodeToggle({
   sessionId,
@@ -72,10 +80,13 @@ export default function AgentUltracodeToggle({
 
   // Gate visibility on the selected model supporting xhigh AND no explicit non-xhigh
   // effort — ultracode forces xhigh, so it's meaningless (and would be rejected) on a
-  // non-xhigh model, and it would silently override a picked lower effort. The hooks
-  // above ALWAYS run (rules-of-hooks); only the render output is gated.
+  // non-xhigh model, and it would silently override a picked lower effort. The effort
+  // gate carries `!on`: it only suppresses OFFERING ultracode — an ACTIVE ultracode
+  // (a persisted ultracode:true ref whose preserved effort is non-xhigh) must always
+  // render, or the user couldn't see or turn off the active state. The hooks above
+  // ALWAYS run (rules-of-hooks); only the render output is gated.
   if (!modelSupportsXhigh(model, extraXhigh)) return null
-  if (effort && effort !== "xhigh") return null
+  if (effort && effort !== "xhigh" && !on) return null
 
   return (
     <label className={`agent-ultracode-toggle agent-ultracode-toggle-${variant}`}>
