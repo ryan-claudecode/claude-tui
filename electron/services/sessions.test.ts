@@ -2300,6 +2300,60 @@ describe("SessionService CAPP-108 ultracode — model-switch + effort preservati
   })
 })
 
+// CAPP-117 — effort-switch consistency: choosing an EXPLICIT non-xhigh effort while
+// ultracode is ON must force ultracode OFF (ultracode suppresses --effort, so the pick
+// would otherwise silently do nothing); choosing xhigh (or clearing effort) KEEPS it.
+// Mirrors the CAPP-108 model-switch describe.
+describe("SessionService CAPP-117 effort-switch ultracode consistency", () => {
+  function setup() {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    // A STRUCTURED terminal on an xhigh-capable model with a saved effort level.
+    svc.addTerminal(s.id, {
+      id: "t1", name: "x", cwd: "/r", lastState: "active",
+      engine: "structured", model: "opus", effort: "high",
+    } as any)
+    return { svc, term, sessionId: s.id }
+  }
+
+  it("picking a NON-xhigh effort while ultracode is ON forces ultracode OFF and APPLIES the effort", () => {
+    const { svc, term, sessionId } = setup()
+    const on = svc.setTerminalUltracode(sessionId, "t1", true)!
+    expect(term.spawned.at(-1)!.ultracode).toBe(true)
+    expect(term.spawned.at(-1)!.effort).toBeUndefined() // suppressed while ultracode is on
+
+    svc.setTerminalEffort(sessionId, on.terminalId, "low")
+
+    const last = term.spawned.at(-1)!
+    expect(last.ultracode).toBe(false) // forced off so the pick can take
+    expect(last.effort).toBe("low") // and the chosen effort actually applies
+    expect(svc.get(sessionId)!.terminals[0].ultracode).toBeFalsy()
+    expect(svc.get(sessionId)!.terminals[0].effort).toBe("low")
+  })
+
+  it("picking `xhigh` KEEPS ultracode (xhigh is what ultracode already forces)", () => {
+    const { svc, term, sessionId } = setup()
+    const on = svc.setTerminalUltracode(sessionId, "t1", true)!
+
+    svc.setTerminalEffort(sessionId, on.terminalId, "xhigh")
+
+    expect(term.spawned.at(-1)!.ultracode).toBe(true) // kept
+    expect(svc.get(sessionId)!.terminals[0].ultracode).toBe(true)
+  })
+
+  it("CLEARING the effort (blank) KEEPS ultracode", () => {
+    const { svc, term, sessionId } = setup()
+    const on = svc.setTerminalUltracode(sessionId, "t1", true)!
+
+    svc.setTerminalEffort(sessionId, on.terminalId, "   ")
+
+    expect(term.spawned.at(-1)!.ultracode).toBe(true) // kept
+    expect(svc.get(sessionId)!.terminals[0].ultracode).toBe(true)
+  })
+})
+
 // CAPP-113 — the config models.xhigh override, END-TO-END through the model-switch
 // keepUltra classification: the `xhighModels` seam (wired to resolveXhighModels in
 // ipc.ts) must actually feed modelSupportsXhigh, so a config-declared xhigh model

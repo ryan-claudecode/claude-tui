@@ -7616,14 +7616,6 @@ body {
   border-color: var(--accent);
   color: var(--accent-contrast, #fff);
 }
-.agent-ultracode-toggle-caution {
-  font-size: 10px;
-  color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 360px;
-}
 
 /* CAPP-39 gate ③ — the raw-view escape-hatch button, sitting beside the model
    picker in the composer controls row. Quiet by default; reveals the accent on hover. */
@@ -7931,10 +7923,6 @@ body {
   padding: 2px 7px;
 }
 .agent-model-picker-composer .agent-model-picker-custom { width: 130px; }
-.agent-ultracode-toggle-composer .agent-ultracode-toggle-caution {
-  font-size: 9px;
-  max-width: 300px;
-}
 
 /* ------------------------------------------------------------------ */
 /* BO-3 — tool-permission prompt overlay                               */

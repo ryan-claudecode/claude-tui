@@ -12,6 +12,12 @@ interface Props {
   /** CAPP-113 — the ADDITIVE config `models.xhigh` list, threaded into the visibility
    *  gate so a config-declared xhigh model also shows the toggle. Absent → built-ins only. */
   extraXhigh?: string[]
+  /** CAPP-117 — the terminal's current `--effort`. Ultracode forces xhigh, so the
+   *  toggle also HIDES when an explicit non-xhigh effort is selected (they'd fight)
+   *  — but ONLY while ultracode is OFF. An ACTIVE ultracode always renders (there
+   *  must never be an invisible active state the user can't turn off): visible
+   *  requires `!effort || effort === "xhigh" || ultracode`. */
+  effort?: string
   /** The terminal's current ultracode posture (true = on). */
   ultracode?: boolean
   /** "header" | "composer" — style variant, mirroring the effort/model pickers. */
@@ -33,20 +39,25 @@ interface Props {
  * component unmounts and remounts on the fresh terminal — no local state to keep in
  * sync. Read from the terminal ref (`ultracode` prop).
  *
- * VISIBILITY GATE: ultracode forces xhigh reasoning, which only some models support
- * (Fable 5 / Opus 4.8 / Opus 4.7). The toggle is HIDDEN for a non-xhigh model
- * (Sonnet / Haiku) via {@link modelSupportsXhigh} — the SAME helper the backend
- * could gate on — so it never offers an option the model can't honor.
- *
- * COST CAUTION: ultracode fans out up to 16 concurrent / 1,000 total subagents per
- * task. That stacks on the app's own Mission/worktree orchestration, so the control
- * carries a one-line caution near it.
+ * VISIBILITY GATE (two conditions, both must hold): ultracode forces xhigh reasoning,
+ * so the toggle is HIDDEN (a) for a non-xhigh model (Sonnet / Haiku) via
+ * {@link modelSupportsXhigh}, AND (b) when an explicit non-xhigh `--effort` is selected
+ * (CAPP-117) — the two would fight (ultracode wins, silently no-op'ing the picked
+ * effort), so we don't offer ultracode there. EXCEPTION to (b): when ultracode is
+ * currently ON the toggle ALWAYS renders — the effort gate only suppresses OFFERING
+ * ultracode, never hides an active one. CAPP-108 deliberately preserves `ref.effort`
+ * while ultracode is ON (the spawn suppresses it; it's restored on toggle-off), so a
+ * persisted `ultracode:true` + non-xhigh effort is a real state; hiding the toggle
+ * there would strand ultracode active with no control to see it or turn it off.
+ * The model gate has no such exception: a non-xhigh model can't have ultracode ON
+ * (setTerminalModel forces it off on the switch).
  */
 export default function AgentUltracodeToggle({
   sessionId,
   terminalId,
   model,
   extraXhigh,
+  effort,
   ultracode,
   variant = "composer",
   onSwitched,
@@ -67,10 +78,15 @@ export default function AgentUltracodeToggle({
     }
   }, [sessionId, terminalId, on, busy, onSwitched])
 
-  // Gate visibility on the selected model supporting xhigh — ultracode forces
-  // xhigh, so it's meaningless (and would be rejected) on a non-xhigh model. The
-  // hooks above ALWAYS run (rules-of-hooks); only the render output is gated.
+  // Gate visibility on the selected model supporting xhigh AND no explicit non-xhigh
+  // effort — ultracode forces xhigh, so it's meaningless (and would be rejected) on a
+  // non-xhigh model, and it would silently override a picked lower effort. The effort
+  // gate carries `!on`: it only suppresses OFFERING ultracode — an ACTIVE ultracode
+  // (a persisted ultracode:true ref whose preserved effort is non-xhigh) must always
+  // render, or the user couldn't see or turn off the active state. The hooks above
+  // ALWAYS run (rules-of-hooks); only the render output is gated.
   if (!modelSupportsXhigh(model, extraXhigh)) return null
+  if (effort && effort !== "xhigh" && !on) return null
 
   return (
     <label className={`agent-ultracode-toggle agent-ultracode-toggle-${variant}`}>
@@ -91,9 +107,6 @@ export default function AgentUltracodeToggle({
       >
         {on ? "On" : "Off"}
       </button>
-      <span className="agent-ultracode-toggle-caution" title="Ultracode fans out up to 16 concurrent / 1,000 total subagents per task — that stacks on this app's own Mission/worktree orchestration.">
-        ⚠ up to 16 concurrent / 1,000 subagents per task — stacks on Mission/worktree orchestration
-      </span>
     </label>
   )
 }

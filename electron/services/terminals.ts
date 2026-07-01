@@ -524,6 +524,12 @@ interface HeadlessTerminal {
   buffer: LineBuffer
   /** Whether an `init` event has been seen — drives the needs-auth signal. */
   sawInit: boolean
+  /** CAPP-117 — the most recent non-empty stderr line, kept so an exit-BEFORE-init
+   *  can be classified honestly: only a stderr that actually reads like an auth
+   *  failure synthesizes `needs_auth`; anything else surfaces the real line as a
+   *  plain errored result (so e.g. a bad `--settings`/flag self-describes instead of
+   *  a misleading "not signed in"). */
+  lastStderr?: string
   /**
    * BO-7 — the `/`-command picker catalog captured off the `init` event
    * (slash_commands + skills). Undefined until init arrives (a headless
@@ -660,6 +666,15 @@ function shellWrap(command: string, args: string[]): { shell: string; shellArgs:
     shellArgs: ["-l", "-c", cmd],
   }
 }
+
+/**
+ * CAPP-117 — does a headless process's captured stderr read like an auth failure?
+ * Gates the exit-before-init `needs_auth` synth so a NON-auth early crash (a bad
+ * `--settings` JSON, a bad flag, a bad model) surfaces its real stderr instead of a
+ * misleading Sign-in banner. Broad but auth-specific: "sign in", "log in"/"login",
+ * "auth", "API key".
+ */
+const AUTH_STDERR_RE = /sign ?in|log ?in|login|auth|api key/i
 
 /** Strip ANSI escape sequences so captured output is searchable plain text. */
 // eslint-disable-next-line no-control-regex
@@ -1020,6 +1035,36 @@ export class TerminalService {
       JSON.stringify({ mcpServers: { claudetui: { type: "sse", url } } }, null, 2),
     )
     return path
+  }
+
+  /**
+   * CAPP-117 — materialize the CONSTANT {@link ULTRACODE_SETTINGS} payload to a stable
+   * temp FILE and return its absolute path (`{tmpdir}/claudetui/ultracode-settings.json`),
+   * or null on ANY fs failure. Ultracode is enabled with `--settings <path>`, NOT the
+   * inline JSON string: the embedded `{ } " :` do NOT survive the powershell→claude argv
+   * hop on Windows (the downstream-argv quirk documented in shellWrap.test.ts:20-24), so
+   * `--settings '{"ultracode":true}'` reaches `claude` as mangled JSON and it dies with
+   * `Error: Invalid JSON provided to --settings`. A bare file path has no interior
+   * metachars, so it round-trips intact (file-based `--settings` is live-verified with
+   * auth intact). The content is CONSTANT → one shared file suffices; only (re)written
+   * when missing or divergent (idempotent, no churn). A dedicated seam so the failure
+   * path (null → omit the flag) is unit-testable. */
+  private ultracodeSettingsPath(): string | null {
+    try {
+      const dir = join(tmpdir(), "claudetui")
+      mkdirSync(dir, { recursive: true })
+      const path = join(dir, "ultracode-settings.json")
+      let current: string | null = null
+      try {
+        current = readFileSync(path, "utf8")
+      } catch {
+        current = null
+      }
+      if (current !== ULTRACODE_SETTINGS) writeFileSync(path, ULTRACODE_SETTINGS)
+      return path
+    } catch {
+      return null
+    }
   }
 
   setDefaults(command: string, args: string[]) {
@@ -1394,12 +1439,15 @@ export class TerminalService {
     // default; both fall back to the `opus` alias, never to no model.
     const resolvedModel = (typeof model === "string" && model.trim()) || this.defaultModel
     args.push("--model", resolvedModel)
-    // CAPP-108 — the ultracode knob (a per-session BOOLEAN). When ON, the spawn
-    // appends `--settings '{"ultracode":true}'` (the inline JSON is single-quoted
-    // by the argv-safe shellWrap, so its `{ } " :` round-trip intact — no temp
-    // file). Ultracode forces xhigh reasoning internally, so when it's ON we OMIT
-    // `--effort` entirely (passing both is undefined behavior — see below). A
-    // per-terminal `ultracode` (toggle respawn / persisted ref) wins over the
+    // CAPP-108/117 — the ultracode knob (a per-session BOOLEAN). When ON, the spawn
+    // appends `--settings <path>` pointing at a temp FILE that holds the ultracode
+    // payload (see {@link ultracodeSettingsPath}). It is NOT passed inline: the
+    // embedded `{ } " :` do NOT survive the powershell→claude argv hop on Windows —
+    // `claude` would receive mangled JSON and die instantly with
+    // `Error: Invalid JSON provided to --settings` (live-verified). A bare file path
+    // round-trips intact. Ultracode forces xhigh reasoning internally, so when it's
+    // ON we OMIT `--effort` entirely (passing both is undefined behavior — see below).
+    // A per-terminal `ultracode` (toggle respawn / persisted ref) wins over the
     // default; FALSE → the spawn omits `--settings` (byte-unchanged default).
     const resolvedUltracode = ultracode != null ? ultracode === true : this.defaultUltracode
     // CAPP-46 — the reasoning `--effort` knob. UNLIKE `--model` this is CONDITIONAL:
@@ -1413,7 +1461,17 @@ export class TerminalService {
       ? undefined
       : (typeof effort === "string" && effort.trim()) || this.defaultEffort
     if (resolvedEffort) args.push("--effort", resolvedEffort)
-    if (resolvedUltracode) args.push("--settings", ULTRACODE_SETTINGS)
+    if (resolvedUltracode) {
+      // CAPP-117 — file-backed `--settings` (the inline JSON dies on the powershell
+      // argv hop). If the file can't be written, OMIT the flag and warn: a spawn
+      // without ultracode beats a dead terminal that never initializes.
+      const settingsPath = this.ultracodeSettingsPath()
+      if (settingsPath) {
+        args.push("--settings", settingsPath)
+      } else {
+        logWarn("headless", `${id} — could not write the ultracode settings file; spawning WITHOUT ultracode`)
+      }
+    }
     // DEV-skip-permissions — DEV POSTURE, RELEASE BLOCKER. When skipApproval is
     // true (the owner-locked default), the structured spawn skips the per-tool
     // approval gate with `--dangerously-skip-permissions` (matching the legacy
@@ -1510,7 +1568,12 @@ export class TerminalService {
     proc.onStdout((chunk) => drain(entry.buffer.push(chunk)))
     proc.onStderr((chunk) => {
       // Best-effort visibility; the stream itself is the source of truth.
-      logWarn("headless", `${id} stderr: ${String(chunk).trim().slice(0, 200)}`)
+      const text = String(chunk).trim()
+      // CAPP-117 — retain the most recent non-empty stderr line so an exit-before-init
+      // can be classified from what `claude` actually said (auth vs. a bad flag), not
+      // blanket-assumed to be an auth failure.
+      if (text) entry.lastStderr = text.slice(0, 500)
+      logWarn("headless", `${id} stderr: ${text.slice(0, 200)}`)
     })
     proc.onExit(() => {
       // Flush any buffered final (newline-less) line before tearing down. A
@@ -1545,10 +1608,10 @@ export class TerminalService {
   /**
    * Idempotent teardown for a headless terminal — shared by explicit `kill()`
    * (synthAuth=false: a deliberate kill is never an auth failure) and process
-   * exit (synthAuth=true: an exit before any `init` event is a clean
-   * non-interactive auth failure). Running once is guaranteed by the
-   * `headless.has(id)` guard, so a kill followed by the proc's own async exit
-   * doesn't double-emit.
+   * exit (synthAuth=true: an exit before any `init` event MIGHT be an auth failure,
+   * but only when the captured stderr actually reads like one — see CAPP-117 below).
+   * Running once is guaranteed by the `headless.has(id)` guard, so a kill followed by
+   * the proc's own async exit doesn't double-emit.
    */
   private teardownHeadless(id: string, opts: { synthAuth: boolean }): void {
     const entry = this.headless.get(id)
@@ -1558,15 +1621,30 @@ export class TerminalService {
     // doesn't hang past the agent's life (a deny is the safe orphan resolution).
     this.rejectPendingPermissions(id, "agent-exited")
     if (opts.synthAuth && !entry.sawInit) {
-      this.emitEvent({
-        type: "stream",
-        id,
-        event: {
-          kind: "needs_auth",
-          message:
-            "Claude Code exited before initializing (no init event) — likely missing or expired subscription auth.",
-        },
-      })
+      // CAPP-117 — an exit-before-init is NOT automatically an auth failure. Only
+      // claim "not signed in" when the captured stderr actually reads like one;
+      // otherwise surface the REAL stderr as a plain errored `result` so the next
+      // spawn failure self-describes (e.g. a bad `--settings`/`--model`/flag) instead
+      // of a misleading Sign-in banner. (The live post-init auth shape emits `init`
+      // first and is classified by parseStreamLine, so it never reaches here.)
+      const stderr = entry.lastStderr?.trim()
+      if (stderr && AUTH_STDERR_RE.test(stderr)) {
+        this.emitEvent({ type: "stream", id, event: { kind: "needs_auth", message: stderr } })
+      } else {
+        this.emitEvent({
+          type: "stream",
+          id,
+          event: {
+            kind: "result",
+            isError: true,
+            subtype: "spawn_failed",
+            result: stderr
+              ? `Claude Code exited before initializing: ${stderr}`
+              : "Claude Code exited before initializing (no output).",
+            raw: {},
+          },
+        })
+      }
     }
     this.headless.delete(id)
     this.outputBuffers.delete(id)
