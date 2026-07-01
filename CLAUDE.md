@@ -326,6 +326,8 @@ Forms are special: `show_form` keeps the MCP call open (a pending promise in
 
 `theme.mode` controls the CSS theme (`"light"` | `"dark"` | `"cold-dark"`). Per-field overrides (`fontSize`, `fontFamily`) take precedence over theme defaults.
 
+**`models` (optional, CAPP-113)** — the never-stale model-picker block: `{ "default"?, "extra"?: string[], "hidden"?: string[], "xhigh"?: string[] }`. Claude Code exposes NO dynamic model discovery, so this is the no-code-edit recovery path when new models ship. Picker list = (`MODEL_ALIASES` ∪ `extra`) − `hidden` (`resolveModelOptions` in `streamProtocol.ts`); `default` overrides the spawn-default for NEW terminals (an explicit `rendering.model` still wins); `xhigh` additively marks models as xhigh-capable for ultracode gating (`modelSupportsXhigh`). A model typed into the picker's statically-visible "Custom…" entry is persisted into `extra` after a successful switch and pushed live to open windows via `config:models-changed`. The headless `init` event's RESOLVED model id is captured per terminal (`resolvedModel`) and shown as the picker tooltip.
+
 ## Build
 
 Uses electron-vite. Config in `electron.vite.config.ts`.
