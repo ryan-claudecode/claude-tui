@@ -156,6 +156,24 @@ export class CompanionService {
     })
   }
 
+  /**
+   * CAPP-116 — send ONLY if the companion is already open. NEVER creates the window
+   * (and never `show()`s/restores an existing one): the non-creating sibling of
+   * `sendToCompanion` for broadcast-shaped events (`panel:hide-all`) that must not
+   * resurrect a companion the user closed. Chains on `readyPromise` so an
+   * open-but-still-loading window still receives the event.
+   */
+  sendIfOpen(channel: string, ...args: unknown[]): void {
+    if (!this.win || this.win.isDestroyed()) return
+    const win = this.win
+    const ready = this.readyPromise ?? Promise.resolve()
+    ready.then(() => {
+      if (!win.isDestroyed()) {
+        win.webContents.send(channel, ...args)
+      }
+    })
+  }
+
   /** Close the companion window if open. */
   close(): void {
     if (this.win && !this.win.isDestroyed()) {

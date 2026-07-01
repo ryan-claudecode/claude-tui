@@ -23,16 +23,42 @@ function makeBridges() {
   const main: Captured[] = []
   const companion: Captured[] = []
   let focusCount = 0
+  // CAPP-116 — model the REAL CompanionService window lifecycle: `sendToCompanion`
+  // lazily CREATES the window when closed (getOrCreate), `sendIfOpen` delivers only
+  // when it is already open. A plain-push fake hid the ghost-resurrection bug.
+  let windowOpen = false
+  let createdCount = 0
   const svc = new PanelService()
   svc.setMainBridge({ send: (channel, ...args) => main.push({ channel, args }) })
   svc.setCompanion({
-    sendToCompanion: (channel, ...args) => companion.push({ channel, args }),
-    close: () => {},
+    sendToCompanion: (channel, ...args) => {
+      if (!windowOpen) {
+        windowOpen = true
+        createdCount++
+      }
+      companion.push({ channel, args })
+    },
+    sendIfOpen: (channel, ...args) => {
+      if (windowOpen) companion.push({ channel, args })
+    },
+    close: () => {
+      windowOpen = false
+    },
     focus: () => {
       focusCount++
     },
   })
-  return { svc, main, companion, focusState: () => focusCount }
+  return {
+    svc,
+    main,
+    companion,
+    focusState: () => focusCount,
+    companionCreated: () => createdCount,
+    companionIsOpen: () => windowOpen,
+    closeCompanion: () => {
+      windowOpen = false
+    },
+  }
 }
 
 describe("PanelService — modal-by-default routing (CAPP-109 / S2)", () => {
@@ -56,7 +82,7 @@ describe("PanelService — modal-by-default routing (CAPP-109 / S2)", () => {
     expect(env.companion).toHaveLength(0)
   })
 
-  it("hideAll() clears the main mirror and signals the companion (clear-everything)", () => {
+  it("hideAll() clears the main mirror; a CLOSED companion is neither poked nor created (CAPP-116)", () => {
     env.svc.show("markdown", { content: "a" })
     env.svc.show("table", { rows: [] })
     env.main.length = 0
@@ -65,8 +91,9 @@ describe("PanelService — modal-by-default routing (CAPP-109 / S2)", () => {
     // Each tracked panel gets a panel:hide on the main bridge + the panel:hide-all sweep.
     expect(env.main.filter((c) => c.channel === "panel:hide")).toHaveLength(2)
     expect(env.main.some((c) => c.channel === "panel:hide-all")).toBe(true)
-    // routeAll always pokes the companion for the sweep.
-    expect(env.companion.some((c) => c.channel === "panel:hide-all")).toBe(true)
+    // CAPP-116 — the sweep must NOT touch a closed companion (sendIfOpen, non-creating).
+    expect(env.companion).toHaveLength(0)
+    expect(env.companionCreated()).toBe(0)
     expect(env.svc.list()).toHaveLength(0)
   })
 })
@@ -256,5 +283,56 @@ describe("PanelService — dismissWindowPanels on companion close (CAPP-110 / S3
     const a = env.svc.show("markdown", { content: "# A" })
     env.svc.dismissWindowPanels()
     expect(env.svc.list().map((p) => p.id)).toEqual([a.id])
+  })
+})
+
+describe("PanelService — ghost-companion guard on broadcasts (CAPP-116)", () => {
+  let env: ReturnType<typeof makeBridges>
+  beforeEach(() => {
+    env = makeBridges()
+  })
+
+  it("hideAll() after the user CLOSES the companion does not resurrect it", () => {
+    const a = env.svc.show("markdown", { content: "# A" })
+    env.svc.popOut(a.id) // sendToCompanion — legitimately creates the window
+    expect(env.companionCreated()).toBe(1)
+    expect(env.companionIsOpen()).toBe(true)
+
+    // User closes the companion (the real close chokepoint reconciles state).
+    env.closeCompanion()
+    env.svc.dismissWindowPanels()
+    env.companion.length = 0
+
+    // The MCP hide_all_panels path — must not spawn an empty ghost window.
+    env.svc.hideAll()
+    expect(env.companionCreated()).toBe(1) // still just the pop-out creation
+    expect(env.companionIsOpen()).toBe(false)
+    expect(env.companion).toHaveLength(0)
+  })
+
+  it("hideAll() with the companion OPEN still delivers the hide-all sweep (no regression)", () => {
+    const a = env.svc.show("markdown", { content: "# A" })
+    env.svc.popOut(a.id)
+    env.companion.length = 0
+
+    env.svc.hideAll()
+    expect(env.companion.some((c) => c.channel === "panel:hide-all")).toBe(true)
+    expect(env.companionCreated()).toBe(1) // delivery, not creation
+  })
+
+  it("submitForm's untracked-panel fallback does not create a closed companion", async () => {
+    // Force the "shouldn't happen" branch: submit an id PanelService never tracked.
+    env.svc.submitForm("panel-untracked", { ok: true })
+    expect(env.companionCreated()).toBe(0)
+    expect(env.companion).toHaveLength(0)
+    // Main mirror still gets the defensive clear.
+    expect(env.main.some((c) => c.channel === "panel:hide")).toBe(true)
+  })
+
+  it("popOut remains the ONLY broadcast-adjacent path allowed to create the window", () => {
+    const a = env.svc.show("markdown", { content: "# A" })
+    expect(env.companionCreated()).toBe(0) // modal show never touches the companion
+    env.svc.popOut(a.id)
+    expect(env.companionCreated()).toBe(1)
   })
 })

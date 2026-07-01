@@ -20,6 +20,14 @@ export interface PanelState {
 
 interface CompanionBridge {
   sendToCompanion(channel: string, ...args: unknown[]): void
+  /**
+   * CAPP-116 — the NON-CREATING send: deliver only when the companion window is
+   * already open; never lazily create (or restore) it. `routeAll` broadcasts go
+   * through this so a `hide_all_panels` with the companion closed can't respawn
+   * an empty ghost window (`sendToCompanion`'s create-on-demand is correct ONLY
+   * for `popOut`'s `panel:show`).
+   */
+  sendIfOpen(channel: string, ...args: unknown[]): void
   close(): void
   /**
    * CAPP-110 / S3 — raise the companion window to the top, CREATING it if needed
@@ -129,12 +137,14 @@ export class PanelService {
 
   /**
    * CAPP-109 / S2 — route a PANEL-LESS event (`panel:hide-all`). No `panel` to key off,
-   * so emit to the main bridge ALWAYS and to the companion unconditionally — `hide-all`
-   * is a harmless clear-everything signal even if the companion is closed.
+   * so emit to the main bridge ALWAYS and to the companion ONLY IF IT IS ALREADY OPEN.
+   * CAPP-116: this must be the non-creating send — `sendToCompanion` lazily CREATES the
+   * window via `getOrCreate`, so an unconditional broadcast here respawned an empty
+   * ghost companion on any `hide_all_panels` after the user closed it.
    */
   private routeAll(channel: string, ...args: unknown[]) {
     this.mainBridge?.send(channel, ...args)
-    this.sendToCompanion(channel, ...args)
+    this.companion?.sendIfOpen(channel, ...args)
   }
 
   show(type: string, props: Record<string, any>, position?: string): PanelState {
