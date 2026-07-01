@@ -7,6 +7,9 @@ import type {
   AgentCatalog,
   StreamEvent,
 } from "../electron/services/streamProtocol"
+// CAPP-113 — the config-extensible model option derivation (pure, zero-dep) + the
+// built-in alias list, shared with the picker so the effective list can't drift.
+import { MODEL_ALIASES, resolveModelOptions } from "../electron/services/streamProtocol"
 import type { PromoteEntry } from "./lib/killSessionPromote"
 import Sidebar from "./components/Sidebar"
 import TabBar from "./components/TabBar"
@@ -268,6 +271,11 @@ declare global {
       onThemeChanged: (callback: (mode: string) => void) => void
       // CAPP-39 gate ④ — set the DEFAULT engine for NEW terminals (rollback write-path)
       setRenderingEngine: (engine: "xterm" | "structured") => Promise<void>
+      // CAPP-113 — persist a user-entered CUSTOM model into config models.extra
+      addModelExtra: (value: string) => Promise<void>
+      // CAPP-113 — push: the config models block changed (custom model persisted);
+      // useSessions folds it into config state so the pickers refresh live.
+      onConfigModelsChanged: (callback: (models: any) => void) => void
       // CAPP-95 / D1 — local-history net (durable-brain data-loss recovery).
       listLocalHistory: () => Promise<Array<{ hash: string; date: string; message: string }>>
       restoreLocalHistory: (hash: string, relPath?: string) => Promise<{ restored: string[] }>
@@ -530,6 +538,16 @@ export default function App() {
   }, [activeTerminals, activeTerminalId, isTerminalBusy, handleInterrupt])
 
   const { splitLeft, splitRight, toggleSplit } = useSplitView(activeTerminals, activeTerminalId)
+
+  // CAPP-113 — the effective, config-extensible model list the pickers offer (built-in
+  // aliases ∪ config models.extra − hidden), derived once and threaded to every model
+  // picker so the list stays in lockstep. `extraXhigh` (config models.xhigh) feeds the
+  // ultracode toggle's visibility gate. Both degrade to built-ins when config is absent.
+  const modelOptions = useMemo(
+    () => resolveModelOptions(MODEL_ALIASES, config?.models),
+    [config?.models],
+  )
+  const extraXhigh: string[] | undefined = config?.models?.xhigh
 
   const {
     paletteOpen,
@@ -1296,6 +1314,8 @@ export default function App() {
               transcriptCache={transcriptCacheRef.current}
               onSwitched={setActiveTerminalId}
               isTerminalBusy={isTerminalBusy}
+              modelOptions={modelOptions}
+              extraXhigh={extraXhigh}
               themeMode={themeMode}
               fontFamily={config?.fontFamily}
               fontSize={config?.fontSize}
@@ -1317,6 +1337,9 @@ export default function App() {
                     model={t.model}
                     effort={t.effort}
                     ultracode={t.ultracode}
+                    modelOptions={modelOptions}
+                    resolvedModel={t.resolvedModel}
+                    extraXhigh={extraXhigh}
                     ccConversationId={t.ccConversationId}
                     transcriptCache={transcriptCacheRef.current}
                     active={t.id === activeTerminalId}

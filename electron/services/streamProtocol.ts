@@ -51,11 +51,58 @@ export const HEADLESS_FLAGS: readonly string[] = [
 // process share ONE source of truth for the alias list + the default.
 // ---------------------------------------------------------------------------
 
-/** The model aliases offered in the structured-engine picker. Order = picker order. */
-export const MODEL_ALIASES: readonly string[] = ["opus", "opus[1m]", "sonnet", "haiku"]
+/**
+ * The model aliases offered in the structured-engine picker. Order = picker order.
+ *
+ * CAPP-113 — "never-stale": Claude Code exposes NO dynamic model discovery (no CLI
+ * list command, no SDK call, no local file), so this is the full documented alias
+ * set. An alias resolves to the latest model for the user's tier and is immune to a
+ * specific pinned version being disabled (the fable-5 failure). Staleness is made
+ * recoverable WITHOUT a code edit via config `models.extra` (see
+ * {@link resolveModelOptions}) + the picker's free-text "Custom…" entry.
+ */
+export const MODEL_ALIASES: readonly string[] = [
+  "best",
+  "fable",
+  "opus",
+  "opus[1m]",
+  "sonnet",
+  "sonnet[1m]",
+  "haiku",
+  "opusplan",
+]
 
 /** The default model when `config.rendering.model` is unset — the `opus` alias. */
 export const DEFAULT_MODEL = "opus"
+
+/**
+ * CAPP-113 — the effective, config-extensible model list the picker offers, derived
+ * PURELY (no filesystem) so it's Node-testable + shared by the renderer picker: the
+ * built-in {@link MODEL_ALIASES} UNION `models.extra`, MINUS `models.hidden`, order
+ * preserved (aliases first, extras after) and de-duplicated. A malformed/absent
+ * `models` block degrades to just the aliases (each field is type-guarded, never
+ * throws). Hidden takes precedence over extra (an entry in both is hidden).
+ */
+export function resolveModelOptions(
+  aliases: readonly string[],
+  models?: { extra?: unknown; hidden?: unknown } | null,
+): string[] {
+  const clean = (v: unknown): string[] =>
+    Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim())
+      : []
+  const extra = clean(models?.extra)
+  const hidden = new Set(clean(models?.hidden))
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of [...aliases, ...extra]) {
+    const v = typeof raw === "string" ? raw.trim() : ""
+    if (!v || seen.has(v) || hidden.has(v)) continue
+    seen.add(v)
+    out.push(v)
+  }
+  return out
+}
 
 // ---------------------------------------------------------------------------
 // Reasoning-effort control (CAPP-46) — the `--effort` knob for the headless
@@ -96,23 +143,40 @@ export const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh
  *  `claude` command line as `'{"ultracode":true}'`. */
 export const ULTRACODE_SETTINGS = `{"ultracode":true}`
 
-/** CAPP-108 — model alias/id prefixes that support `xhigh` reasoning (and thus can
+/** CAPP-108/113 — model ALIAS prefixes that support `xhigh` reasoning (and thus can
  *  honor ultracode, which forces xhigh). Matched case-insensitively by prefix so
- *  `opus`, `opus[1m]`, and pinned `opus-…` / `fable-5-…` ids all resolve; Sonnet
- *  and Haiku are deliberately absent. */
-export const XHIGH_MODELS: readonly string[] = ["opus", "fable-5", "fable5"]
+ *  `opus`, `opus[1m]`, `fable`, `best`, `opusplan` all resolve; Sonnet and Haiku are
+ *  deliberately absent. Pinned FULL ids (`claude-opus-4-8`, `claude-fable-5-…`) are
+ *  matched by the family-substring branch in {@link modelSupportsXhigh}, not here. */
+export const XHIGH_MODELS: readonly string[] = ["opus", "fable", "best", "opusplan"]
+
+/** CAPP-113 — full-id family substrings that mark an xhigh-capable model. A pinned id
+ *  (`claude-opus-4-8`, `claude-fable-5-20260101`) does NOT start with an alias prefix
+ *  (it starts with `claude-`), so it's matched by `includes` on these instead. */
+const XHIGH_ID_FAMILIES: readonly string[] = ["opus-4", "fable"]
 
 /**
- * CAPP-108 — does the given `--model` (alias or pinned id) support `xhigh`
+ * CAPP-108/113 — does the given `--model` (alias or pinned id) support `xhigh`
  * reasoning? Gates the ultracode toggle's visibility (ultracode forces xhigh, so a
- * non-xhigh model can't honor it). Fable 5 / Opus 4.8 / Opus 4.7 support xhigh;
+ * non-xhigh model can't honor it). Opus / Fable / Best / opusplan support xhigh;
  * Sonnet / Haiku do not. An empty/undefined model defaults to the `opus` alias
  * (DEFAULT_MODEL), which DOES support xhigh, so a fresh terminal shows the toggle.
- * Case-insensitive, matched by prefix so `opus[1m]` and pinned ids pass.
+ * Case-insensitive. Three match strategies (any hit → true):
+ *   1. alias prefix    — `m` starts with one of {@link XHIGH_MODELS} (`opus[1m]`, …)
+ *   2. full-id family  — `m` contains `opus-4` or `fable` (pinned `claude-opus-4-8`)
+ *   3. config override — `m` starts with one of `extraXhigh` (config `models.xhigh`),
+ *      an ADDITIVE escape hatch so a NEW xhigh-capable model is honored with no code
+ *      edit. Empty/absent override changes nothing (byte-identical to the alias-only
+ *      behavior), so existing callers/tests are unaffected.
  */
-export function modelSupportsXhigh(model?: string): boolean {
+export function modelSupportsXhigh(model?: string, extraXhigh?: readonly string[]): boolean {
   const m = (model && model.trim() ? model : DEFAULT_MODEL).trim().toLowerCase()
-  return XHIGH_MODELS.some((x) => m.startsWith(x))
+  const extra = Array.isArray(extraXhigh)
+    ? extraXhigh.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim().toLowerCase())
+    : []
+  if ([...XHIGH_MODELS, ...extra].some((x) => m.startsWith(x))) return true
+  if (XHIGH_ID_FAMILIES.some((x) => m.includes(x))) return true
+  return false
 }
 
 // ---------------------------------------------------------------------------

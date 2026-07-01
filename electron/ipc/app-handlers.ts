@@ -11,6 +11,7 @@ import {
   setThemeMode,
   setRenderingEngine,
   setAgentRailOpen,
+  addModelExtra,
   type TuiConfig,
   type ThemeMode,
   type RenderingEngine,
@@ -73,6 +74,27 @@ export function registerAppHandlers(deps: {
   // mount. Mirrors the setThemeMode write-path otherwise.
   ipcMain.handle("config:set-agent-rail-open", (_e, open: boolean) => {
     setAgentRailOpen(open)
+  })
+  // CAPP-113 — persist a user-entered CUSTOM model into config models.extra so it
+  // appears in the picker from then on. Called only after a SUCCESSFUL switch to the
+  // custom value (the picker's free-text entry). addModelExtra persists (idempotent +
+  // de-duping) and returns whether it actually wrote; only then do we (a) mirror onto
+  // the in-memory config snapshot (returned by config:get) and (b) PUSH the fresh
+  // models block to every window on `config:models-changed` (the mission:updated /
+  // theme:changed broadcast pattern) so already-mounted pickers refresh WITHOUT an
+  // app restart — the renderer fetches config exactly once on mount.
+  ipcMain.handle("config:add-model-extra", (_e, value: string) => {
+    if (!addModelExtra(value)) return
+    const v = value.trim()
+    if (!config.models) config.models = {}
+    const extra = Array.isArray(config.models.extra) ? config.models.extra : []
+    if (!extra.includes(v)) {
+      extra.push(v)
+      config.models.extra = extra
+    }
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send("config:models-changed", config.models)
+    }
   })
 
   // App testing tools

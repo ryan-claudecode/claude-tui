@@ -853,6 +853,41 @@ describe("SessionService convo recording", () => {
   })
 })
 
+// CAPP-113 — the resolved-model echo: the headless `init` stream event reports the
+// RESOLVED full model id; SessionService records it onto the terminal ref (the
+// picker's tooltip). Mirrors the convo-recording seam above (same onEvent stream).
+describe("SessionService resolvedModel recording (CAPP-113)", () => {
+  it("records the resolved model id off a stream init event onto the terminal ref", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+
+    term.emit({ type: "stream", id: terminalId, event: { kind: "init", model: "claude-opus-4-8" } })
+
+    const ref = svc.get(session.id)!.terminals.find((t) => t.id === terminalId)
+    expect(ref?.resolvedModel).toBe("claude-opus-4-8")
+  })
+
+  it("ignores non-init stream events and an init with a missing/blank model (ref untouched)", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+
+    term.emit({ type: "stream", id: terminalId, event: { kind: "assistant_delta", text: "hi" } })
+    term.emit({ type: "stream", id: terminalId, event: { kind: "init" } })
+    term.emit({ type: "stream", id: terminalId, event: { kind: "init", model: "   " } })
+
+    const ref = svc.get(session.id)!.terminals.find((t) => t.id === terminalId)
+    expect(ref?.resolvedModel).toBeUndefined()
+
+    // And a later VALID init still lands (the guards above didn't wedge anything).
+    term.emit({ type: "stream", id: terminalId, event: { kind: "init", model: "claude-fable-5" } })
+    expect(svc.get(session.id)!.terminals[0].resolvedModel).toBe("claude-fable-5")
+  })
+})
+
 describe("SessionService identity-bound spawn", () => {
   it("spawns terminals with their work-session id (for identity-bound MCP) and pastes nothing", () => {
     const term = new FakeTerminals()
@@ -2262,5 +2297,48 @@ describe("SessionService CAPP-108 ultracode — model-switch + effort preservati
     svc.setTerminalUltracode(sessionId, on.terminalId, false)
     expect(term.spawned.at(-1)!.effort).toBe("high") // restored on the spawn
     expect(svc.get(sessionId)!.terminals[0].effort).toBe("high")
+  })
+})
+
+// CAPP-113 — the config models.xhigh override, END-TO-END through the model-switch
+// keepUltra classification: the `xhighModels` seam (wired to resolveXhighModels in
+// ipc.ts) must actually feed modelSupportsXhigh, so a config-declared xhigh model
+// PRESERVES ultracode where the built-in matcher alone would force it off.
+describe("SessionService CAPP-113 xhighModels config-override (keepUltra)", () => {
+  function setup(xhighModels?: () => string[]) {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000, xhighModels })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    // A STRUCTURED terminal on an xhigh-capable model (mirrors the CAPP-108 setup).
+    svc.addTerminal(s.id, {
+      id: "t1", name: "x", cwd: "/r", lastState: "active",
+      engine: "structured", model: "opus",
+    } as any)
+    return { svc, term, sessionId: s.id }
+  }
+
+  it("switching to a config-declared xhigh model KEEPS ultracode (the seam feeds keepUltra)", () => {
+    const { svc, term, sessionId } = setup(() => ["zeus"])
+    const on = svc.setTerminalUltracode(sessionId, "t1", true)!
+    expect(term.spawned.at(-1)!.ultracode).toBe(true)
+
+    svc.setTerminalModel(sessionId, on.terminalId, "zeus")
+
+    const last = term.spawned.at(-1)!
+    expect(last.model).toBe("zeus")
+    expect(last.ultracode).toBe(true) // kept — config declared zeus xhigh-capable
+    expect(svc.get(sessionId)!.terminals[0].ultracode).toBe(true)
+  })
+
+  it("CONTROL: without the override the same switch forces ultracode OFF (built-in matcher unchanged)", () => {
+    const { svc, term, sessionId } = setup() // no xhighModels seam → default () => []
+    const on = svc.setTerminalUltracode(sessionId, "t1", true)!
+    expect(term.spawned.at(-1)!.ultracode).toBe(true)
+
+    svc.setTerminalModel(sessionId, on.terminalId, "zeus")
+
+    expect(term.spawned.at(-1)!.ultracode).toBe(false)
+    expect(svc.get(sessionId)!.terminals[0].ultracode).toBeFalsy()
   })
 })

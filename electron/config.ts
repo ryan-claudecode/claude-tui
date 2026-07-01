@@ -2,7 +2,7 @@ import { join } from "node:path"
 import { homedir } from "node:os"
 import { readFileSync } from "node:fs"
 import { loadVersioned, saveVersioned, type Migration } from "./persist"
-import { DEFAULT_MODEL } from "./services/streamProtocol"
+import { DEFAULT_MODEL, MODEL_ALIASES } from "./services/streamProtocol"
 
 export interface ThemeConfig {
   fontFamily?: string
@@ -128,6 +128,31 @@ export interface ContextConfig {
   injectMaxBytes?: number
 }
 
+/**
+ * CAPP-113 — the config-extensible model list, the "never-stale" escape hatch.
+ * Claude Code exposes NO dynamic model discovery, so the app's static
+ * {@link MODEL_ALIASES} can only go stale as new models ship. This block lets the
+ * user recover staleness WITHOUT a code edit. Additive/optional — no schema version
+ * bump (mirrors the RenderingConfig/AttentionConfig precedent). Every field is
+ * best-effort + type-guarded by its resolver ({@link resolveModelOptions},
+ * {@link resolveModelsDefault}, {@link resolveXhighModels}); a malformed block is
+ * ignored, never fatal.
+ *
+ *  - `default` — override the spawn-default model for NEW terminals (overrides the
+ *    hard-coded {@link DEFAULT_MODEL}; a set `rendering.model` still wins over it).
+ *  - `extra`   — additional aliases/ids appended to the picker (after the built-ins).
+ *  - `hidden`  — aliases/ids removed from the picker (takes precedence over extra).
+ *  - `xhigh`   — additional models that support xhigh reasoning (so the ultracode
+ *    toggle offers them + a model-switch preserves ultracode); additive to the
+ *    built-in {@link XHIGH_MODELS} matcher.
+ */
+export interface ModelsConfig {
+  default?: string
+  extra?: string[]
+  hidden?: string[]
+  xhigh?: string[]
+}
+
 export interface TuiConfig {
   workspaceScanPaths: string[]
   defaultCommand?: string
@@ -138,6 +163,7 @@ export interface TuiConfig {
   permissions?: PermissionsConfig
   agentRail?: AgentRailConfig
   context?: ContextConfig
+  models?: ModelsConfig
 }
 
 /**
@@ -233,6 +259,31 @@ export const DEFAULT_INJECT_MAX_BYTES = 8192
 export function resolveInjectMaxBytes(config?: { context?: ContextConfig } | null): number {
   const v = config?.context?.injectMaxBytes
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : DEFAULT_INJECT_MAX_BYTES
+}
+
+/**
+ * CAPP-113 — resolve the config `models.default` override for the spawn-default model
+ * of NEW structured terminals. Returns the trimmed value when it's a non-empty string,
+ * else undefined (the caller then falls back to the ambient seed / {@link DEFAULT_MODEL}).
+ * Pure + deterministic; a malformed/absent block is ignored.
+ */
+export function resolveModelsDefault(config?: { models?: ModelsConfig } | null): string | undefined {
+  const d = config?.models?.default
+  return typeof d === "string" && d.trim() ? d.trim() : undefined
+}
+
+/**
+ * CAPP-113 — resolve the ADDITIVE config `models.xhigh` list threaded into the
+ * {@link modelSupportsXhigh} matcher (the ultracode toggle's visibility gate + the
+ * model-switch keepUltra logic). Returns a cleaned string[] (blank/non-string members
+ * dropped), or [] when absent/malformed — so the matcher's built-in behavior is
+ * byte-unchanged unless the user opts in. Pure + deterministic.
+ */
+export function resolveXhighModels(config?: { models?: ModelsConfig } | null): string[] {
+  const x = config?.models?.xhigh
+  return Array.isArray(x)
+    ? x.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim())
+    : []
 }
 
 /**
@@ -339,6 +390,34 @@ export function setAgentRailOpen(open: boolean): void {
   saveVersioned(CONFIG_FILE, SCHEMA_VERSION, data)
 }
 
+/**
+ * CAPP-113 — persist a user-entered CUSTOM model into config `models.extra` so it
+ * appears in the picker from then on. Called (via `config:add-model-extra` IPC) only
+ * after a SUCCESSFUL model switch to the custom value, so the list only grows with
+ * models the user actually ran. Mirrors {@link setRenderingEngine}: read-modify-save
+ * through the versioned envelope, creating `models` if absent and preserving its other
+ * fields. IDEMPOTENT + de-duping: a blank value, a built-in alias, or an
+ * already-present extra is a no-op (no write) so it never churns the file / local-history.
+ * Returns TRUE only when it actually persisted — the IPC handler gates the
+ * `config:models-changed` renderer push (and the in-memory snapshot mirror) on this,
+ * so a no-op call never fires a spurious event.
+ */
+export function addModelExtra(value: string): boolean {
+  const v = typeof value === "string" ? value.trim() : ""
+  if (!v || MODEL_ALIASES.includes(v)) return false
+  const data = readRawConfig()
+  const models = data.models && typeof data.models === "object" ? data.models : {}
+  const extra: string[] = Array.isArray(models.extra)
+    ? models.extra.filter((x: unknown) => typeof x === "string")
+    : []
+  if (extra.includes(v)) return false
+  extra.push(v)
+  models.extra = extra
+  data.models = models
+  saveVersioned(CONFIG_FILE, SCHEMA_VERSION, data)
+  return true
+}
+
 export function loadConfig(): TuiConfig {
   const data = readRawConfig()
   return {
@@ -363,5 +442,9 @@ export function loadConfig(): TuiConfig {
     // primer-recall override, not just the type. Absent → resolvePrimerRecall
     // defaults to OFF (the default primer stays byte-identical).
     context: data.context,
+    // CAPP-113 — surface `models` so the config-extensible model list reaches the
+    // renderer picker (config:get → resolveModelOptions) + the wiring layer (default
+    // override, xhigh matcher). Absent → the resolvers degrade to the built-in aliases.
+    models: data.models,
   }
 }

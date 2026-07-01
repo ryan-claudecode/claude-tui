@@ -106,6 +106,13 @@ interface Props {
    *  render an inline picker that respawns this terminal on a different model. */
   sessionId?: string | null
   model?: string
+  /** CAPP-113 — the effective, config-extensible model option list, threaded to the
+   *  model-unavailable banner's inline picker so it derives from the SAME list as the
+   *  composer picker (config models.extra/models.hidden honored on the recovery path
+   *  too — the exact surface the never-stale feature targets). */
+  modelOptions?: string[]
+  /** CAPP-113 — the RESOLVED full model id (init echo) for the banner picker's tooltip. */
+  resolvedModel?: string
   /**
    * BO-12 — the STABLE Claude Code conversation id this terminal is bound to. When
    * present, the view rehydrates its prior turns on mount (cache-first, then the
@@ -136,6 +143,8 @@ export default function AgentView({
   busy = false,
   sessionId,
   model,
+  modelOptions,
+  resolvedModel,
   ccConversationId,
   transcriptCache,
   onSwitched,
@@ -473,6 +482,8 @@ export default function AgentView({
               terminalId={terminalId}
               sessionId={sessionId ?? null}
               model={model}
+              modelOptions={modelOptions}
+              resolvedModel={resolvedModel}
               onSwitched={onSwitched}
               streaming={block.id === caretId}
             />
@@ -604,6 +615,8 @@ export function BlockView({
   terminalId,
   sessionId,
   model,
+  modelOptions,
+  resolvedModel,
   onSwitched,
   streaming = false,
 }: {
@@ -612,6 +625,10 @@ export function BlockView({
   terminalId: string
   sessionId: string | null
   model?: string
+  /** CAPP-113 — the effective option list + resolved-model echo for the
+   *  model-unavailable banner's inline picker (same list as the composer's). */
+  modelOptions?: string[]
+  resolvedModel?: string
   onSwitched?: (terminalId: string) => void
   /** WS5 — this is the trailing assistant block of an actively streaming turn:
    *  render a subtle live caret at the end of its text. */
@@ -649,6 +666,8 @@ export function BlockView({
           terminalId={terminalId}
           sessionId={sessionId}
           model={model}
+          modelOptions={modelOptions}
+          resolvedModel={resolvedModel}
           onSwitched={onSwitched}
         />
       )
@@ -745,12 +764,19 @@ function ModelErrorView({
   terminalId,
   sessionId,
   model,
+  modelOptions,
+  resolvedModel,
   onSwitched,
 }: {
   block: ModelErrorBlock
   terminalId: string
   sessionId: string | null
   model?: string
+  /** CAPP-113 — the effective (config-extensible) option list + resolved-model echo,
+   *  so the recovery banner's picker matches the composer's (models.extra/hidden
+   *  honored on the exact surface a disabled model strands the user on). */
+  modelOptions?: string[]
+  resolvedModel?: string
   onSwitched?: (terminalId: string) => void
 }) {
   const name = block.model ?? model
@@ -771,6 +797,8 @@ function ModelErrorView({
           sessionId={sessionId}
           terminalId={terminalId}
           model={model}
+          options={modelOptions}
+          resolvedModel={resolvedModel}
           variant="banner"
           onSwitched={onSwitched}
         />

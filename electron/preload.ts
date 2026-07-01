@@ -237,6 +237,18 @@ const mainApi = {
   setRenderingEngine: (engine: "xterm" | "structured") =>
     ipcRenderer.invoke("config:set-rendering-engine", engine),
 
+  // CAPP-113 — persist a user-entered CUSTOM model into config models.extra so the
+  // picker offers it from then on. Called by AgentModelPicker only after a SUCCESSFUL
+  // switch to the custom value.
+  addModelExtra: (value: string) => ipcRenderer.invoke("config:add-model-extra", value),
+
+  // CAPP-113 — push: the config models block changed (a custom model was persisted).
+  // The renderer fetches config exactly once on mount, so without this an added extra
+  // would not reach any picker until an app restart. useSessions folds the fresh
+  // block into its config state so the modelOptions memo recomputes live.
+  onConfigModelsChanged: (callback: (models: unknown) => void) =>
+    ipcRenderer.on("config:models-changed", (_e, models) => callback(models)),
+
   // Agent Rail (v1) — persist the rail's open/collapsed preference (GLOBAL). The
   // renderer seeds the rail's collapsed state from config.agentRail on mount and
   // calls this when the user toggles the rail (chevron / shortcut / palette). The
