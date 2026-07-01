@@ -30,6 +30,7 @@ import ToastHost from "./components/ToastHost"
 import ShortcutsHelp from "./components/ShortcutsHelp"
 import HistorySearch from "./components/HistorySearch"
 import MissionPrompt from "./components/MissionPrompt"
+import ScheduleForm from "./components/ScheduleForm"
 import MissionsList from "./components/MissionsList"
 import WorkspaceCreateModal from "./components/WorkspaceCreateModal"
 import RestoreConversationModal from "./components/RestoreConversationModal"
@@ -37,6 +38,7 @@ import { toast } from "./lib/toast"
 import { useSessions } from "./hooks/useSessions"
 import { useAttention } from "./hooks/useAttention"
 import { useMissions } from "./hooks/useMissions"
+import { useSchedules, type ScheduleSummary, type ScheduleFormInput } from "./hooks/useSchedules"
 import { useWorkspaces } from "./hooks/useWorkspaces"
 import { filterByWorkspace } from "./lib/workspaceFilter"
 import { filterAttentionByWorkspace } from "./lib/workspaceScope"
@@ -242,6 +244,14 @@ declare global {
       pauseMission: (id: string) => Promise<any>
       resumeMission: (id: string) => Promise<any>
       deleteMission: (id: string) => Promise<boolean>
+      // CAPP-114 (SCHED-1) — on-device scheduler
+      listSchedules: () => Promise<any[]>
+      createSchedule: (input: any) => Promise<any>
+      updateSchedule: (id: string, patch: any) => Promise<any>
+      deleteSchedule: (id: string) => Promise<boolean>
+      runScheduleNow: (id: string) => Promise<boolean>
+      onScheduleUpdated: (callback: (schedule: any) => void) => void
+      onScheduleRemoved?: (callback: (id: string) => void) => void
       // WW-2b — worktree review
       approveWorktreeTask: (missionId: string, taskId: string) => Promise<{ status?: string; reviewReason?: string } | null>
       rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) => Promise<{ status?: string; reviewReason?: string } | null>
@@ -578,6 +588,18 @@ export default function App() {
     dismiss: dismissMission,
   } = useMissions()
 
+  // CAPP-114 (SCHED-1) — the SCHEDULED surface (seed + push, no polling).
+  const {
+    schedules: allSchedules,
+    create: createSchedule,
+    update: updateSchedule,
+    toggle: toggleSchedule,
+    runNow: runScheduleNow,
+    remove: removeSchedule,
+  } = useSchedules()
+  const [scheduleFormOpen, setScheduleFormOpen] = useState(false)
+  const [editingSchedule, setEditingSchedule] = useState<ScheduleSummary | null>(null)
+
   // WS-D/H — the workspaces surface (switcher + active-workspace scoping). The
   // active id drives the FILTER & HIDE of the three sidebar sections below.
   const {
@@ -606,6 +628,10 @@ export default function App() {
   const scopedMissions = useMemo(
     () => filterByWorkspace(visibleMissions, activeWorkspaceId),
     [visibleMissions, activeWorkspaceId],
+  )
+  const scopedSchedules = useMemo(
+    () => filterByWorkspace(allSchedules, activeWorkspaceId),
+    [allSchedules, activeWorkspaceId],
   )
   const scopedAttention = useMemo(
     () => filterAttentionByWorkspace(attentionEntries, activeWorkspaceId, sessions, allMissions),
@@ -955,6 +981,7 @@ export default function App() {
       { id: "agent-rail", label: railOpen ? "Collapse Agent Rail" : "Open Agent Rail", hint: "Ctrl+Alt+A", keywords: "agent rail right column now cost beacon sidebar collapse", run: toggleRail },
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
       { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: () => setMissionPromptOpen(true) },
+      { id: "schedule", label: "New Scheduled Run…", keywords: "schedule recurring cron timer interval daily automate", run: () => { setEditingSchedule(null); setScheduleFormOpen(true) } },
       { id: "missions", label: "View Missions", keywords: "orchestrate conductor list dashboard status", run: () => setMissionsListOpen(true) },
       { id: "session-overview", label: "Show Session Overview", keywords: "context summary findings notes birdseye", run: () => activeSessionId && openOverview(activeSessionId) },
       { id: "session-timeline", label: "Show Session Timeline", keywords: "history events chronology activity log", run: () => { const s = sessions.find((x) => x.id === activeSessionId); if (s) openTimeline(s.id, s.name) } },
@@ -1127,7 +1154,7 @@ export default function App() {
         setHelpOpen(false)
       } else if (
         e.key === "Escape" &&
-        !paletteOpen && !historyOpen && !missionPromptOpen && !missionsListOpen &&
+        !paletteOpen && !historyOpen && !missionPromptOpen && !missionsListOpen && !scheduleFormOpen &&
         pendingKillId === null
       ) {
         // BO-10 — Esc stops a structured terminal mid-turn (generating OR awaiting a
@@ -1217,6 +1244,16 @@ export default function App() {
         onClose={() => setMissionPromptOpen(false)}
         onSubmit={createMission}
       />
+      <ScheduleForm
+        open={scheduleFormOpen}
+        editing={editingSchedule}
+        onClose={() => setScheduleFormOpen(false)}
+        onSubmit={(input: ScheduleFormInput) => {
+          if (editingSchedule) updateSchedule(editingSchedule.id, input)
+          else createSchedule({ ...input, workspaceId: activeWorkspaceId ?? undefined })
+        }}
+        onDelete={(id) => removeSchedule(id)}
+      />
       <WorkspaceCreateModal
         open={createWorkspaceOpen}
         onClose={() => setCreateWorkspaceOpen(false)}
@@ -1263,6 +1300,11 @@ export default function App() {
         onDismissMission={dismissMission}
         onNewMission={() => setMissionPromptOpen(true)}
         onFocusConductor={(sessionId) => handleSelectSession(sessionId)}
+        schedules={scopedSchedules}
+        onNewSchedule={() => { setEditingSchedule(null); setScheduleFormOpen(true) }}
+        onOpenSchedule={(s) => { setEditingSchedule(s); setScheduleFormOpen(true) }}
+        onToggleSchedule={(id, enabled) => toggleSchedule(id, enabled)}
+        onRunSchedule={(id) => runScheduleNow(id)}
         onNewSession={handleNewSession}
         onKillSession={handleKillSession}
         onKillSessionById={handleKillSessionById}

@@ -108,6 +108,7 @@ describe.runIf(LIVE)("BO-10 LIVE interrupt (real claude -p) — gated by BO10_LI
       stub(), // 20 workspaceMemoryService (CAPP-87)
       stub(), // 21 contextInspectorService (CAPP-98)
       stub(), // 22 exportService (CAPP-99)
+      stub(), // 23 schedulerService (CAPP-114)
     )
     svc.setMcpConfigPath(started.configPath)
     svc.setMcpServerUrl(`http://127.0.0.1:${started.port}/sse`)

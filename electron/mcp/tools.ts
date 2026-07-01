@@ -15,6 +15,7 @@ import type { NotesService } from "../services/notes"
 import type { FileService } from "../services/files"
 import type { UiService } from "../services/ui"
 import type { MissionService } from "../services/mission"
+import type { SchedulerService } from "../services/scheduler"
 import type { SessionService } from "../services/sessions"
 import type { RecallService } from "../services/recall"
 import type { AttentionService } from "../services/attention"
@@ -29,6 +30,7 @@ import { registerPermissionTools } from "./tools/permissions"
 import { registerGitTools } from "./tools/git"
 import { registerAppTools } from "./tools/app"
 import { registerWorkspaceTools } from "./tools/workspaces"
+import { registerScheduleTools } from "./tools/schedules"
 import { registerUiTools } from "./tools/ui"
 
 export type { TerminalIdentity } from "./tools/shared"
@@ -64,6 +66,7 @@ export function registerTools(
   workspaceMemory: WorkspaceMemoryService,
   contextInspector: ContextInspectorService,
   exportService: ExportService,
+  scheduler: SchedulerService,
   identity: TerminalIdentity = {},
 ) {
   registerSessionTools(server, sessions, broadcast, attention, workSessions, workspaces, identity)
@@ -73,6 +76,7 @@ export function registerTools(
   registerPermissionTools(server, sessions, identity, (m, l, t) => notifications.notify(m, l, t))
   registerGitTools(server, git, sessions)
   registerWorkspaceTools(server, workspaces, workSessions, workspaceMemory, contextInspector, exportService, identity)
+  registerScheduleTools(server, scheduler, workspaces, workSessions, identity)
   registerAppTools(
     server,
     sessions,

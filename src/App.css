@@ -6279,6 +6279,313 @@ body {
 }
 
 /* ============================================================
+   CAPP-114 (SCHED-1) — SCHEDULED sidebar section + create/edit overlay.
+   Clones the MISSIONS row + mission-prompt overlay patterns. Every per-row
+   control is STATICALLY VISIBLE (opacity 1, no hover-reveal).
+   ============================================================ */
+.schedules-section { flex-shrink: 0; }
+
+.schedules-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.schedules-new-btn {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 4px;
+  transition: color var(--fast) var(--ease);
+}
+.schedules-new-btn:hover { color: var(--accent); }
+
+.schedule-empty-row {
+  padding: var(--s-1) var(--s-4);
+  color: var(--text-4);
+  font-size: 12px;
+  font-style: italic;
+  cursor: pointer;
+}
+.schedule-empty-row:hover { background: var(--bg-4); }
+
+.schedule-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px var(--s-2);
+  padding: 7px 10px;
+  cursor: pointer;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.schedule-item:hover { background: var(--bg-4); }
+
+.schedule-item-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.schedule-status-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-4);
+  color: var(--text-3);
+}
+.schedule-status-chip.chip-enabled { background: var(--accent-soft); color: var(--accent); }
+.schedule-status-chip.chip-paused  { background: var(--bg-4); color: var(--text-4); }
+
+/* Statically-visible per-row controls (NO hover-reveal). */
+.schedule-toggle-btn,
+.schedule-run-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 1px 3px;
+  opacity: 1;
+  transition: color var(--fast) var(--ease);
+}
+.schedule-toggle-btn:hover,
+.schedule-run-btn:hover { color: var(--accent); }
+
+.schedule-item-line2 {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-left: 2px;
+  overflow: hidden;
+}
+.schedule-recur {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.schedule-next {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.schedule-last {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-4);
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.schedule-last-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-4);
+  flex-shrink: 0;
+}
+.schedule-last.tone-ok .schedule-last-dot { background: var(--attn-3); }
+.schedule-last.tone-error .schedule-last-dot { background: var(--attn-2); }
+.schedule-last.tone-skipped .schedule-last-dot { background: var(--text-4); }
+
+/* --- create/edit overlay (clones the mission-prompt overlay) --- */
+.schedule-form-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-5);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: drop-fade 0.12s var(--ease-out);
+}
+.schedule-form-panel {
+  width: 560px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3), 0 0 0 1px var(--accent-soft);
+  animation: cmdk-pop 0.16s var(--ease-out);
+}
+.schedule-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.schedule-form-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-0);
+}
+.schedule-form-close {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color var(--fast) var(--ease);
+}
+.schedule-form-close:hover { color: var(--text-0); }
+
+.schedule-form-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  font-weight: 650;
+  margin-top: var(--s-2);
+}
+.schedule-form-sub {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.schedule-form-input,
+.schedule-form-textarea {
+  width: 100%;
+  padding: var(--s-2);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  outline: none;
+  transition: border-color var(--fast) var(--ease);
+}
+.schedule-form-textarea { resize: vertical; }
+.schedule-form-input:focus,
+.schedule-form-textarea:focus { border-color: var(--accent); }
+.schedule-form-num { width: 120px; }
+
+.schedule-form-kinds,
+.schedule-form-days {
+  display: flex;
+  gap: var(--s-1);
+  flex-wrap: wrap;
+}
+.schedule-form-kind,
+.schedule-form-day {
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.schedule-form-kind:hover,
+.schedule-form-day:hover { border-color: var(--border-strong); }
+.schedule-form-kind.active,
+.schedule-form-day.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.schedule-form-recur {
+  display: flex;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.schedule-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: var(--s-1);
+}
+.schedule-form-window {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+.schedule-form-window .schedule-form-input { width: auto; }
+.schedule-form-dash { color: var(--text-3); }
+
+.schedule-form-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.schedule-form-check input { margin-top: 2px; }
+
+.schedule-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+.schedule-form-spacer { flex: 1; }
+.schedule-form-cancel,
+.schedule-form-save,
+.schedule-form-delete {
+  padding: var(--s-2) var(--s-4);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.schedule-form-cancel { background: transparent; color: var(--text-2); }
+.schedule-form-cancel:hover { color: var(--text-0); border-color: var(--text-3); }
+.schedule-form-delete { background: transparent; color: var(--attn-2); border-color: var(--attn-2-soft); }
+.schedule-form-delete:hover { border-color: var(--attn-2); }
+.schedule-form-save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-0);
+}
+.schedule-form-save:hover { filter: brightness(1.08); }
+.schedule-form-save:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* ============================================================
    CAPP-93 / U5 — Delete-time Keep/trim/edit modal (main window)
    Blocking tier-1 gate. Clones the mission-prompt full-screen overlay
    idiom: dimmed backdrop, centered warm card. The editable findings

@@ -6,8 +6,10 @@ import { commitRenameValue } from "../lib/renameValue"
 import type { ResumingRow } from "../lib/resumingList"
 import type { AttentionEntry } from "../hooks/useAttention"
 import type { MissionSummary } from "../hooks/useMissions"
+import type { ScheduleSummary } from "../hooks/useSchedules"
 import type { WorkspaceSummary } from "../hooks/useWorkspaces"
 import WorkspaceSwitcher from "./WorkspaceSwitcher"
+import SchedulesList from "./SchedulesList"
 
 interface TerminalRow { id: string; name: string; lastState: string; activity?: string }
 interface SessionRow { id: string; name: string; status: string; terminals: TerminalRow[] }
@@ -24,6 +26,12 @@ interface Props {
   onDismissMission: (id: string) => void
   onNewMission: () => void
   onFocusConductor: (sessionId: string) => void
+  // CAPP-114 (SCHED-1) — the SCHEDULED section (pre-filtered to the active workspace).
+  schedules: ScheduleSummary[]
+  onNewSchedule: () => void
+  onOpenSchedule: (s: ScheduleSummary) => void
+  onToggleSchedule: (id: string, enabled: boolean) => void
+  onRunSchedule: (id: string) => void
   onNewSession: () => void
   onKillSession: () => void
   onKillSessionById: (id: string) => void
@@ -80,6 +88,7 @@ export default function Sidebar({
   sessions, activeSessionId,
   attentionEntries, attentionNow, onJumpAttention, onDismissAttention,
   missions, onOpenMission, onDismissMission, onNewMission, onFocusConductor,
+  schedules, onNewSchedule, onOpenSchedule, onToggleSchedule, onRunSchedule,
   onNewSession, onKillSession, onKillSessionById, onSelectSession, onRenameSession,
   resumingRows, onFocusResuming, onStopResuming, onDismissResuming,
   workspaces, activeWorkspace, workspaceScoped,
@@ -278,6 +287,15 @@ export default function Sidebar({
             )
         })}
       </div>
+
+      <SchedulesList
+        schedules={schedules}
+        onNew={onNewSchedule}
+        onOpen={onOpenSchedule}
+        onToggle={onToggleSchedule}
+        onRunNow={onRunSchedule}
+        workspaceScoped={workspaceScoped}
+      />
 
       <div className="sidebar-section sessions-section">
         <div className="sidebar-header">SESSIONS</div>

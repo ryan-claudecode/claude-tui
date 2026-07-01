@@ -302,6 +302,18 @@ const mainApi = {
   // mission:removed so useMissions drops the row (no renderer-only Set).
   deleteMission: (id: string) => ipcRenderer.invoke("mission:delete", id),
 
+  // CAPP-114 (SCHED-1) — on-device scheduler CRUD + run-now. Push events
+  // (schedule:updated / schedule:removed) drive useSchedules without polling.
+  listSchedules: () => ipcRenderer.invoke("schedule:list"),
+  createSchedule: (input: any) => ipcRenderer.invoke("schedule:create", input),
+  updateSchedule: (id: string, patch: any) => ipcRenderer.invoke("schedule:update", id, patch),
+  deleteSchedule: (id: string) => ipcRenderer.invoke("schedule:delete", id),
+  runScheduleNow: (id: string) => ipcRenderer.invoke("schedule:run-now", id),
+  onScheduleUpdated: (callback: (schedule: any) => void) =>
+    ipcRenderer.on("schedule:updated", (_e, schedule) => callback(schedule)),
+  onScheduleRemoved: (callback: (id: string) => void) =>
+    ipcRenderer.on("schedule:removed", (_e, id) => callback(id)),
+
   // WW-2b — worktree review: approve merges the worker's branch, reject discards
   // it (back to pending). Both return the resulting task state ({ status,
   // reviewReason } | null). getReviewTask fetches the latest captured diff so the

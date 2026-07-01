@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog } from "electron"
 import { join } from "path"
+import { homedir } from "os"
 import { TerminalService } from "./services/terminals"
 import { WorkspaceService } from "./services/workspaces"
 import { AppService } from "./services/app"
@@ -16,6 +17,8 @@ import { NotesService } from "./services/notes"
 import { FileService } from "./services/files"
 import { UiService } from "./services/ui"
 import { MissionService } from "./services/mission"
+import { SchedulerService } from "./services/scheduler"
+import { userMessage } from "./services/streamProtocol"
 import { SessionService } from "./services/sessions"
 import { RecallService, primerHitEligible } from "./services/recall"
 import { WorkspaceMemoryService } from "./services/workspaceMemory"
@@ -42,6 +45,7 @@ import { registerTerminalHandlers } from "./ipc/terminal-handlers"
 import { registerWorkSessionHandlers } from "./ipc/worksession-handlers"
 import { registerPanelHandlers } from "./ipc/panel-handlers"
 import { registerMissionHandlers } from "./ipc/mission-handlers"
+import { registerScheduleHandlers } from "./ipc/schedule-handlers"
 import { registerAppHandlers } from "./ipc/app-handlers"
 import { registerAttentionHandlers } from "./ipc/attention-handlers"
 import { registerWorkspaceHandlers } from "./ipc/workspace-handlers"
@@ -175,6 +179,61 @@ export const exportService = new ExportService({
  */
 export let attentionService: AttentionService
 
+// CAPP-114 (SCHED-1) — the on-device scheduler. Every external effect is wired
+// here over the existing services: a scheduled run lazily gets a durable work
+// session (one per schedule, workspace-scoped to the SCHEDULE, not the active
+// selection), spawns a STRUCTURED (headless) terminal into it, delivers the prompt
+// over the stdin sink (never a PTY write+delay), and records a run when it ends (a
+// stream `result` or the terminal exiting). `raiseAttention` reads the mutable
+// `attentionService` binding lazily (assigned in setupIpc, long before any fire).
+export const schedulerService = new SchedulerService({
+  ensureSession: ({ name, workspaceId, sessionId }) => {
+    // Reuse the schedule's own session across restarts when it still exists.
+    if (sessionId && workSessionService.get(sessionId)) return sessionId
+    const session = workSessionService.create({ workspaceId, name: `⏰ ${name}` })
+    return session.id
+  },
+  spawnRun: ({ sessionId, name, cwd, workspaceId, model, effort, ultracode }) => {
+    // Spawn-cwd fallback chain (design: "defaults: workspace folder → home"):
+    // explicit schedule cwd → the SCHEDULE's workspace folder (resolved off the
+    // schedule's OWN workspaceId, never the active selection; resolveWorkspaceDir
+    // validates absolute + exists, null otherwise) → the user's home dir. Without
+    // this, an unset cwd fell through to process.cwd() (the app's install dir).
+    const workspaceDir = workspaceId ? workspaceService.resolveWorkspaceDir(workspaceId) : null
+    const resolvedCwd = cwd ?? workspaceDir ?? homedir()
+    // Structured spawn regardless of the global engine (a scheduled run is a
+    // headless agent), identity-bound to the session so it inherits the primer.
+    const info = sessionService.createHeadless(name, resolvedCwd, sessionId, undefined, undefined, model, effort, ultracode)
+    workSessionService.addTerminal(sessionId, {
+      id: info.id,
+      name: info.name,
+      cwd: info.cwd,
+      lastState: info.state as "active" | "idle" | "dead",
+      engine: info.engine,
+      model: info.model,
+      effort: info.effort,
+      ultracode: info.ultracode,
+    })
+    workSessionService.setStatus(sessionId, "active")
+    return info.id
+  },
+  sendPrompt: (terminalId, prompt) => sessionService.sendAgentMessage(terminalId, userMessage(prompt)),
+  killTerminal: (terminalId) => {
+    sessionService.kill(terminalId)
+  },
+  retireTerminal: (sessionId, terminalId) => workSessionService.closeTerminal(sessionId, terminalId),
+  isTerminalAlive: (terminalId) =>
+    sessionService.getActivity().some((a) => a.id === terminalId && a.state !== "dead"),
+  onRunEnd: (cb) =>
+    sessionService.onEvent((e) => {
+      if (e.type === "exit" && e.id) cb({ terminalId: e.id, kind: "exit" })
+      else if (e.type === "stream" && e.id && e.event?.kind === "result") {
+        cb({ terminalId: e.id, kind: "result", isError: e.event.isError === true, note: e.event.result })
+      }
+    }),
+  raiseAttention: ({ sessionId, terminalId, reason }) => attentionService?.request(sessionId, terminalId, reason),
+})
+
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
 
@@ -249,6 +308,15 @@ export async function setupIpc(win: BrowserWindow) {
     } else {
       win.webContents.send("mission:removed", e.id)
     }
+  })
+
+  // CAPP-114 (SCHED-1) — push schedule mutations to the main renderer (useSchedules
+  // consumes these instead of polling). The full Schedule rides along (runHistory +
+  // nextRunAt), same seam as mission:updated. A `removed` event (delete) → schedule:removed.
+  schedulerService.onEvent((e) => {
+    if (win.isDestroyed()) return
+    if (e.type === "updated") win.webContents.send("schedule:updated", e.schedule)
+    else win.webContents.send("schedule:removed", e.id)
   })
 
   // WS-B — push active-workspace changes to the main renderer (selection is now
@@ -511,6 +579,7 @@ export async function setupIpc(win: BrowserWindow) {
       workspaceMemoryService,
       contextInspectorService,
       exportService,
+      schedulerService,
     )
     sessionService.setMcpConfigPath(configPath)
     sessionService.setMcpServerUrl(`http://127.0.0.1:${port}/sse`)
@@ -523,6 +592,8 @@ export async function setupIpc(win: BrowserWindow) {
   }
 
   missionService.start()
+  // CAPP-114 (SCHED-1) — start the scheduler's single 30s tick (+ launch catch-up).
+  schedulerService.start()
 
   // Register IPC handlers by domain (MOVE, not rewrite — see ipc/*-handlers.ts)
   registerTerminalHandlers({ sessionService, win })
@@ -558,6 +629,7 @@ export async function setupIpc(win: BrowserWindow) {
     sessionService,
   })
   registerMissionHandlers({ missionService })
+  registerScheduleHandlers({ schedulerService })
   registerAttentionHandlers({ getAttention: () => attentionService })
   // WS-B — id-based workspace ops (get/create/rename/add-dir/remove-dir/delete/
   // set-active/get-active/launch). Legacy index-based workspace:list/activate
