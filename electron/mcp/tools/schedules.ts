@@ -26,7 +26,7 @@ const recurrenceSchema = z.union([
     window: z
       .object({ start: z.string().describe("HH:mm local"), end: z.string().describe("HH:mm local, inclusive") })
       .optional()
-      .describe("Only fire within this local time-of-day window; a fire outside it rolls to the next window start"),
+      .describe("Only fire within this local time-of-day window; a fire outside it rolls to the next window start. start > end (e.g. 22:00–06:00) is a wrap-around, midnight-straddling window"),
     days: z.array(z.number().int().min(0).max(6)).optional().describe("Allowed weekdays (0=Sun..6=Sat); absent = every day"),
   }),
   z.object({
@@ -104,7 +104,7 @@ export function registerScheduleTools(
 
   server.tool(
     "schedule_update",
-    "Update a scheduled run by id — including enabling/disabling it (pass enabled). Only the fields you pass change; a changed recurrence (or re-enabling) re-derives the next run time. Returns the updated schedule, or an error if the id is unknown.",
+    "Update a scheduled run by id — including enabling/disabling it (pass enabled). Only the fields you pass change; a changed recurrence (or re-enabling) re-derives the next run time. For the string overrides (cwd/model/effort) passing an empty string CLEARS the override back to the default. Returns the updated schedule, or an error if the id is unknown.",
     {
       id: z.string().describe("Schedule id from schedule_list"),
       name: z.string().optional(),
@@ -112,9 +112,9 @@ export function registerScheduleTools(
       recurrence: recurrenceSchema.optional(),
       enabled: z.boolean().optional().describe("Enable (true) or disable/pause (false) the schedule"),
       workspace_id: z.string().optional().describe("Re-scope the run's workspace. Rejected if unknown."),
-      cwd: z.string().optional(),
-      model: z.string().optional(),
-      effort: z.string().optional(),
+      cwd: z.string().optional().describe("New spawn dir; pass an empty string to CLEAR the override (falls back to the workspace folder, then home)"),
+      model: z.string().optional().describe("New model alias; pass an empty string to CLEAR the override (falls back to the config default)"),
+      effort: z.string().optional().describe("New effort level; pass an empty string to CLEAR the override (falls back to the config default)"),
       ultracode: z.boolean().optional(),
       catch_up: z.boolean().optional(),
       keep_terminal: z.boolean().optional(),

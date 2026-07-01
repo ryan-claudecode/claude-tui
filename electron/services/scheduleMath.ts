@@ -20,7 +20,8 @@ export type Recurrence =
       /** Fire every N minutes, anchored to the last fire (not wall-clock minute 0). */
       everyMinutes: number
       /** Optional local time-of-day window, inclusive. A fire landing outside it
-       *  rolls to the next window start. "HH:mm".."HH:mm". */
+       *  rolls to the next window start. "HH:mm".."HH:mm". A start AFTER the end
+       *  (e.g. 22:00–06:00) is a WRAP-AROUND, midnight-straddling window. */
       window?: { start: string; end: string }
       /** Optional allowed weekdays (0=Sun..6=Sat). Absent/empty = every day. */
       days?: number[]
@@ -123,14 +124,23 @@ export function computeNextRun(recurrence: Recurrence, from: Date): Date | null 
   const win = recurrence.window
   const startMin = win ? parseHM(win.start) : 0
   const endMin = win ? parseHM(win.end) : DAY_MIN
-  if (startMin == null || endMin == null || startMin > endMin) return null
+  if (startMin == null || endMin == null) return null
+
+  // Window membership. `start <= end` is the plain same-day window (inclusive both
+  // ends); `start > end` is a WRAP-AROUND, midnight-straddling window like
+  // 22:00–06:00 (the overnight-watch case) — in-window when the time-of-day is at/
+  // after the start OR at/before the end. Only unparseable HH:mm is rejected. The
+  // `days` filter applies to the local day the candidate LANDS on (a 00:20 fire in
+  // a 22:00–06:00 window belongs to the NEW day), and the window still opens daily
+  // at `start`, so the roll-to-next-window-start logic below is unchanged.
+  const inWindow = (tod: number): boolean =>
+    startMin <= endMin ? tod >= startMin && tod <= endMin : tod >= startMin || tod <= endMin
 
   let cand = new Date(from.getTime() + every * 60_000)
   // Bounded: each roll advances at least to the next window start, so a couple of
   // years of days is a generous ceiling that also guards a pathological days filter.
   for (let i = 0; i < 1500; i++) {
-    const tod = minutesOfDay(cand)
-    if (daysAllows(cand, recurrence.days) && tod >= startMin && tod <= endMin) return cand
+    if (daysAllows(cand, recurrence.days) && inWindow(minutesOfDay(cand))) return cand
     cand = nextWindowStart(cand, startMin, recurrence.days)
   }
   return null
@@ -154,7 +164,7 @@ function isSameLocalDay(a: Date, b: Date): boolean {
 
 /**
  * A short human countdown for the sidebar row: "paused" (disabled), "done"
- * (exhausted one-shot), "due now", "in 14m", "at 14:30" (later today),
+ * (exhausted one-shot), "due now", "<1m", "in 14m", "at 14:30" (later today),
  * "tomorrow 08:00", or "in 3d". Local time.
  */
 export function describeNext(schedule: SchedulableView, now: Date): string {
@@ -165,6 +175,8 @@ export function describeNext(schedule: SchedulableView, now: Date): string {
   const diff = next.getTime() - now.getTime()
   if (diff <= 0) return "due now"
   const mins = Math.round(diff / 60_000)
+  // A 1–29s-away fire rounds to 0 — never render "in 0m".
+  if (mins < 1) return "<1m"
   if (mins < 60) return `in ${mins}m`
   if (isSameLocalDay(next, now)) return `at ${fmtHM(next)}`
   if (isSameLocalDay(next, addDays(now, 1))) return `tomorrow ${fmtHM(next)}`

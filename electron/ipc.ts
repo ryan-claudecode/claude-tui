@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog } from "electron"
 import { join } from "path"
+import { homedir } from "os"
 import { TerminalService } from "./services/terminals"
 import { WorkspaceService } from "./services/workspaces"
 import { AppService } from "./services/app"
@@ -188,10 +189,17 @@ export const schedulerService = new SchedulerService({
     const session = workSessionService.create({ workspaceId, name: `⏰ ${name}` })
     return session.id
   },
-  spawnRun: ({ sessionId, name, cwd, model, effort, ultracode }) => {
+  spawnRun: ({ sessionId, name, cwd, workspaceId, model, effort, ultracode }) => {
+    // Spawn-cwd fallback chain (design: "defaults: workspace folder → home"):
+    // explicit schedule cwd → the SCHEDULE's workspace folder (resolved off the
+    // schedule's OWN workspaceId, never the active selection; resolveWorkspaceDir
+    // validates absolute + exists, null otherwise) → the user's home dir. Without
+    // this, an unset cwd fell through to process.cwd() (the app's install dir).
+    const workspaceDir = workspaceId ? workspaceService.resolveWorkspaceDir(workspaceId) : null
+    const resolvedCwd = cwd ?? workspaceDir ?? homedir()
     // Structured spawn regardless of the global engine (a scheduled run is a
     // headless agent), identity-bound to the session so it inherits the primer.
-    const info = sessionService.createHeadless(name, cwd, sessionId, undefined, undefined, model, effort, ultracode)
+    const info = sessionService.createHeadless(name, resolvedCwd, sessionId, undefined, undefined, model, effort, ultracode)
     workSessionService.addTerminal(sessionId, {
       id: info.id,
       name: info.name,

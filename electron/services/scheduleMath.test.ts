@@ -70,6 +70,50 @@ describe("computeNextRun — interval day filter (day-skip)", () => {
   })
 })
 
+describe("computeNextRun — wrap-around (midnight-straddling) window", () => {
+  // The overnight-watch shape: start > end means the window spans midnight.
+  const overnight: Recurrence = {
+    kind: "interval",
+    everyMinutes: 40,
+    window: { start: "22:00", end: "06:00" },
+  }
+
+  it("steps across midnight INSIDE the window (23:40 + 40m = 00:20 stays in)", () => {
+    const next = computeNextRun(overnight, mon(5, 23, 40))!
+    expect(next.getTime()).toBe(mon(6, 0, 20).getTime())
+  })
+
+  it("a candidate past the wrap end rolls to the SAME day's window start (06:10 → 22:00)", () => {
+    const r: Recurrence = { kind: "interval", everyMinutes: 20, window: { start: "22:00", end: "06:00" } }
+    const next = computeNextRun(r, mon(5, 5, 50))! // cand 06:10, out of window
+    expect(next.getTime()).toBe(mon(5, 22, 0).getTime())
+  })
+
+  it("fires exactly at the inclusive wrap end (06:00)", () => {
+    const r: Recurrence = { kind: "interval", everyMinutes: 20, window: { start: "22:00", end: "06:00" } }
+    const next = computeNextRun(r, mon(5, 5, 40))!
+    expect(next.getTime()).toBe(mon(5, 6, 0).getTime())
+  })
+
+  it("the days filter applies to the day the candidate LANDS on", () => {
+    // Friday-only overnight window: Fri 23:40 + 40m lands SATURDAY 00:20 →
+    // disallowed → rolls to the NEXT Friday's window start. 2026-01-02 is a
+    // Friday; 2026-01-09 is the next Friday.
+    const r: Recurrence = {
+      kind: "interval",
+      everyMinutes: 40,
+      window: { start: "22:00", end: "06:00" },
+      days: [5], // Friday
+    }
+    const next = computeNextRun(r, mon(2, 23, 40))!
+    expect(next.getTime()).toBe(mon(9, 22, 0).getTime())
+  })
+
+  it("a wrap-around window NEVER yields null (the silent never-fires bug)", () => {
+    expect(computeNextRun(overnight, mon(5, 12, 0))).not.toBeNull()
+  })
+})
+
 describe("computeNextRun — daily", () => {
   it("fires today at the time when it's still ahead", () => {
     const r: Recurrence = { kind: "daily", at: "14:30" }
@@ -163,6 +207,11 @@ describe("describeNext", () => {
   })
   it("reports minutes for a soon fire", () => {
     expect(describeNext({ enabled: true, nextRunAt: mon(5, 9, 14).toISOString() }, now)).toBe("in 14m")
+  })
+  it("reports '<1m' for a sub-minute fire (never 'in 0m')", () => {
+    const at = new Date(2026, 0, 5, 9, 0, 0)
+    const next = new Date(2026, 0, 5, 9, 0, 20) // 20s away: diff > 0, rounds to 0m
+    expect(describeNext({ enabled: true, nextRunAt: next.toISOString() }, at)).toBe("<1m")
   })
   it("reports 'at HH:mm' later the same day", () => {
     expect(describeNext({ enabled: true, nextRunAt: mon(5, 14, 30).toISOString() }, now)).toBe("at 14:30")

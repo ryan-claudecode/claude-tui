@@ -133,12 +133,17 @@ export interface SchedulerDeps {
   /**
    * Spawn a structured (headless) run terminal into the schedule's session with
    * its model/effort/ultracode; return the new terminal id (or undefined on failure).
+   * `workspaceId` is the SCHEDULE's workspace (never the active selection) — the
+   * wiring resolves the spawn-cwd fallback chain from it: explicit `cwd` → the
+   * schedule's workspace folder → the user's home dir (design: "defaults:
+   * workspace folder → home").
    */
   spawnRun(opts: {
     scheduleId: string
     sessionId: string
     name: string
     cwd?: string
+    workspaceId?: string
     model?: string
     effort?: string
     ultracode?: boolean
@@ -177,7 +182,15 @@ export class SchedulerService {
   private schedules = new Map<string, Schedule>()
   private timer: ReturnType<typeof setInterval> | null = null
   private eventListeners = new Set<(e: SchedulerServiceEvent) => void>()
-  /** In-flight runs keyed by terminal id (drives overlap guard + timeout reaper). */
+  /**
+   * In-flight runs keyed by terminal id (drives the overlap guard + timeout reaper).
+   * DELIBERATELY in-memory only (accepted tradeoff): a run still in flight when the
+   * app quits gets NO RunRecord and is invisible to the overlap guard after restart.
+   * The tradeoff direction is "never double-fire, may under-record" — app quit kills
+   * every terminal (`before-quit` → killAll), so a forgotten run cannot still be
+   * alive after a restart; the restarted app simply derives the next fire.
+   * Persisting in-flight run state isn't worth the resurrection complexity.
+   */
   private activeRuns = new Map<string, ActiveRun>()
   private deps: SchedulerDeps
   private offRunEnd: (() => void) | null = null
@@ -322,7 +335,15 @@ export class SchedulerService {
 
   start(): void {
     if (this.timer) return
-    this.catchUpOnLaunch()
+    // Defensive belt+braces: catchUpOnLaunch is internally per-schedule throw-safe,
+    // but start() runs synchronously inside the awaited setupIpc BEFORE the IPC
+    // handlers register — a throw escaping here would leave the app with NO IPC
+    // handlers. Nothing may abort start().
+    try {
+      this.catchUpOnLaunch()
+    } catch (err) {
+      logWarn("scheduler", `launch catch-up failed: ${err}`)
+    }
     this.timer = setInterval(() => this.tick(), TICK_MS)
     // Never keep the process alive on the tick alone (parity with idle monitors).
     ;(this.timer as { unref?: () => void }).unref?.()
@@ -337,9 +358,15 @@ export class SchedulerService {
 
   /**
    * Launch catch-up (once): a schedule whose `nextRunAt` passed while the app was
-   * closed either records `skipped-missed` (default) or, when `catchUp`, fires
-   * EXACTLY ONE catch-up run — never one per missed slot. Then re-derive nextRunAt
-   * from now so the cadence resumes cleanly.
+   * closed either records `skipped-missed` (default, nextRunAt re-derived from now)
+   * or, when `catchUp`, is LEFT DUE — nextRunAt stays in the past so the normal
+   * concurrency-capped tick() drains it: at most `maxConcurrent` catch-up runs in
+   * flight, the rest stay due and retry next tick (never a boot thundering-herd
+   * while session auto-restore is also spawning). fire() advances nextRunAt from
+   * the fire time, so each catchUp schedule still gets EXACTLY ONE catch-up run —
+   * never one per missed slot. Nothing spawns synchronously here (a boot-time
+   * throw could otherwise abort setupIpc before the IPC handlers register); each
+   * schedule is individually throw-safe so one bad file can't starve the rest.
    */
   private catchUpOnLaunch(): void {
     if (this.caughtUp) return
@@ -347,15 +374,16 @@ export class SchedulerService {
     const nowMs = this.now()
     const now = new Date(nowMs)
     for (const s of this.schedules.values()) {
-      if (!s.enabled || !s.nextRunAt) continue
-      if (new Date(s.nextRunAt).getTime() > nowMs) continue
-      if (s.catchUp) {
-        // fire() advances nextRunAt from now itself.
-        this.fire(s)
-      } else {
+      try {
+        if (!s.enabled || !s.nextRunAt) continue
+        if (new Date(s.nextRunAt).getTime() > nowMs) continue
+        // catchUp:true → leave it due; the capped tick() fires the ONE catch-up run.
+        if (s.catchUp) continue
         this.recordRun(s, { status: "skipped-missed", note: "Missed while the app was closed" })
         s.nextRunAt = this.deriveNext(s, now)
         this.persist(s)
+      } catch (err) {
+        logWarn("scheduler", `catch-up failed for schedule ${s.id}: ${err}`)
       }
     }
   }
@@ -364,43 +392,56 @@ export class SchedulerService {
 
   tick(): void {
     const nowMs = this.now()
+    // Every per-run / per-schedule body below is individually throw-safe: the
+    // production deps sit on fs + spawn paths that CAN throw (ENOSPC/EACCES), and
+    // one bad schedule aborting the loop would starve every schedule after it in
+    // the Map — forever, since tick() re-runs the same order every 30s.
+
     // 1. Reap runs past their runtime ceiling — kill ONLY the recorded terminal id.
     for (const [tid, run] of [...this.activeRuns]) {
-      if (nowMs - run.startedAt <= run.maxRuntimeMs) continue
-      // Delete BEFORE killing so the kill's re-entrant `exit` end signal no-ops
-      // (otherwise a timeout would double-record as timeout AND error).
-      this.activeRuns.delete(tid)
-      this.deps.killTerminal(tid)
-      const s = this.schedules.get(run.scheduleId)
-      if (!s) continue
-      this.recordRun(s, {
-        status: "timeout",
-        sessionId: run.sessionId,
-        terminalId: tid,
-        durationMs: nowMs - run.startedAt,
-        note: "Exceeded max runtime",
-      })
-      this.persist(s)
-      this.deps.raiseAttention({
-        sessionId: run.sessionId,
-        terminalId: tid,
-        reason: `Scheduled run "${s.name}" timed out`,
-      })
+      try {
+        if (nowMs - run.startedAt <= run.maxRuntimeMs) continue
+        // Delete BEFORE killing so the kill's re-entrant `exit` end signal no-ops
+        // (otherwise a timeout would double-record as timeout AND error).
+        this.activeRuns.delete(tid)
+        this.deps.killTerminal(tid)
+        const s = this.schedules.get(run.scheduleId)
+        if (!s) continue
+        this.recordRun(s, {
+          status: "timeout",
+          sessionId: run.sessionId,
+          terminalId: tid,
+          durationMs: nowMs - run.startedAt,
+          note: "Exceeded max runtime",
+        })
+        this.persist(s)
+        this.deps.raiseAttention({
+          sessionId: run.sessionId,
+          terminalId: tid,
+          reason: `Scheduled run "${s.name}" timed out`,
+        })
+      } catch (err) {
+        logWarn("scheduler", `timeout reap failed for run ${tid}: ${err}`)
+      }
     }
 
     // 2. Fire due schedules (overlap-guarded + concurrency-capped).
     const now = new Date(nowMs)
-    for (const s of this.schedules.values()) {
-      if (!isDue(s, now)) continue
-      if (this.hasLiveRun(s.id)) {
-        // Previous run still alive — don't stack; record + advance instead.
-        this.recordRun(s, { status: "skipped-overlap" })
-        s.nextRunAt = this.deriveNext(s, now)
-        this.persist(s)
-        continue
+    for (const s of [...this.schedules.values()]) {
+      try {
+        if (!isDue(s, now)) continue
+        if (this.hasLiveRun(s.id)) {
+          // Previous run still alive — don't stack; record + advance instead.
+          this.recordRun(s, { status: "skipped-overlap" })
+          s.nextRunAt = this.deriveNext(s, now)
+          this.persist(s)
+          continue
+        }
+        if (this.activeRuns.size >= this.maxConcurrent) continue // over cap → stay due, retry next tick
+        this.fire(s)
+      } catch (err) {
+        logWarn("scheduler", `tick failed for schedule ${s.id}: ${err}`)
       }
-      if (this.activeRuns.size >= this.maxConcurrent) continue // over cap → stay due, retry next tick
-      this.fire(s)
     }
   }
 
@@ -433,50 +474,107 @@ export class SchedulerService {
   private fire(s: Schedule): void {
     const startedAt = this.now()
     const from = new Date(startedAt)
+    // Tracked across the try so the catch can attribute + clean up: the production
+    // deps THROW (ensureSession/spawnRun sit on saveVersioned→writeFileSync, which
+    // throws on ENOSPC/EACCES; createHeadless can throw too) — the graceful
+    // `undefined` returns below are the polite half, the catch is the real net.
+    let sessionId: string | undefined
+    let spawnedTid: string | undefined
+    try {
+      sessionId = this.deps.ensureSession({
+        scheduleId: s.id,
+        name: s.name,
+        workspaceId: s.workspaceId,
+        sessionId: s.sessionId,
+      })
+      if (!sessionId) {
+        this.recordRun(s, { status: "error", note: "Could not create the schedule's work session" })
+        s.nextRunAt = this.deriveNext(s, from)
+        this.persist(s)
+        return
+      }
+      // Remember the session so a later fire (and a restart) reuses it.
+      if (s.sessionId !== sessionId) s.sessionId = sessionId
 
-    const sessionId = this.deps.ensureSession({
-      scheduleId: s.id,
-      name: s.name,
-      workspaceId: s.workspaceId,
-      sessionId: s.sessionId,
-    })
-    if (!sessionId) {
-      this.recordRun(s, { status: "error", note: "Could not create the schedule's work session" })
+      const terminalId = this.deps.spawnRun({
+        scheduleId: s.id,
+        sessionId,
+        name: s.name,
+        cwd: s.cwd,
+        // The SCHEDULE's workspace — the wiring resolves the spawn-cwd chain
+        // (explicit cwd → workspace folder → home) from it, never the active selection.
+        workspaceId: s.workspaceId,
+        model: s.model,
+        effort: s.effort,
+        ultracode: s.ultracode,
+      })
+      if (!terminalId) {
+        this.recordRun(s, { status: "error", sessionId, note: "Could not spawn the run terminal" })
+        s.nextRunAt = this.deriveNext(s, from)
+        this.persist(s)
+        this.deps.raiseAttention({ sessionId, reason: `Scheduled run "${s.name}" failed to start` })
+        return
+      }
+      spawnedTid = terminalId
+
+      // A failed prompt delivery leaves a terminal that will never do anything —
+      // kill it and record the error rather than tracking a 30-minute zombie the
+      // timeout reaper would eventually sweep.
+      if (!this.deps.sendPrompt(terminalId, s.prompt)) {
+        this.deps.killTerminal(terminalId)
+        this.recordRun(s, { status: "error", sessionId, terminalId, note: "Could not deliver the prompt" })
+        s.nextRunAt = this.deriveNext(s, from)
+        this.persist(s)
+        this.deps.raiseAttention({ sessionId, terminalId, reason: `Scheduled run "${s.name}" failed to start` })
+        return
+      }
+
+      this.activeRuns.set(terminalId, {
+        scheduleId: s.id,
+        sessionId,
+        terminalId,
+        startedAt,
+        maxRuntimeMs: s.maxRuntimeMs ?? DEFAULT_MAX_RUNTIME_MS,
+      })
+      // Advance nextRunAt anchored to this fire (a `once` recurrence → null = exhausted).
       s.nextRunAt = this.deriveNext(s, from)
       this.persist(s)
-      return
-    }
-    // Remember the session so a later fire (and a restart) reuses it.
-    if (s.sessionId !== sessionId) s.sessionId = sessionId
-
-    const terminalId = this.deps.spawnRun({
-      scheduleId: s.id,
-      sessionId,
-      name: s.name,
-      cwd: s.cwd,
-      model: s.model,
-      effort: s.effort,
-      ultracode: s.ultracode,
-    })
-    if (!terminalId) {
-      this.recordRun(s, { status: "error", sessionId, note: "Could not spawn the run terminal" })
+    } catch (err) {
+      // NEVER let a throw escape fire(): nextRunAt would not advance, so the
+      // schedule would re-throw every 30s forever (and, pre-guard, abort the tick
+      // loop / setupIpc). Make the designed error path the real one.
+      if (spawnedTid) {
+        // The throw happened AFTER the spawn (possibly after activeRuns.set, e.g.
+        // the final persist): untrack it and best-effort kill our own terminal so
+        // no orphaned/ghost run survives outside the guard.
+        this.activeRuns.delete(spawnedTid)
+        try {
+          this.deps.killTerminal(spawnedTid)
+        } catch {
+          /* best-effort */
+        }
+      }
+      const msg = err instanceof Error ? err.message : String(err)
+      this.recordRun(s, { status: "error", sessionId, terminalId: spawnedTid, note: msg })
       s.nextRunAt = this.deriveNext(s, from)
-      this.persist(s)
-      this.deps.raiseAttention({ sessionId, reason: `Scheduled run "${s.name}" failed to start` })
-      return
+      try {
+        this.persist(s)
+      } catch (persistErr) {
+        // Disk is the likely thrower in the first place — in-memory state is
+        // already advanced, so the schedule won't hot-loop; just leave a trace.
+        logWarn("scheduler", `persist after failed fire of ${s.id} also failed: ${persistErr}`)
+      }
+      try {
+        this.deps.raiseAttention({
+          sessionId: sessionId ?? "",
+          terminalId: spawnedTid,
+          reason: `Scheduled run "${s.name}" failed: ${msg}`,
+        })
+      } catch {
+        /* best-effort */
+      }
+      logWarn("scheduler", `fire failed for schedule ${s.id}: ${msg}`)
     }
-
-    this.deps.sendPrompt(terminalId, s.prompt)
-    this.activeRuns.set(terminalId, {
-      scheduleId: s.id,
-      sessionId,
-      terminalId,
-      startedAt,
-      maxRuntimeMs: s.maxRuntimeMs ?? DEFAULT_MAX_RUNTIME_MS,
-    })
-    // Advance nextRunAt anchored to this fire (a `once` recurrence → null = exhausted).
-    s.nextRunAt = this.deriveNext(s, from)
-    this.persist(s)
   }
 
   /** A tracked run terminal finished (result) or exited — record the outcome. */

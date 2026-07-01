@@ -121,7 +121,12 @@ export default function ScheduleForm({ open, editing, onClose, onSubmit, onDelet
       name: name.trim(),
       prompt: prompt.trim(),
       recurrence,
-      model: model.trim() || undefined,
+      // Send the raw trimmed string — "" is MEANINGFUL on the edit path: update()
+      // maps `patch.model || undefined`, so blanking the field CLEARS a previously
+      // set model override (folding "" → undefined here made clearing impossible —
+      // update()'s `!== undefined` guard never saw it). On create, "" is dropped by
+      // create()'s conditional spread, so a blank field still means "no override".
+      model: model.trim(),
       catchUp,
     })
   }

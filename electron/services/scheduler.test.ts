@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "fs"
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import {
@@ -15,7 +15,7 @@ import {
 interface FakeDeps extends SchedulerDeps {
   calls: {
     ensured: Array<{ scheduleId: string; name: string; workspaceId?: string; sessionId?: string }>
-    spawned: Array<{ scheduleId: string; sessionId: string; name: string; model?: string; effort?: string; ultracode?: boolean }>
+    spawned: Array<{ scheduleId: string; sessionId: string; name: string; cwd?: string; workspaceId?: string; model?: string; effort?: string; ultracode?: boolean }>
     prompts: Array<{ terminalId: string; prompt: string }>
     killed: string[]
     retired: Array<{ sessionId: string; terminalId: string }>
@@ -25,6 +25,7 @@ interface FakeDeps extends SchedulerDeps {
   alive: Set<string>
   failSpawn: boolean
   failEnsure: boolean
+  failSendPrompt: boolean
   lastTerminalId: () => string | undefined
 }
 
@@ -42,6 +43,7 @@ function makeFakeDeps(): FakeDeps {
     calls,
     failSpawn: false,
     failEnsure: false,
+    failSendPrompt: false,
     lastTerminalId: () => lastTid,
     emitEnd: (e) => runEndCb?.(e),
     ensureSession: (o) => {
@@ -64,7 +66,7 @@ function makeFakeDeps(): FakeDeps {
     },
     sendPrompt: (terminalId, prompt) => {
       calls.prompts.push({ terminalId, prompt })
-      return true
+      return !fake.failSendPrompt
     },
     killTerminal: (terminalId) => {
       calls.killed.push(terminalId)
@@ -151,6 +153,20 @@ describe("SchedulerService CRUD + persistence", () => {
     expect(out.nextRunAt).toBe(new Date(5000 + 120_000).toISOString())
   })
 
+  it("an empty-string model on update CLEARS the override (the edit-form round trip)", () => {
+    const svc = new SchedulerService(makeFakeDeps(), { dir })
+    const s = svc.create(baseInput({ model: "sonnet", effort: "high", cwd: "C:/repo" }))
+    expect(svc.get(s.id)!.model).toBe("sonnet")
+    const out = svc.update(s.id, { model: "", effort: "", cwd: "" })!
+    expect(out.model).toBeUndefined()
+    expect(out.effort).toBeUndefined()
+    expect(out.cwd).toBeUndefined()
+    // Cleared on disk too (undefined keys are dropped from the JSON).
+    const onDisk = JSON.parse(readFileSync(join(dir, `${s.id}.json`), "utf-8"))
+    expect("model" in onDisk.data).toBe(false)
+    expect("effort" in onDisk.data).toBe(false)
+  })
+
   it("disable then re-enable re-derives nextRunAt from now", () => {
     let t = 1000
     const svc = new SchedulerService(makeFakeDeps(), { dir, now: () => t })
@@ -198,6 +214,17 @@ describe("SchedulerService tick — firing", () => {
     expect(svc.get(s.id)!.nextRunAt).toBe(new Date(61_000 + 60_000).toISOString())
     // The session id is remembered on the schedule for reuse.
     expect(svc.get(s.id)!.sessionId).toBe(`sess-${s.id}`)
+  })
+
+  it("threads cwd + workspaceId through to spawnRun (the wiring resolves the folder chain)", () => {
+    // The ipc.ts wiring resolves: explicit cwd → the SCHEDULE's workspace folder
+    // (via resolveWorkspaceDir(workspaceId)) → home. The service's job is to hand
+    // it BOTH values off the schedule — never the active selection.
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir })
+    const s = svc.create(baseInput({ cwd: "C:/repo", workspaceId: "ws-9" }))
+    svc.runNow(s.id)
+    expect(deps.calls.spawned[0]).toMatchObject({ cwd: "C:/repo", workspaceId: "ws-9" })
   })
 
   it("does not fire a disabled schedule", () => {
@@ -358,6 +385,94 @@ describe("SchedulerService fire failure paths", () => {
     expect(svc.get(s.id)!.runHistory[0].status).toBe("error")
     expect(deps.calls.attention).toHaveLength(1)
   })
+
+  it("a failed prompt delivery kills the spawned terminal — no 30-minute zombie", () => {
+    const deps = makeFakeDeps()
+    deps.failSendPrompt = true
+    const svc = new SchedulerService(deps, { dir, now: () => 1000 })
+    const s = svc.create(baseInput())
+    expect(svc.runNow(s.id)).toBe(true)
+    const tid = deps.lastTerminalId()!
+    // The terminal that will never do anything is killed, the run recorded as
+    // error, attention raised, and nextRunAt advanced.
+    expect(deps.calls.killed).toContain(tid)
+    const rec = svc.get(s.id)!.runHistory[0]
+    expect(rec).toMatchObject({ status: "error", terminalId: tid })
+    expect(rec.note).toContain("deliver")
+    expect(deps.calls.attention).toHaveLength(1)
+    expect(svc.get(s.id)!.nextRunAt).toBe(new Date(1000 + 60_000).toISOString())
+    // NOT tracked in activeRuns: a subsequent runNow is not overlap-skipped.
+    deps.failSendPrompt = false
+    expect(svc.runNow(s.id)).toBe(true)
+    expect(deps.calls.spawned).toHaveLength(2)
+  })
+
+  it("a THROWING spawnRun is contained: error record, nextRunAt advanced, attention — never a hot-loop", () => {
+    // The production deps THROW (saveVersioned→writeFileSync on ENOSPC/EACCES;
+    // createHeadless can throw) — the graceful-undefined branches alone are not
+    // enough. A throw escaping fire() would leave nextRunAt un-advanced (the same
+    // schedule re-throws every 30s forever) and abort the tick loop.
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir, now: () => 1000 })
+    const s = svc.create(baseInput())
+    deps.spawnRun = () => {
+      throw new Error("ENOSPC: no space left on device")
+    }
+    expect(() => svc.runNow(s.id)).not.toThrow()
+    const rec = svc.get(s.id)!.runHistory[0]
+    expect(rec.status).toBe("error")
+    expect(rec.note).toContain("ENOSPC")
+    expect(svc.get(s.id)!.nextRunAt).toBe(new Date(1000 + 60_000).toISOString())
+    expect(deps.calls.attention).toHaveLength(1)
+  })
+
+  it("a THROWING ensureSession is contained the same way", () => {
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir, now: () => 1000 })
+    const s = svc.create(baseInput())
+    deps.ensureSession = () => {
+      throw new Error("EACCES: permission denied")
+    }
+    expect(() => svc.runNow(s.id)).not.toThrow()
+    expect(svc.get(s.id)!.runHistory[0].status).toBe("error")
+    expect(svc.get(s.id)!.nextRunAt).toBe(new Date(1000 + 60_000).toISOString())
+  })
+
+  it("a throw AFTER the run is registered untracks it and kills our own terminal (no ghost)", () => {
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir, now: () => 1000 })
+    const s = svc.create(baseInput())
+    // Sabotage the FINAL persist of fire() (after activeRuns.set): plant a
+    // directory where saveVersioned writes its `<id>.json.tmp`.
+    mkdirSync(join(dir, `${s.id}.json.tmp`))
+    expect(() => svc.runNow(s.id)).not.toThrow()
+    const tid = deps.lastTerminalId()!
+    // Cleaned up: our own spawned terminal killed, run untracked (a subsequent
+    // runNow is NOT overlap-skipped), error recorded in-memory.
+    expect(deps.calls.killed).toContain(tid)
+    expect(svc.get(s.id)!.runHistory[0].status).toBe("error")
+    rmSync(join(dir, `${s.id}.json.tmp`), { recursive: true, force: true })
+    expect(svc.runNow(s.id)).toBe(true)
+    expect(deps.calls.spawned).toHaveLength(2)
+  })
+
+  it("tick() is per-schedule throw-safe: one bad schedule cannot starve the others", () => {
+    let t = 1000
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir, now: () => t })
+    const a = svc.create(baseInput({ name: "a" }))
+    svc.runNow(a.id) // a now has a live run → its next tick path probes isTerminalAlive
+    const b = svc.create(baseInput({ name: "b" }))
+    // Poison a's overlap-guard probe. b's guard never probes a's run entries
+    // (scheduleId filter), so only a's handling throws.
+    deps.isTerminalAlive = () => {
+      throw new Error("probe boom")
+    }
+    t = 61_000 // both due
+    expect(() => svc.tick()).not.toThrow()
+    // b still fired despite a's throwing probe.
+    expect(deps.calls.spawned.filter((sp) => sp.name === "b")).toHaveLength(1)
+  })
 })
 
 describe("SchedulerService runNow", () => {
@@ -406,14 +521,69 @@ describe("SchedulerService launch catch-up", () => {
     expect(new Date(s.nextRunAt!).getTime()).toBeGreaterThan(5_000_000)
   })
 
-  it("catchUp:true fires EXACTLY ONE catch-up run", () => {
+  it("catchUp:true leaves the schedule DUE so the capped tick fires EXACTLY ONE catch-up run", () => {
     const { id } = seedMissedSchedule(true)
     const deps = makeFakeDeps()
     const svc = new SchedulerService(deps, { dir, now: () => 5_000_000 })
     svc.start()
     svc.stop()
+    // start() spawns NOTHING synchronously (boot safety: no fire before the IPC
+    // handlers register, no bypass of the concurrency cap).
+    expect(deps.calls.spawned).toHaveLength(0)
+    // The overdue schedule was left DUE — the normal tick drains it.
+    svc.tick()
     expect(deps.calls.spawned).toHaveLength(1)
     expect(svc.get(id)!.sessionId).toBe(`sess-${id}`)
+    // EXACTLY one: fire() advanced nextRunAt from the fire time, so the next tick
+    // is quiet (and the live run would overlap-guard it regardless).
+    svc.tick()
+    expect(deps.calls.spawned).toHaveLength(1)
+  })
+
+  it("multiple missed catchUp schedules DRAIN through the concurrency cap (no boot thundering-herd)", () => {
+    // Three overdue catchUp schedules persisted from an earlier "session".
+    const early = new SchedulerService(makeFakeDeps(), { dir, now: () => 1000 })
+    const ids = ["a", "b", "c"].map((n) => early.create(baseInput({ name: n, catchUp: true })).id)
+
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir, now: () => 5_000_000, maxConcurrent: 2 })
+    svc.start()
+    svc.stop()
+    expect(deps.calls.spawned).toHaveLength(0) // nothing synchronously at boot
+    svc.tick()
+    expect(deps.calls.spawned).toHaveLength(2) // capped at maxConcurrent
+    // Finish both in-flight runs; the next tick drains the third (it stayed due).
+    for (const tid of [...deps.alive]) deps.emitEnd({ terminalId: tid, kind: "result" })
+    svc.tick()
+    expect(deps.calls.spawned).toHaveLength(3)
+    // Exactly-one-catch-up preserved: each schedule fired once.
+    for (const id of ids) {
+      expect(deps.calls.spawned.filter((sp) => sp.scheduleId === id)).toHaveLength(1)
+      expect(new Date(svc.get(id)!.nextRunAt!).getTime()).toBeGreaterThan(5_000_000)
+    }
+  })
+
+  it("catch-up is per-schedule throw-safe: one schedule's failing persist can't starve the rest", () => {
+    // Two overdue catchUp:false schedules. Timestamps order their ids (and thus
+    // the load/Map order): A (ts 1000) is processed BEFORE B (ts 2000), so a
+    // non-throw-safe loop would abort on A and never reach B.
+    const earlyA = new SchedulerService(makeFakeDeps(), { dir, now: () => 1000 })
+    const idA = earlyA.create(baseInput({ name: "a" })).id
+    const earlyB = new SchedulerService(makeFakeDeps(), { dir, now: () => 2000 })
+    const idB = earlyB.create(baseInput({ name: "b" })).id
+
+    // Sabotage A's persist: saveVersioned writes `<id>.json.tmp` first — plant a
+    // DIRECTORY at that path so the write throws (deterministic, fs-level, exactly
+    // the ENOSPC/EACCES class the production deps can hit).
+    mkdirSync(join(dir, `${idA}.json.tmp`))
+
+    const svc = new SchedulerService(makeFakeDeps(), { dir, now: () => 5_000_000 })
+    expect(() => svc.start()).not.toThrow()
+    svc.stop()
+    // B was still processed despite A's throw.
+    expect(svc.get(idB)!.runHistory[0]?.status).toBe("skipped-missed")
+    // A's in-memory record was written before the persist throw (best-effort).
+    expect(svc.get(idA)!.runHistory[0]?.status).toBe("skipped-missed")
   })
 })
 
