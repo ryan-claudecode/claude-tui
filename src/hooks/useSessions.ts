@@ -203,11 +203,21 @@ export function useSessions(
       )
     })
 
+    // CAPP-113 — the config models block changed (a custom model was persisted into
+    // models.extra). Config is fetched exactly ONCE on mount, so fold the fresh block
+    // into the config state here — the App.tsx modelOptions memo (keyed on
+    // config.models) then recomputes and every mounted picker refreshes live, no app
+    // restart needed.
+    window.api.onConfigModelsChanged((models: any) => {
+      setConfig((prev: any) => ({ ...(prev ?? {}), models }))
+    })
+
     return () => {
       window.api.removeAllListeners("worksession:updated")
       window.api.removeAllListeners("worksession:removed")
       window.api.removeAllListeners("terminal:focus")
       window.api.removeAllListeners("terminal:renamed")
+      window.api.removeAllListeners("config:models-changed")
     }
   }, [])
 

@@ -398,20 +398,24 @@ export function setAgentRailOpen(open: boolean): void {
  * through the versioned envelope, creating `models` if absent and preserving its other
  * fields. IDEMPOTENT + de-duping: a blank value, a built-in alias, or an
  * already-present extra is a no-op (no write) so it never churns the file / local-history.
+ * Returns TRUE only when it actually persisted — the IPC handler gates the
+ * `config:models-changed` renderer push (and the in-memory snapshot mirror) on this,
+ * so a no-op call never fires a spurious event.
  */
-export function addModelExtra(value: string): void {
+export function addModelExtra(value: string): boolean {
   const v = typeof value === "string" ? value.trim() : ""
-  if (!v || MODEL_ALIASES.includes(v)) return
+  if (!v || MODEL_ALIASES.includes(v)) return false
   const data = readRawConfig()
   const models = data.models && typeof data.models === "object" ? data.models : {}
   const extra: string[] = Array.isArray(models.extra)
     ? models.extra.filter((x: unknown) => typeof x === "string")
     : []
-  if (extra.includes(v)) return
+  if (extra.includes(v)) return false
   extra.push(v)
   models.extra = extra
   data.models = models
   saveVersioned(CONFIG_FILE, SCHEMA_VERSION, data)
+  return true
 }
 
 export function loadConfig(): TuiConfig {

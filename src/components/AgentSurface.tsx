@@ -104,6 +104,8 @@ export default function AgentSurface({
         busy={busy}
         sessionId={sessionId}
         model={model}
+        modelOptions={modelOptions}
+        resolvedModel={resolvedModel}
         ccConversationId={ccConversationId}
         transcriptCache={transcriptCache}
         onSwitched={onSwitched}

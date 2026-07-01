@@ -16,7 +16,6 @@ import {
   type ThemeMode,
   type RenderingEngine,
 } from "../config"
-import { MODEL_ALIASES } from "../services/streamProtocol"
 
 export function registerAppHandlers(deps: {
   config: TuiConfig
@@ -78,18 +77,23 @@ export function registerAppHandlers(deps: {
   })
   // CAPP-113 — persist a user-entered CUSTOM model into config models.extra so it
   // appears in the picker from then on. Called only after a SUCCESSFUL switch to the
-  // custom value (the picker's free-text entry). Thin wrapper: addModelExtra persists
-  // (idempotent + de-duping), and we mirror it onto the in-memory config snapshot
-  // (returned by config:get) so a re-fetch surfaces it without a restart.
+  // custom value (the picker's free-text entry). addModelExtra persists (idempotent +
+  // de-duping) and returns whether it actually wrote; only then do we (a) mirror onto
+  // the in-memory config snapshot (returned by config:get) and (b) PUSH the fresh
+  // models block to every window on `config:models-changed` (the mission:updated /
+  // theme:changed broadcast pattern) so already-mounted pickers refresh WITHOUT an
+  // app restart — the renderer fetches config exactly once on mount.
   ipcMain.handle("config:add-model-extra", (_e, value: string) => {
-    addModelExtra(value)
-    const v = typeof value === "string" ? value.trim() : ""
-    if (!v || MODEL_ALIASES.includes(v)) return
+    if (!addModelExtra(value)) return
+    const v = value.trim()
     if (!config.models) config.models = {}
     const extra = Array.isArray(config.models.extra) ? config.models.extra : []
     if (!extra.includes(v)) {
       extra.push(v)
       config.models.extra = extra
+    }
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send("config:models-changed", config.models)
     }
   })
 

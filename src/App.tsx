@@ -273,6 +273,9 @@ declare global {
       setRenderingEngine: (engine: "xterm" | "structured") => Promise<void>
       // CAPP-113 — persist a user-entered CUSTOM model into config models.extra
       addModelExtra: (value: string) => Promise<void>
+      // CAPP-113 — push: the config models block changed (custom model persisted);
+      // useSessions folds it into config state so the pickers refresh live.
+      onConfigModelsChanged: (callback: (models: any) => void) => void
       // CAPP-95 / D1 — local-history net (durable-brain data-loss recovery).
       listLocalHistory: () => Promise<Array<{ hash: string; date: string; message: string }>>
       restoreLocalHistory: (hash: string, relPath?: string) => Promise<{ restored: string[] }>

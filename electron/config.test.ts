@@ -438,23 +438,47 @@ describe("models config (CAPP-113)", () => {
       stored = JSON.parse(String(contents))
     })
 
-    addModelExtra("claude-zeus-1")
+    // TRUE on a real persist — the IPC handler gates the models-changed push on this.
+    expect(addModelExtra("claude-zeus-1")).toBe(true)
     expect((stored as { data: { models?: { extra?: string[] } } }).data.models?.extra).toEqual([
       "claude-zeus-1",
     ])
 
-    // Adding the same value again is a no-op (no second write).
+    // Adding the same value again is a no-op (FALSE, no second write → no spurious push).
     const writesAfterFirst = writeSpy.mock.calls.length
-    addModelExtra("claude-zeus-1")
+    expect(addModelExtra("claude-zeus-1")).toBe(false)
     expect(writeSpy.mock.calls.length).toBe(writesAfterFirst)
   })
 
-  it("addModelExtra ignores blanks and built-in aliases (never writes)", () => {
+  it("addModelExtra preserves unrelated sibling config keys through the round-trip", () => {
+    // Seed with an unrelated key (theme) + an existing models field (default) — both
+    // must survive the read-modify-save, matching the setThemeMode/setRenderingEngine
+    // preservation convention in this file.
+    let stored: unknown = {
+      schemaVersion: 1,
+      data: { theme: { mode: "dark" }, models: { default: "sonnet" } },
+    }
+    vi.spyOn(fs, "readFileSync").mockImplementation(() => JSON.stringify(stored))
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined as never)
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {})
+    vi.spyOn(fs, "writeFileSync").mockImplementation((_p, contents) => {
+      stored = JSON.parse(String(contents))
+    })
+
+    expect(addModelExtra("claude-zeus-1")).toBe(true)
+
+    const data = (stored as { data: Record<string, any> }).data
+    expect(data.theme).toEqual({ mode: "dark" }) // sibling key untouched
+    expect(data.models.default).toBe("sonnet") // sibling models field untouched
+    expect(data.models.extra).toEqual(["claude-zeus-1"])
+  })
+
+  it("addModelExtra ignores blanks and built-in aliases (FALSE, never writes)", () => {
     vi.spyOn(fs, "readFileSync").mockReturnValue(JSON.stringify({ schemaVersion: 1, data: {} }))
     const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {})
-    addModelExtra("")
-    addModelExtra("   ")
-    addModelExtra("opus") // a built-in alias — no need to persist
+    expect(addModelExtra("")).toBe(false)
+    expect(addModelExtra("   ")).toBe(false)
+    expect(addModelExtra("opus")).toBe(false) // a built-in alias — no need to persist
     expect(writeSpy).not.toHaveBeenCalled()
   })
 })

@@ -128,13 +128,16 @@ export default function AgentModelPicker({
 
   const submitCustom = useCallback(() => {
     const value = customValue.trim()
-    if (!value) {
+    // Blank OR already-current: a successful no-op — close the input back to the
+    // select instead of silently doing nothing (switchTo would early-return on the
+    // current model, leaving the input stranded open with no feedback).
+    if (!value || value === current) {
       cancelCustom()
       return
     }
     // Persist the custom value on success so it joins the list.
     void switchTo(value, { persist: true })
-  }, [customValue, switchTo, cancelCustom])
+  }, [customValue, current, switchTo, cancelCustom])
 
   const onCustomKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
