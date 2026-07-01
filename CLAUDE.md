@@ -12,7 +12,7 @@ npm start      # launch (requires prior build)
 
 ## Architecture
 
-Three layers — service layer is the core, everything else is a thin adapter on top. Panels render in a separate companion window, not the main window.
+Three layers — service layer is the core, everything else is a thin adapter on top. Panels render **modal-by-default in the main window** (`ModalHost`); each panel has a pop-out button that moves it to the separate companion window.
 
 ```
 ┌────────────────────────────────────────────────┐
@@ -74,6 +74,8 @@ Three layers — service layer is the core, everything else is a thin adapter on
 | `src/components/WindowControls.tsx` | Custom minimize/maximize/close buttons (frameless window) |
 | `src/components/TerminalPane.tsx` | xterm.js terminal wrapper with restoring overlay |
 | `src/components/SplitView.tsx` | Side-by-side terminal panes |
+| `src/components/ModalHost.tsx` | In-main-window modal panel host (CAPP-109) — form-safe close paths, form-exclusive active panel, tab strip, pop-out button |
+| `src/components/panels/PanelContent.tsx` | The ONE shared panel-type switch (CAPP-106) — rendered by both ModalHost and CompanionApp over the typed `PanelApi` (`src/lib/panelApi.ts`, parity-gated) |
 | `src/components/panels/*.tsx` | Panel components — Diff, Form, Image, Markdown, Table, etc. |
 | `src/components/DropZone.tsx` | Drag-and-drop image overlay |
 | `src/lib/xtermThemes.ts` | xterm.js ITheme definitions for each theme mode |
@@ -185,8 +187,8 @@ The `--mcp-config` flag auto-connects Claude to the ClaudeTUI MCP server so Clau
 Session/workspace tools map 1:1 to `SessionService` / `WorkspaceService` methods.
 Additional tool groups:
 
-**Panels** (`PanelService` → `CompanionService`):
-Panels render in a separate **companion window**, not the main window. `PanelService` routes events through `CompanionService`, which manages the companion `BrowserWindow` lifecycle.
+**Panels** (`PanelService` → ModalHost, pop-out via `CompanionService`):
+Panels render **modal-by-default in the main window** (the `ModalHost`); the user can pop any panel out to the separate companion window (its `surface` flips `"modal"` → `"window"`). `PanelService` routes every panel event to the main-window mirror and ALSO to the companion for popped-out panels; `CompanionService` manages the companion `BrowserWindow` lifecycle (created only on pop-out, placement clamped to the display work area).
 - `show_panel` — show a `diff`, `image`, `markdown`, `table`, `test`, `chart`, `heatmap`, `tree`, `timeline`, `git`, `kanban`, `notes`, `stat`, `log`, `progress`, or `code` panel in the companion window. `git` renders a `git_status` result (branch, ahead/behind, staged/unstaged files) plus optional `git_log` commits; `kanban` renders `{ columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] }` — grouped cards for status buckets / parallel workstreams; `notes` renders `{ title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] }` (markdown bodies) — but prefer the `show_notes` tool, which loads saved notes for you; `stat` renders `{ title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] }` — a dashboard of big-number KPI cards (distinct from `chart`, which is for series viz); `log` renders `{ title?, lines: [string | { text, level?, time? }], showLevel? }` — a scrollable monospace log viewer with per-line severity coloring; `progress` renders `{ title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? }` — a vertical stepper with a progress bar for sequential task pipelines (distinct from `timeline`, which is chronological events); `code` renders `{ code, language?, filename?, startLine?, highlightLines?: number[], wrap? }` — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from `diff`, which compares two versions); `heatmap` renders `{ rows: number[][], xLabels?: string[], yLabels?: string[], title?, unit?, min?, max? }` — a color-coded 2D numeric matrix on a blue→green→amber→red ramp (correlation matrices, coverage grids, latency-by-hour). Note: the grid is `rows` (a 2D array), with `xLabels`/`yLabels` for the column/row headers — not `matrix`/`colLabels`/`rowLabels`. The `worktree-review` type (WW-2b) renders an isolated mission worker's captured diff with Approve/Reject buttons — it's normally opened by the renderer from the attention queue (not driven directly by Claude); see the Worktree review note under Mission orchestration.
 - `show_form` — show an interactive form in the companion window and **wait** for the user to submit; returns the field values (or `{ cancelled: true }`)
 - `update_panel` / `hide_panel` / `hide_all_panels` / `list_panels`
@@ -281,23 +283,27 @@ A two-tier model sits beneath the terminals: a **work session** is a durable con
 
 **Context Inspector v1 (CAPP-98 / I1 — the READ relationship of the coexistence layer):** a READ-ONLY introspection surface that shows the COMPLETE launch-time native context a fresh `claude` eats in a workspace + our injected primer, by precedence. Backend = `ContextInspectorService` (above), wired Service→IPC (`context:inspect`, in `workspace-handlers.ts`)→preload (`inspectWorkspaceContext`, main + companion)→MCP (`inspect_workspace_context` in the workspaces tool group, identity-bound to the caller's OWNING session's workspace, never `getActiveId`). The companion panel `context-inspector` (`src/components/panels/ContextInspectorPanel.tsx`, READ-ONLY, modeled on `SessionOverviewPanel` — collapsible per-tier sections, "none" placeholders, "excluded"/`@import`-count badges, a verbatim honesty header, a STATICALLY-VISIBLE Refresh button that re-invokes `context:inspect`; data is static seed props, NO live-refresh). Opened from a second always-visible 📄 "Context" button in the WorkspaceSwitcher (`.workspace-context-btn`, next to "Workspace memory", NO hover-reveal; `App.tsx` `handleOpenContextInspector` captures the workspaceId at click time). Renderer-side type mirror `src/lib/contextInspectorView.ts` (the canonical `contextInspector.ts` imports `node:fs`); compile-time parity pin `electron/services/contextInspectorViewSync.test.ts` fails the build on drift. **Deferred (E2 + later):** `@import` expansion, the merged/effective view, and tier #10 adoption-awareness ("delivered via your @import, not our flag") — `// TODO(E2)` left in `injectedPrimerSource`. Design: `docs/roadmap/claudemd-coexistence-design.md` §A; phasing §F (I1 row).
 
-## Panel System — Companion Window
+## Panel System — ModalHost (main window) + pop-out companion
 
-Claude renders rich UI via panels in a **separate companion BrowserWindow** that opens alongside the main window. State flows:
-**Claude → MCP tool → PanelService → CompanionService → IPC → Companion React app** (`CompanionApp`).
+Claude renders rich UI via panels that appear **modal-by-default in the MAIN window** (CAPP-109). State flows:
+**Claude → MCP tool → PanelService → main bridge IPC → `ModalHost`** (`src/components/ModalHost.tsx`, mounted in `App.tsx`).
 
-The companion window has its own pill tab bar for switching between panels, plus minimize/maximize/close buttons. When all panels are closed, the companion window closes. The main window stays purely: sidebar + tabs + terminals.
+Both windows render the same panels through the **shared `PanelContent` switch** (`src/components/panels/PanelContent.tsx`) over a typed **`PanelApi`** (`src/lib/panelApi.ts`) — a compile-time parity test asserts BOTH `window.api` and `window.companionApi` satisfy it, so a panel works identically on either surface. The ModalHost has a focus-trapped dialog with a top bar (title + **⤢ pop-out** + ×), a tab strip when several panels are open, and a **form-exclusive active-panel rule** (`src/lib/modalActivePanel.ts`): a pending form always wins the active slot so it can never be buried.
+
+**Pop-out (CAPP-110):** the ⤢ button calls `panel:pop-out` → `PanelService.popOut(id)` flips the panel's `surface` to `"window"`, hands it to the **companion window** (lazily created; placement clamped on-screen via `companionPlacement.ts` — CAPP-105), and drops it from the main mirror WITHOUT cancelling a pending form. The companion keeps its own pill tab bar. Closing the companion reconciles state (`dismissWindowPanels`): popped-out forms resolve `{cancelled:true}`, window panels drop, and nothing can resurrect the closed window — broadcasts like `hide_all_panels` use the NON-CREATING `sendIfOpen` (CAPP-116); only `popOut` may create it.
+
+**Chat → panel trigger (CAPP-111):** blocks in the structured chat are NOT click-to-open; each expandable block (assistant/tool/result/raw) has a statically-visible top-right expand button (`BlockExpandButton`, settled-gated on assistant blocks) that opens the block's detail panel in the ModalHost.
 
 **Panel presence indicator (PP):** the main window's `usePanels` hook tracks open panels (`panel:show`/`update`/`hide` IPC) and exposes a `recentlyChanged` pulse flag (set on show/update, cleared after ~1.2s). When panels are open, `TabBar` shows a quiet pill near the window controls with the open count; it pulses on open/update and clicking it calls `companion:focus` IPC → `CompanionService.focusIfOpen()`. Live-refresh matching (mission dashboard + session overview panels) uses `props.id` instead of a panel-id prefix, because panels have auto-generated `panel-N` ids.
 
 Forms are special: `show_form` keeps the MCP call open (a pending promise in
-`PanelService`). When the user submits in the companion window, the renderer sends `panel:form-submit` over IPC, which resolves the promise and returns the data to Claude.
+`PanelService`). Submitting (from the modal or a popped-out companion form) resolves the promise and returns the data to Claude; EVERY close path — modal backdrop/Escape/×/tab-close, `hide_panel`, `hide_all_panels`, companion-window close — resolves a pending form as `{cancelled:true}` so the MCP call never hangs.
 
 ### How to add a new panel type
 
 1. **Component** — create `src/components/panels/FooPanel.tsx`; it receives the
    tool's `props` as React props.
-2. **Route it** — add a `case "foo"` to `PanelContent` in both `CompanionApp.tsx` (companion window).
+2. **Route it** — add a `case "foo"` to the ONE shared `PanelContent` switch (`src/components/panels/PanelContent.tsx`) — both the ModalHost and the companion render through it.
 3. **Allow the type** — add `"foo"` to the `type` enum of `show_panel` in
    `electron/mcp/tools.ts` (no service change needed — `PanelService` is generic).
 4. **Style** — add a `.foo-panel` block in `src/App.css` using the design tokens (shared by both windows).
