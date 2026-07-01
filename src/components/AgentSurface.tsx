@@ -16,6 +16,12 @@ interface Props {
   /** CAPP-108 — the terminal's current ultracode posture (driven by the toggle in
    *  the composer controls row; only renders for xhigh-capable models). */
   ultracode?: boolean
+  /** CAPP-113 — the effective, config-extensible model option list for the picker. */
+  modelOptions?: string[]
+  /** CAPP-113 — the RESOLVED full model id (init echo) for the picker's tooltip. */
+  resolvedModel?: string
+  /** CAPP-113 — the ADDITIVE config models.xhigh list for the ultracode visibility gate. */
+  extraXhigh?: string[]
   /** BO-12 — the terminal's Claude Code conversation id (for transcript rehydrate). */
   ccConversationId?: string
   /** BO-12 — the shared, cross-pane transcript cache. */
@@ -58,6 +64,9 @@ export default function AgentSurface({
   model,
   effort,
   ultracode,
+  modelOptions,
+  resolvedModel,
+  extraXhigh,
   ccConversationId,
   transcriptCache,
   active,
@@ -105,6 +114,9 @@ export default function AgentSurface({
         model={model}
         effort={effort}
         ultracode={ultracode}
+        modelOptions={modelOptions}
+        resolvedModel={resolvedModel}
+        extraXhigh={extraXhigh}
         busy={busy}
         switching={switching}
         rawViewDisabled={!sessionId || busy || switching}

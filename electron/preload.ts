@@ -237,6 +237,11 @@ const mainApi = {
   setRenderingEngine: (engine: "xterm" | "structured") =>
     ipcRenderer.invoke("config:set-rendering-engine", engine),
 
+  // CAPP-113 — persist a user-entered CUSTOM model into config models.extra so the
+  // picker offers it from then on. Called by AgentModelPicker only after a SUCCESSFUL
+  // switch to the custom value.
+  addModelExtra: (value: string) => ipcRenderer.invoke("config:add-model-extra", value),
+
   // Agent Rail (v1) — persist the rail's open/collapsed preference (GLOBAL). The
   // renderer seeds the rail's collapsed state from config.agentRail on mount and
   // calls this when the user toggles the rail (chevron / shortcut / palette). The

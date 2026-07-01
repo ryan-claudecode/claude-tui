@@ -36,7 +36,7 @@ import { logWarn } from "./log"
 import { CompanionService } from "./services/companion"
 import { AttentionService } from "./services/attention"
 import { Notification } from "electron"
-import { loadConfig, resolveRenderingEngine, resolveRenderingModel, claudeDefaultModel, resolveRenderingEffort, claudeDefaultEffort, resolveSkipApproval, resolvePrimerRecall } from "./config"
+import { loadConfig, resolveRenderingEngine, resolveRenderingModel, claudeDefaultModel, resolveRenderingEffort, claudeDefaultEffort, resolveSkipApproval, resolvePrimerRecall, resolveModelsDefault, resolveXhighModels } from "./config"
 import { startMcpServer } from "./mcp/server"
 import { registerTerminalHandlers } from "./ipc/terminal-handlers"
 import { registerWorkSessionHandlers } from "./ipc/worksession-handlers"
@@ -102,6 +102,10 @@ export const workSessionService = new SessionService({
   getActiveWorkspaceId: () => workspaceService.getActiveId(),
   getActiveWorkspaceDir: () => workspaceService.getActiveWorkspaceDir(),
   primerRecallEnabled: () => resolvePrimerRecall(loadConfig()),
+  // CAPP-113 — the ADDITIVE config models.xhigh list, read FRESH so a config edit is
+  // honored without a restart (mirrors primerRecallEnabled). Threads into the
+  // model-switch keepUltra classification (modelSupportsXhigh).
+  xhighModels: () => resolveXhighModels(loadConfig()),
   recallRelated: ({ sessionId, workspaceId, query, limit }) =>
     recallService
       .recall(query, "workspace", { sessionId, workspaceId }, limit + 5)
@@ -319,7 +323,10 @@ export async function setupIpc(win: BrowserWindow) {
   // resolve to the latest model for the user's tier and are immune to a specific
   // version being disabled (the fable-5 failure). A per-terminal override (the
   // in-app picker) persists on the ref and wins over this default on respawn.
-  sessionService.setModel(resolveRenderingModel(config, claudeDefaultModel()))
+  // CAPP-113 — config `models.default` overrides the hard-coded DEFAULT_MODEL for
+  // NEW terminals without a code edit; it slots in as the fallback (an explicit
+  // rendering.model still wins over it, then it wins over the ambient CC-settings seed).
+  sessionService.setModel(resolveRenderingModel(config, resolveModelsDefault(config) ?? claudeDefaultModel()))
   // CAPP-46 — the default `--effort` new structured terminals spawn with. An unset
   // config.rendering.effort seeds (best-effort) from the user's own
   // ~/.claude/settings.json effortLevel, then falls back to UNDEFINED — when no

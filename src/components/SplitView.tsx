@@ -14,6 +14,8 @@ interface PaneTerminal {
   effort?: string
   /** CAPP-108 — the terminal's current ultracode posture, surfaced to the pane's toggle. */
   ultracode?: boolean
+  /** CAPP-113 — the RESOLVED full model id (init echo), surfaced as the picker's tooltip. */
+  resolvedModel?: string
   /** BO-12 — the terminal's Claude Code conversation id (for transcript rehydrate). */
   ccConversationId?: string
 }
@@ -36,6 +38,10 @@ interface Props {
    *  permission-blocked pane silently DROPPED typed input (the send cleared the
    *  textarea but the IPC guard rejected the write) and showed no Stop button. */
   isTerminalBusy?: (terminalId: string) => boolean
+  /** CAPP-113 — the effective, config-extensible model option list for each pane's picker. */
+  modelOptions?: string[]
+  /** CAPP-113 — the ADDITIVE config models.xhigh list for each pane's ultracode gate. */
+  extraXhigh?: string[]
   themeMode?: string
   fontFamily?: string
   fontSize?: number
@@ -58,6 +64,8 @@ function PaneContent({
   transcriptCache,
   onSwitched,
   busy,
+  modelOptions,
+  extraXhigh,
   themeMode,
   fontFamily,
   fontSize,
@@ -69,6 +77,8 @@ function PaneContent({
   transcriptCache?: TranscriptCache
   onSwitched?: (terminalId: string) => void
   busy?: boolean
+  modelOptions?: string[]
+  extraXhigh?: string[]
   themeMode?: string
   fontFamily?: string
   fontSize?: number
@@ -82,6 +92,9 @@ function PaneContent({
         model={term.model}
         effort={term.effort}
         ultracode={term.ultracode}
+        modelOptions={modelOptions}
+        resolvedModel={term.resolvedModel}
+        extraXhigh={extraXhigh}
         ccConversationId={term.ccConversationId}
         transcriptCache={transcriptCache}
         active
@@ -112,6 +125,8 @@ export default function SplitView({
   transcriptCache,
   onSwitched,
   isTerminalBusy,
+  modelOptions,
+  extraXhigh,
   themeMode,
   fontFamily,
   fontSize,
@@ -133,6 +148,8 @@ export default function SplitView({
           transcriptCache={transcriptCache}
           onSwitched={onSwitched}
           busy={isTerminalBusy?.(leftId) ?? false}
+          modelOptions={modelOptions}
+          extraXhigh={extraXhigh}
           themeMode={themeMode}
           fontFamily={fontFamily}
           fontSize={fontSize}
@@ -151,6 +168,8 @@ export default function SplitView({
           transcriptCache={transcriptCache}
           onSwitched={onSwitched}
           busy={isTerminalBusy?.(rightId) ?? false}
+          modelOptions={modelOptions}
+          extraXhigh={extraXhigh}
           themeMode={themeMode}
           fontFamily={fontFamily}
           fontSize={fontSize}

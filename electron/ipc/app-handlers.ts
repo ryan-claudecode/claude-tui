@@ -11,10 +11,12 @@ import {
   setThemeMode,
   setRenderingEngine,
   setAgentRailOpen,
+  addModelExtra,
   type TuiConfig,
   type ThemeMode,
   type RenderingEngine,
 } from "../config"
+import { MODEL_ALIASES } from "../services/streamProtocol"
 
 export function registerAppHandlers(deps: {
   config: TuiConfig
@@ -73,6 +75,22 @@ export function registerAppHandlers(deps: {
   // mount. Mirrors the setThemeMode write-path otherwise.
   ipcMain.handle("config:set-agent-rail-open", (_e, open: boolean) => {
     setAgentRailOpen(open)
+  })
+  // CAPP-113 — persist a user-entered CUSTOM model into config models.extra so it
+  // appears in the picker from then on. Called only after a SUCCESSFUL switch to the
+  // custom value (the picker's free-text entry). Thin wrapper: addModelExtra persists
+  // (idempotent + de-duping), and we mirror it onto the in-memory config snapshot
+  // (returned by config:get) so a re-fetch surfaces it without a restart.
+  ipcMain.handle("config:add-model-extra", (_e, value: string) => {
+    addModelExtra(value)
+    const v = typeof value === "string" ? value.trim() : ""
+    if (!v || MODEL_ALIASES.includes(v)) return
+    if (!config.models) config.models = {}
+    const extra = Array.isArray(config.models.extra) ? config.models.extra : []
+    if (!extra.includes(v)) {
+      extra.push(v)
+      config.models.extra = extra
+    }
   })
 
   // App testing tools

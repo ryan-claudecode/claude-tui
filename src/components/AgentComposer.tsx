@@ -18,6 +18,13 @@ interface Props {
   /** CAPP-108 — the terminal's current ultracode posture (driven by the toggle;
    *  the toggle only renders for xhigh-capable models). */
   ultracode?: boolean
+  /** CAPP-113 — the effective, config-extensible model option list for the picker
+   *  (built-in aliases ∪ config models.extra − hidden). Absent → built-in aliases. */
+  modelOptions?: string[]
+  /** CAPP-113 — the RESOLVED full model id (init echo) for the picker's tooltip. */
+  resolvedModel?: string
+  /** CAPP-113 — the ADDITIVE config models.xhigh list for the ultracode visibility gate. */
+  extraXhigh?: string[]
   /**
    * BO-10 — the agent is generating a turn or parked on a permission prompt. While
    * busy, Send is disabled (writing to a blocked stdin would silently buffer unread
@@ -57,6 +64,9 @@ export default function AgentComposer({
   model,
   effort,
   ultracode,
+  modelOptions,
+  resolvedModel,
+  extraXhigh,
   busy = false,
   switching = false,
   rawViewDisabled = false,
@@ -290,6 +300,8 @@ export default function AgentComposer({
             sessionId={sessionId}
             terminalId={terminalId}
             model={model}
+            options={modelOptions}
+            resolvedModel={resolvedModel}
             variant="composer"
             onSwitched={onSwitched}
           />
@@ -304,6 +316,7 @@ export default function AgentComposer({
             sessionId={sessionId}
             terminalId={terminalId}
             model={model}
+            extraXhigh={extraXhigh}
             ultracode={ultracode}
             variant="composer"
             onSwitched={onSwitched}

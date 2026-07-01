@@ -524,7 +524,18 @@ test("structured engine: composer is usable and a streamed reply renders", async
   const picker = win.locator(".agent-model-picker-select")
   await expect(picker).toBeVisible()
   await expect(picker).toHaveValue("opus")
-  await expect(picker.locator("option")).toContainText(["opus", "opus[1m]", "sonnet", "haiku"])
+  // CAPP-113 — the full documented alias set, in picker order, then the "Custom…" entry.
+  await expect(picker.locator("option")).toContainText([
+    "best",
+    "fable",
+    "opus",
+    "opus[1m]",
+    "sonnet",
+    "sonnet[1m]",
+    "haiku",
+    "opusplan",
+    "Custom…",
+  ])
 
   // Choosing a different model respawns the terminal (resuming the conversation
   // with the new --model); the picker reflects the new choice on the replacement.

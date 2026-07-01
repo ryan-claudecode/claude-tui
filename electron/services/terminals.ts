@@ -317,6 +317,13 @@ export interface TerminalInfo {
    */
   model?: string
   /**
+   * CAPP-113 — the RESOLVED full model id the headless `init` event reported (e.g.
+   * `claude-opus-4-8`), distinct from {@link TerminalInfo.model} (the alias/id we
+   * spawned with). Diagnostic-only (the picker's tooltip). Undefined until init
+   * arrives / for an xterm PTY.
+   */
+  resolvedModel?: string
+  /**
    * CAPP-46 — the `--effort` a STRUCTURED terminal was spawned with, or undefined
    * if no level was picked (the spawn then OMITS `--effort`). Surfaced to the
    * renderer so the in-app effort picker can show the current level, and persisted
@@ -524,6 +531,15 @@ interface HeadlessTerminal {
    * via {@link TerminalService.getCatalog} + the `agent:catalog` IPC accessor.
    */
   catalog?: AgentCatalog
+  /**
+   * CAPP-113 — the RESOLVED full model id the headless `init` event reported (e.g.
+   * `claude-opus-4-8` when spawned with the `opus` alias). Diagnostic-only: surfaced
+   * to the renderer as the model picker's tooltip so the user can see what an alias
+   * resolved to. Undefined until `init` arrives (after the first user message on the
+   * stream-json path). Distinct from {@link HeadlessTerminal.model}, which is the
+   * alias/id we SPAWNED with.
+   */
+  resolvedModel?: string
   /**
    * BO-5: the same active/idle machine the PTY path runs, but EVENT-driven (a
    * structured terminal has no output-quiet clock). Streaming events
@@ -1476,6 +1492,12 @@ export class TerminalService {
               slashCommands: event.slashCommands ?? [],
               skills: event.skills ?? [],
             }
+            // CAPP-113 — retain the RESOLVED full model id the init event reports
+            // (diagnostic-only; surfaced as the picker's tooltip). SessionService
+            // also watches this stream event to propagate it onto the terminal ref.
+            if (typeof event.model === "string" && event.model.trim()) {
+              entry.resolvedModel = event.model.trim()
+            }
           }
           this.emitEvent({ type: "stream", id, event })
           // BO-5: project to the search/export buffer + drive the active/idle
@@ -2144,6 +2166,7 @@ export class TerminalService {
       state: s.state,
       engine: "structured" as const,
       model: s.model,
+      resolvedModel: s.resolvedModel,
       effort: s.effort,
       ultracode: s.ultracode,
       isLogin: s.isLogin,

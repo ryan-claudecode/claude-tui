@@ -87,6 +87,15 @@ export interface TerminalRef {
    * (undefined → off → the spawn omits `--settings`, byte-unchanged default).
    */
   ultracode?: boolean
+  /**
+   * CAPP-113 — the RESOLVED full model id this STRUCTURED terminal's headless `init`
+   * event reported (e.g. `claude-opus-4-8` for the `opus` alias). DIAGNOSTIC-ONLY:
+   * recorded off the `stream` init event (see {@link SessionService.attachTerminals})
+   * and surfaced to the renderer (flows through `withEffectiveActivity`'s `...t` spread)
+   * as the model picker's tooltip. Distinct from {@link TerminalRef.model} (the
+   * alias/id we spawned with). Undefined until the first turn emits init / for xterm.
+   */
+  resolvedModel?: string
   /** Rich-presence "what this terminal is doing now" line (Claude self-reports it). */
   activity?: string
   /** Epoch ms when `activity` was last set. */
@@ -227,6 +236,16 @@ export interface SessionServiceOpts {
    * primer is byte-identical. Only an explicit `true` arms the enrichment.
    */
   primerRecallEnabled?: () => boolean
+  /**
+   * CAPP-113 — ADDITIVE config `models.xhigh` seam. A getter returning extra models
+   * that support xhigh reasoning, threaded into {@link modelSupportsXhigh} so a
+   * model-switch to a config-declared xhigh model PRESERVES ultracode (instead of
+   * force-clearing it). Re-read FRESH each call (mirroring primerRecallEnabled) so a
+   * config edit is honored without a restart. ABSENT → `() => []`: the keepUltra
+   * classification is byte-identical to the built-in matcher (existing tests
+   * unaffected). `ipc.ts` wires it to `resolveXhighModels(loadConfig())`.
+   */
+  xhighModels?: () => string[]
 }
 
 /** Persistence schema version. v1 = today's WorkSession shape verbatim. */
@@ -320,6 +339,8 @@ export class SessionService {
   /** CAPP-86 — OPTIONAL cross-session primer enrichment seam (default: none → off). */
   private recallRelated?: SessionServiceOpts["recallRelated"]
   private primerRecallEnabled: () => boolean
+  /** CAPP-113 — extra xhigh-capable models (config `models.xhigh`), read fresh. */
+  private getXhighModels: () => string[]
   /**
    * CAPP-97 — per-terminal launch snapshot of the auto-loaded context (the curated
    * "brain" CAPP-96 pushes at spawn). Keyed by the SAME terminalId the inject wrote
@@ -340,6 +361,7 @@ export class SessionService {
     this.ccProjectsRoot = opts.ccProjectsRoot ?? join(homedir(), ".claude", "projects")
     this.recallRelated = opts.recallRelated
     this.primerRecallEnabled = opts.primerRecallEnabled ?? (() => false)
+    this.getXhighModels = opts.xhighModels ?? (() => [])
   }
 
   attachTerminals(terminals: TerminalLike): void {
@@ -351,6 +373,14 @@ export class SessionService {
         this.recordConversationId(e.id, e.ccConversationId)
       } else if (e.type === "renamed" && e.id && e.name) {
         this.renameTerminal(e.id, e.name)
+      } else if (e.type === "stream" && e.id && e.event && typeof e.event === "object") {
+        // CAPP-113 — capture the RESOLVED full model id off the headless `init` event
+        // (diagnostic-only; surfaced as the picker's tooltip). Cheap discriminant guard:
+        // only the init event carries `model`; every other stream event is ignored.
+        const ev = e.event as { kind?: string; model?: unknown }
+        if (ev.kind === "init" && typeof ev.model === "string" && ev.model.trim()) {
+          this.recordResolvedModel(e.id, ev.model.trim())
+        }
       }
     })
   }
@@ -414,6 +444,22 @@ export class SessionService {
     if (!t || t.ccConversationId === ccConversationId) return
     t.ccConversationId = ccConversationId
     this.persist(s)
+  }
+
+  /**
+   * CAPP-113 — record the RESOLVED full model id (from the headless `init` event) onto
+   * the terminal ref (diagnostic-only; the picker's tooltip). Persist + emit so the
+   * tooltip updates live. No-op when unchanged (init fires once per turn, so this is
+   * effectively once per spawn) — keeps snapshot churn off the hot stream path.
+   */
+  private recordResolvedModel(terminalId: string, resolvedModel: string): void {
+    const s = this.sessionOf(terminalId)
+    if (!s) return
+    const t = s.terminals.find((x) => x.id === terminalId)
+    if (!t || t.resolvedModel === resolvedModel) return
+    t.resolvedModel = resolvedModel
+    this.persist(s)
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
   }
 
   /** Fold a live terminal's state into its ref + recompute session status; persist + emit. */
@@ -863,7 +909,9 @@ export class SessionService {
     // that can't do xhigh must FORCE ultracode off; otherwise it'd be stranded ON
     // (passed to a model that can't honor it) with no UI to clear it. The respawn then
     // restores the saved --effort (no longer suppressed).
-    const keepUltra = modelSupportsXhigh(model.trim()) ? ref.ultracode : false
+    // CAPP-113 — thread config `models.xhigh` (read fresh) so switching to a
+    // config-declared xhigh model preserves ultracode too; absent → byte-identical.
+    const keepUltra = modelSupportsXhigh(model.trim(), this.getXhighModels()) ? ref.ultracode : false
     const info = this.respawnHeadlessRef(s, ref, model.trim(), ref.effort, keepUltra)
     this.logEvent(s, "spawn", `Model → ${info.model ?? model.trim()} (respawned "${ref.name}")`, info.id)
     this.persist(s)

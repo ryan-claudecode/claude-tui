@@ -7229,6 +7229,46 @@ body {
 .agent-model-picker-select:disabled,
 .agent-effort-picker-select:disabled { opacity: 0.5; cursor: default; }
 
+/* CAPP-113 — the free-text "Custom…" model entry: an inline input + ✓ apply button,
+   both STATICALLY visible (no hover-reveal) and styled off the same control tokens as
+   the select so the swap reads as one control. */
+.agent-model-picker-custom-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+.agent-model-picker-custom {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-0);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  padding: 3px 8px;
+  width: 150px;
+  transition: border-color var(--fast) var(--ease-out),
+    background var(--fast) var(--ease-out);
+}
+.agent-model-picker-custom::placeholder { color: var(--text-3); }
+.agent-model-picker-custom:hover { border-color: var(--accent); }
+.agent-model-picker-custom:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.agent-model-picker-custom:disabled { opacity: 0.5; }
+.agent-model-picker-custom-ok {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-0);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease-out),
+    background var(--fast) var(--ease-out);
+}
+.agent-model-picker-custom-ok:hover { border-color: var(--accent); background: var(--bg-3); }
+.agent-model-picker-custom-ok:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.agent-model-picker-custom-ok:disabled { opacity: 0.5; cursor: default; }
+
 /* CAPP-108 — the Ultracode toggle, adjacent to the effort picker. A statically
    visible label + on/off switch + a one-line cost caution. Inherits the picker
    label treatment so the control set reads as one cluster. */
@@ -7575,12 +7615,15 @@ body {
   font-size: 9px;
 }
 .agent-model-picker-composer .agent-model-picker-select,
+.agent-model-picker-composer .agent-model-picker-custom,
+.agent-model-picker-composer .agent-model-picker-custom-ok,
 .agent-effort-picker-composer .agent-effort-picker-select,
 .agent-ultracode-toggle-composer .agent-ultracode-toggle-switch,
 .agent-raw-view-btn-composer {
   font-size: 10px;
   padding: 2px 7px;
 }
+.agent-model-picker-composer .agent-model-picker-custom { width: 130px; }
 .agent-ultracode-toggle-composer .agent-ultracode-toggle-caution {
   font-size: 9px;
   max-width: 300px;

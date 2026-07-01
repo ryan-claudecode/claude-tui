@@ -15,6 +15,9 @@ import {
   DEFAULT_INJECT_MAX_BYTES,
   claudeDefaultModel,
   claudeDefaultEffort,
+  resolveModelsDefault,
+  resolveXhighModels,
+  addModelExtra,
   type ThemeMode,
 } from "./config"
 import * as fs from "node:fs"
@@ -369,5 +372,89 @@ describe("resolveInjectMaxBytes (CAPP-96 auto-load byte cap)", () => {
     expect(resolveInjectMaxBytes({ context: { injectMaxBytes: Infinity } })).toBe(DEFAULT_INJECT_MAX_BYTES)
     expect(resolveInjectMaxBytes({ context: { injectMaxBytes: "8192" } as never })).toBe(DEFAULT_INJECT_MAX_BYTES)
     expect(resolveInjectMaxBytes({ context: { injectMaxBytes: null } as never })).toBe(DEFAULT_INJECT_MAX_BYTES)
+  })
+})
+
+// CAPP-113 — the config-extensible `models` block (never-stale model list). Absent/
+// partial/malformed must be tolerated (ignored), never fatal.
+describe("models config (CAPP-113)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.resetAllMocks()
+  })
+
+  it("resolveModelsDefault returns undefined for absent/partial/blank", () => {
+    expect(resolveModelsDefault(undefined)).toBeUndefined()
+    expect(resolveModelsDefault(null)).toBeUndefined()
+    expect(resolveModelsDefault({})).toBeUndefined()
+    expect(resolveModelsDefault({ models: {} })).toBeUndefined()
+    expect(resolveModelsDefault({ models: { default: "   " } })).toBeUndefined()
+    expect(resolveModelsDefault({ models: { default: 42 as never } })).toBeUndefined()
+  })
+
+  it("resolveModelsDefault returns the trimmed override when set", () => {
+    expect(resolveModelsDefault({ models: { default: "sonnet" } })).toBe("sonnet")
+    expect(resolveModelsDefault({ models: { default: "  fable " } })).toBe("fable")
+  })
+
+  it("resolveXhighModels returns [] for absent/partial/malformed, cleaned strings otherwise", () => {
+    expect(resolveXhighModels(undefined)).toEqual([])
+    expect(resolveXhighModels({})).toEqual([])
+    expect(resolveXhighModels({ models: {} })).toEqual([])
+    expect(resolveXhighModels({ models: { xhigh: "opus" as never } })).toEqual([])
+    expect(resolveXhighModels({ models: { xhigh: ["  zeus  ", "", 7 as never, "athena"] } })).toEqual([
+      "zeus",
+      "athena",
+    ])
+  })
+
+  it("loadConfig PROJECTS models so get_config/preload surface it to the renderer", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({
+        schemaVersion: 1,
+        data: { models: { default: "sonnet", extra: ["zeus"], hidden: ["haiku"], xhigh: ["zeus"] } },
+      }),
+    )
+    expect(loadConfig().models).toEqual({
+      default: "sonnet",
+      extra: ["zeus"],
+      hidden: ["haiku"],
+      xhigh: ["zeus"],
+    })
+  })
+
+  it("loadConfig leaves models undefined when absent (default behavior)", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue(JSON.stringify({ schemaVersion: 1, data: {} }))
+    expect(loadConfig().models).toBeUndefined()
+  })
+
+  it("addModelExtra appends a custom model to models.extra (creating the block), idempotent", () => {
+    // Start from an empty (missing) config; capture what gets written.
+    let stored: unknown = { schemaVersion: 1, data: {} }
+    vi.spyOn(fs, "readFileSync").mockImplementation(() => JSON.stringify(stored))
+    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined as never)
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {})
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((_p, contents) => {
+      stored = JSON.parse(String(contents))
+    })
+
+    addModelExtra("claude-zeus-1")
+    expect((stored as { data: { models?: { extra?: string[] } } }).data.models?.extra).toEqual([
+      "claude-zeus-1",
+    ])
+
+    // Adding the same value again is a no-op (no second write).
+    const writesAfterFirst = writeSpy.mock.calls.length
+    addModelExtra("claude-zeus-1")
+    expect(writeSpy.mock.calls.length).toBe(writesAfterFirst)
+  })
+
+  it("addModelExtra ignores blanks and built-in aliases (never writes)", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue(JSON.stringify({ schemaVersion: 1, data: {} }))
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {})
+    addModelExtra("")
+    addModelExtra("   ")
+    addModelExtra("opus") // a built-in alias — no need to persist
+    expect(writeSpy).not.toHaveBeenCalled()
   })
 })

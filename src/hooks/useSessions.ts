@@ -28,6 +28,10 @@ export interface Terminal {
    *  TerminalRef.ultracode); shown in + driven by the in-app ultracode toggle.
    *  Undefined/false for xterm or when off. Flows via the `{...t}` spread. */
   ultracode?: boolean
+  /** CAPP-113 — the RESOLVED full model id the headless init echoed (from
+   *  TerminalRef.resolvedModel); shown ONLY as the model picker's tooltip. Undefined
+   *  until the first turn / for xterm. Flows via the `{...t}` spread. */
+  resolvedModel?: string
   /**
    * BO-12 — the Claude Code conversation id this terminal is bound to (from
    * TerminalRef.ccConversationId; already flows to the renderer via the `{...t}`

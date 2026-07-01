@@ -9,6 +9,9 @@ interface Props {
   /** The terminal's current `--model` — gates the toggle's visibility (ultracode
    *  forces xhigh, so it only shows for xhigh-capable models). */
   model?: string
+  /** CAPP-113 — the ADDITIVE config `models.xhigh` list, threaded into the visibility
+   *  gate so a config-declared xhigh model also shows the toggle. Absent → built-ins only. */
+  extraXhigh?: string[]
   /** The terminal's current ultracode posture (true = on). */
   ultracode?: boolean
   /** "header" | "composer" — style variant, mirroring the effort/model pickers. */
@@ -43,6 +46,7 @@ export default function AgentUltracodeToggle({
   sessionId,
   terminalId,
   model,
+  extraXhigh,
   ultracode,
   variant = "composer",
   onSwitched,
@@ -66,7 +70,7 @@ export default function AgentUltracodeToggle({
   // Gate visibility on the selected model supporting xhigh — ultracode forces
   // xhigh, so it's meaningless (and would be rejected) on a non-xhigh model. The
   // hooks above ALWAYS run (rules-of-hooks); only the render output is gated.
-  if (!modelSupportsXhigh(model)) return null
+  if (!modelSupportsXhigh(model, extraXhigh)) return null
 
   return (
     <label className={`agent-ultracode-toggle agent-ultracode-toggle-${variant}`}>
