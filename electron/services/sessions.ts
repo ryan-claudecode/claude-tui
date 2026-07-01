@@ -1174,19 +1174,25 @@ export class SessionService {
   }
 
 
-  create(): WorkSession {
+  create(opts: { workspaceId?: string; name?: string } = {}): WorkSession {
     const t = this.now()
     // WS-C — stamp the active workspace at mint time so the session is scoped to
     // it (default = active workspace id). When no workspace is active ("All"
     // mode), leave `workspaceId` UNSET (undefined → the "All" bucket): the field
     // is additive/optional, so an untagged session persists + reloads cleanly and
     // is byte-identical to the pre-WS-C shape.
-    const activeWorkspaceId = this.getActiveWorkspaceId() ?? undefined
+    // CAPP-114 (SCHED-1) — an EXPLICIT `opts.workspaceId` (present in `opts`, even as
+    // undefined) overrides the active-workspace stamping: a scheduled run fires in
+    // the background independent of the active selection, so its per-schedule session
+    // must be scoped to the SCHEDULE's workspace, not whatever is active at tick time.
+    // `opts.name` seeds the container name (default keeps the "Untitled session"
+    // placeholder). Existing zero-arg callers are byte-unchanged.
+    const workspaceId = "workspaceId" in opts ? opts.workspaceId : (this.getActiveWorkspaceId() ?? undefined)
     const s: WorkSession = {
       id: `session-${t}-${Math.random().toString(36).slice(2, 8)}`,
-      name: "Untitled session",
+      name: opts.name ?? "Untitled session",
       status: "active",
-      ...(activeWorkspaceId ? { workspaceId: activeWorkspaceId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
       summary: "",
       notes: [],
       provisionalFindings: [],

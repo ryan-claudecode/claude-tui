@@ -17,6 +17,7 @@ import type { NotesService } from "../services/notes"
 import type { FileService } from "../services/files"
 import type { UiService } from "../services/ui"
 import type { MissionService } from "../services/mission"
+import type { SchedulerService } from "../services/scheduler"
 import type { SessionService } from "../services/sessions"
 import type { RecallService } from "../services/recall"
 import type { AttentionService } from "../services/attention"
@@ -47,6 +48,7 @@ PILLAR 2 — AGENT-RENDERED UI (you drive the app back, routing the user's atten
 PILLAR 3 — ORCHESTRATION (durable goals, dispatched workers, code-level supervision):
 - Missions — mission_create/status/list/plan/dispatch/await/resolve/log/pause/resume/stop/finish: run a durable, on-disk mission where you (or another Conductor session) decompose a goal, dispatch worker sessions, review results, and commit — surviving context and usage limits. If spawned as a Conductor, call mission_status FIRST to load state and continue. Opt-in worktree isolation (isolate_workers on mission_create/plan, requires a git cwd) runs each worker in a private git worktree and review-gates its diff: a resolved-done task enters review — mission_review_queue lists pending diffs; mission_approve_task merges (clean → done, conflict → preserved for manual handling, never auto-resolved); mission_reject_task discards back to pending.
 - Sessions & panes — create_session, kill_session, focus_session, rename_session, list_sessions, trigger_handoff, split_panes / close_split, broadcast_input (send the same input to many sessions at once).
+- Scheduler (on-device recurring/one-shot runs) — schedule_create/list/update/delete/run_now: register a headless Claude run to fire on THIS machine at set times (interval with an optional time-of-day window + weekday filter, daily-at, or once) — the on-device answer to cloud scheduling (local files, git, gh, the user's auth). schedule_update enables/disables; schedule_run_now fires immediately. Every schedule is visible in the sidebar and scoped to your bound session's workspace by default.
 
 SUPPORTING (observability & self-verification):
 - Read-only git — git_status / git_log / git_diff / git_show / git_blame / git_branches return structured JSON for inspecting repo state without scraping the terminal. (Write-side git — commit/push/branch/stash — is deliberately NOT here; use your own shell.)
@@ -104,6 +106,7 @@ export async function startMcpServer(
   workspaceMemoryService: WorkspaceMemoryService,
   contextInspectorService: ContextInspectorService,
   exportService: ExportService,
+  schedulerService: SchedulerService,
 ): Promise<{ port: number; configPath: string }> {
   // A single McpServer can only be bound to one transport at a time, so we
   // build a fresh server (with all tools registered) PER SSE connection. The
@@ -142,6 +145,7 @@ export async function startMcpServer(
       workspaceMemoryService,
       contextInspectorService,
       exportService,
+      schedulerService,
       identity,
     )
     return server
