@@ -942,12 +942,16 @@ export class SessionService {
     if (!structured) return undefined
 
     // A blank/undefined effort clears the level (respawn omits `--effort`). The
-    // respawn PRESERVES the terminal's current model (pass ref.model) AND ultracode
-    // (pass ref.ultracode). CAPP-108 note: if ultracode is ON the spawn SUPPRESSES
-    // `--effort` regardless, so picking an effort while ultracode is on has no effect
-    // until ultracode is turned off (the UI gates the two so this rarely arises).
+    // respawn PRESERVES the terminal's current model (pass ref.model).
+    // CAPP-117 — ultracode consistency: ultracode forces xhigh internally and SUPPRESSES
+    // `--effort`, so picking an EXPLICIT non-xhigh effort while ultracode is ON would
+    // silently do nothing (ultracode wins). Turning ultracode OFF here lets the chosen
+    // effort actually take (mirrors the setTerminalModel keepUltra rule for non-xhigh
+    // models). Clearing effort (undefined) or picking `xhigh` KEEPS ultracode. The UI
+    // also hides the toggle under a non-xhigh effort, but the backend enforces the rule.
     const next = typeof effort === "string" && effort.trim() ? effort.trim() : undefined
-    const info = this.respawnHeadlessRef(s, ref, ref.model, next, ref.ultracode)
+    const keepUltra = !next || next === "xhigh" ? ref.ultracode : false
+    const info = this.respawnHeadlessRef(s, ref, ref.model, next, keepUltra)
     this.logEvent(s, "spawn", `Effort → ${info.effort ?? "default"} (respawned "${ref.name}")`, info.id)
     this.persist(s)
     this.emit("worksession:updated", this.withEffectiveActivity(s))

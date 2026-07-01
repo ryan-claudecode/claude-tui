@@ -316,6 +316,7 @@ export default function AgentComposer({
             sessionId={sessionId}
             terminalId={terminalId}
             model={model}
+            effort={effort}
             extraXhigh={extraXhigh}
             ultracode={ultracode}
             variant="composer"

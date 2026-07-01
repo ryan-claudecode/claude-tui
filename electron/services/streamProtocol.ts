@@ -130,17 +130,21 @@ export const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh
 // `--effort` (passing both is undefined behavior). The flag was live-verified on
 // this machine's `claude` (v2.1.170: `--settings <file-or-json>` exists).
 //
-// The JSON STRING (with `{ } " :` metachars) is passed INLINE; the CAPP-96
-// argv-safe shellWrap quoting (quotePowerShellArg / quotePosixArg) wraps it as
-// '{"ultracode":true}' so it round-trips through the shell intact — no temp file,
-// no quoting risk (the value has no interior single quote to escape). This module
-// is zero-runtime-dep, so the renderer toggle and the main process share ONE
-// source of truth for the settings payload + the xhigh-model gate.
+// CAPP-117 — this payload is the FILE CONTENT of a temp settings file passed as
+// `--settings <path>`, NOT an inline JSON argument. The embedded `{ } " :` do NOT
+// survive the powershell→claude argv hop on Windows (the downstream-argv quirk
+// documented in shellWrap.test.ts:20-24): even correctly single-quoted, the interior
+// double quotes reach `claude` mangled and it dies instantly with
+// `Error: Invalid JSON provided to --settings` (live-verified, claude v2.1.198). A
+// bare file PATH has no interior metachars, so it round-trips intact — see
+// TerminalService.ultracodeSettingsPath. This module is zero-runtime-dep, so the
+// renderer toggle and the main process share ONE source of truth for the settings
+// payload + the xhigh-model gate.
 // ---------------------------------------------------------------------------
 
-/** CAPP-108 — the inline `--settings` JSON value that enables ultracode. The
- *  argv-safe shellWrap single-quotes it through the shell, so it lands on the
- *  `claude` command line as `'{"ultracode":true}'`. */
+/** CAPP-108/117 — the `--settings` JSON value that enables ultracode. Written to a
+ *  temp FILE and passed as `--settings <path>` (the inline JSON dies on the Windows
+ *  powershell→claude argv hop — see the note above). */
 export const ULTRACODE_SETTINGS = `{"ultracode":true}`
 
 /** CAPP-108/113 — model ALIAS prefixes that support `xhigh` reasoning (and thus can

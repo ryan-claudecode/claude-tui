@@ -282,7 +282,7 @@ describe("BO-7 — retains the init catalog (slash commands + skills) per termin
 })
 
 describe("createHeadless — needs-auth signal", () => {
-  it("emits a typed needs_auth when the process exits WITHOUT an init event", () => {
+  it("emits a typed needs_auth when the process exits WITHOUT an init event AND the stderr reads like auth", () => {
     const { svc, spawned } = makeHeadlessService()
     const events = collect(svc)
     const info = svc.createHeadless("t", process.cwd())
@@ -295,6 +295,28 @@ describe("createHeadless — needs-auth signal", () => {
     expect(authEvent).toBeDefined()
     expect(authEvent!.id).toBe(info.id)
     // exit is also emitted.
+    expect(events.some((e) => e.type === "exit" && e.id === info.id)).toBe(true)
+  })
+
+  it("CAPP-117: an exit-before-init with a NON-auth stderr (a bad --settings JSON) does NOT classify as needs_auth — it surfaces the real stderr as a plain errored result", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    const fake = spawned[0]
+    // The exact line the inline-JSON bug produced. It must NOT be read as "not signed in".
+    fake.emitStderr("Error: Invalid JSON provided to --settings")
+    fake.emitExit(1)
+
+    const stream = events.filter((e) => e.type === "stream") as Extract<TerminalEvent, { type: "stream" }>[]
+    // NOT misclassified as an auth problem…
+    expect(stream.some((e) => e.event.kind === "needs_auth")).toBe(false)
+    // …and the real stderr self-describes on a plain errored result block.
+    const errResult = stream.find(
+      (e) => e.event.kind === "result" && (e.event as Extract<StreamEvent, { kind: "result" }>).isError,
+    )
+    expect(errResult).toBeDefined()
+    const ev = errResult!.event as Extract<StreamEvent, { kind: "result" }>
+    expect(ev.result).toContain("Error: Invalid JSON provided to --settings")
     expect(events.some((e) => e.type === "exit" && e.id === info.id)).toBe(true)
   })
 
@@ -1506,14 +1528,19 @@ describe("CAPP-108 createHeadless — ultracode --settings on the spawn args", (
     expect(svc.list().find((t) => t.id === info.id)?.ultracode).toBe(false)
   })
 
-  it("ultracode ON appends --settings with the {\"ultracode\":true} payload and returns true", () => {
+  it("CAPP-117: ultracode ON passes --settings <temp FILE> (NOT the inline JSON, which dies on the powershell argv hop) and returns true", () => {
     const { svc, spawned } = makeHeadlessService()
     // signature: createHeadless(name, cwd, sessionId, resumeConvId, allowedTools, model, effort, ultracode)
     const info = svc.createHeadless("t", process.cwd(), undefined, undefined, undefined, undefined, undefined, true)
     const joined = spawned[0].args.join(" ")
     expect(joined).toContain("--settings")
-    // The exact JSON payload survives the argv-safe shellWrap quoting intact.
-    expect(joined).toContain(ULTRACODE_SETTINGS)
+    // The flag points at a FILE; the raw inline JSON never reaches argv (that's the bug fix).
+    expect(joined).toContain("ultracode-settings.json")
+    expect(joined).not.toContain(ULTRACODE_SETTINGS)
+    // The file exists with EXACTLY the ultracode payload.
+    const settingsFile = join(tmpdir(), "claudetui", "ultracode-settings.json")
+    expect(existsSync(settingsFile)).toBe(true)
+    expect(readFileSync(settingsFile, "utf8")).toBe(`{"ultracode":true}`)
     expect(ULTRACODE_SETTINGS).toBe(`{"ultracode":true}`)
     expect(info.ultracode).toBe(true)
     expect(svc.list().find((t) => t.id === info.id)?.ultracode).toBe(true)
@@ -1524,7 +1551,7 @@ describe("CAPP-108 createHeadless — ultracode --settings on the spawn args", (
     const info = svc.createHeadless("t", process.cwd(), undefined, undefined, undefined, "opus", "high", true)
     const joined = spawned[0].args.join(" ")
     expect(joined).toContain("--settings")
-    expect(joined).toContain(ULTRACODE_SETTINGS)
+    expect(joined).toContain("ultracode-settings.json")
     // --effort is NOT also passed when ultracode is on.
     expect(joined).not.toContain("--effort")
     expect(info.effort).toBeUndefined()
@@ -1538,7 +1565,7 @@ describe("CAPP-108 createHeadless — ultracode --settings on the spawn args", (
     svc.setEffort("max")
     const info = svc.createHeadless("t", process.cwd(), undefined, undefined, undefined, undefined, undefined, true)
     expect(spawned[0].args.join(" ")).not.toContain("--effort")
-    expect(spawned[0].args.join(" ")).toContain(ULTRACODE_SETTINGS)
+    expect(spawned[0].args.join(" ")).toContain("ultracode-settings.json")
     expect(info.ultracode).toBe(true)
   })
 
@@ -1557,7 +1584,7 @@ describe("CAPP-108 createHeadless — ultracode --settings on the spawn args", (
     svc.setUltracode(true)
     expect(svc.getUltracode()).toBe(true)
     const info = svc.createHeadless("t", process.cwd())
-    expect(spawned[0].args.join(" ")).toContain(ULTRACODE_SETTINGS)
+    expect(spawned[0].args.join(" ")).toContain("ultracode-settings.json")
     expect(info.ultracode).toBe(true)
   })
 
@@ -1583,7 +1610,7 @@ describe("CAPP-108 createHeadless — ultracode --settings on the spawn args", (
 
     const joined = spawned[0].args.join(" ")
     expect(joined).toContain(`--resume ${convId}`)
-    expect(joined).toContain(ULTRACODE_SETTINGS)
+    expect(joined).toContain("ultracode-settings.json")
   })
 
   it("the xterm (legacy PTY) path does NOT pass --settings — byte-unchanged", () => {
@@ -1600,7 +1627,18 @@ describe("CAPP-108 createHeadless — ultracode --settings on the spawn args", (
     const { svc, procs } = makeDualService()
     svc.setEngine("structured")
     const info = svc.create("t", process.cwd(), undefined, undefined, undefined, undefined, true)
-    expect(procs[0].args.join(" ")).toContain(ULTRACODE_SETTINGS)
+    expect(procs[0].args.join(" ")).toContain("ultracode-settings.json")
+    expect(info.ultracode).toBe(true)
+  })
+
+  it("CAPP-117: when the ultracode settings file can't be written (helper → null) the spawn OMITS --settings entirely (no dead terminal)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    // Force the fs helper to fail; a spawn WITHOUT ultracode must beat a dead terminal.
+    ;(svc as unknown as { ultracodeSettingsPath: () => string | null }).ultracodeSettingsPath = () => null
+    const info = svc.createHeadless("t", process.cwd(), undefined, undefined, undefined, undefined, undefined, true)
+    const joined = spawned[0].args.join(" ")
+    expect(joined).not.toContain("--settings")
+    // The terminal still spawns; the requested posture is recorded (the file write, not intent, failed).
     expect(info.ultracode).toBe(true)
   })
 })
