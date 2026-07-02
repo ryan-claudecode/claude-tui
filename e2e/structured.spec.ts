@@ -1321,10 +1321,22 @@ test("CAPP-94 / U6: the workspace-memory editor opens from the switcher, renders
   await win.waitForSelector("#root", { timeout: 30_000 })
   await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
 
-  // The "Workspace memory" button is ALWAYS VISIBLE in the switcher (no hover-reveal),
-  // even in "All" mode (the untagged bucket has its own memory). Click it.
-  const memBtn = win.locator(".workspace-memory-btn")
+  // CAPP-122 — the memory entry point is now a compact icon button (🧠) in the
+  // consolidated workspace control row. It is ALWAYS VISIBLE in the switcher (no
+  // hover-reveal), even in "All" mode (the untagged bucket has its own memory).
+  const memBtn = win.locator(".wsctl-memory")
   await expect(memBtn).toBeVisible({ timeout: 15_000 })
+  await expect(memBtn).toHaveAttribute("aria-label", /workspace memory/i)
+
+  // CAPP-122 no-hover guard: the control row's icon buttons are statically visible at
+  // FULL opacity AT REST (no prior hover). toBeVisible() ignores opacity, so read the
+  // computed opacity directly — this catches an opacity:0 + :hover-reveal regression.
+  const ctxBtnRest = win.locator(".wsctl-context")
+  await expect(ctxBtnRest).toBeVisible({ timeout: 15_000 })
+  for (const btn of [memBtn, ctxBtnRest]) {
+    const restOpacity = await btn.evaluate((el) => getComputedStyle(el).opacity)
+    expect(restOpacity).toBe("1")
+  }
 
   // CAPP-109 / S2 — the editor now opens IN the main window's ModalHost (modal-by-default).
   await memBtn.click()
@@ -1421,7 +1433,7 @@ test("CAPP-97: the workspace-memory editor shows a statically-visible Pin toggle
   await win.waitForSelector("#root", { timeout: 30_000 })
   await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
 
-  const memBtn = win.locator(".workspace-memory-btn")
+  const memBtn = win.locator(".wsctl-memory")
   await expect(memBtn).toBeVisible({ timeout: 15_000 })
   // CAPP-109 / S2 — opens in the main-window ModalHost (modal-by-default).
   await memBtn.click()
@@ -1491,7 +1503,7 @@ test("CAPP-99 / E1: the workspace-memory editor's Export section enables export 
   await win.waitForSelector("#root", { timeout: 30_000 })
   await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
 
-  const memBtn = win.locator(".workspace-memory-btn")
+  const memBtn = win.locator(".wsctl-memory")
   await expect(memBtn).toBeVisible({ timeout: 15_000 })
   // CAPP-109 / S2 — opens in the main-window ModalHost (modal-by-default).
   await memBtn.click()
@@ -1565,11 +1577,12 @@ test("CAPP-98 / I1: the always-visible 'Context' switcher button opens the READ-
   await win.waitForSelector("#root", { timeout: 30_000 })
   await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
 
-  // The "Context" button is ALWAYS VISIBLE in the switcher (no hover-reveal), even in
-  // "All" mode — distinct from the adjacent "Workspace memory" button.
-  const ctxBtn = win.locator(".workspace-context-btn")
+  // CAPP-122 — the context entry point is now a compact icon button (📄) in the
+  // consolidated workspace control row. It is ALWAYS VISIBLE in the switcher (no
+  // hover-reveal), even in "All" mode — distinct from the adjacent 🧠 memory button.
+  const ctxBtn = win.locator(".wsctl-context")
   await expect(ctxBtn).toBeVisible({ timeout: 15_000 })
-  await expect(ctxBtn).toContainText("Context")
+  await expect(ctxBtn).toHaveAttribute("aria-label", /context inspector/i)
 
   // CAPP-109 / S2 — the READ-ONLY inspector now opens IN the main-window ModalHost.
   await ctxBtn.click()

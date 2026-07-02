@@ -40,13 +40,20 @@ interface Props {
  * Enter activates, Esc closes (and returns focus to the pill). Click-outside
  * dismisses. Reduced-motion is honored via CSS.
  *
- * BELOW THE PILL (only for a specific active workspace) — all controls ALWAYS
- * VISIBLE (NO hover-reveal anywhere):
+ * BELOW THE PILL — a single COMPACT control row (CAPP-122): small, muted-at-rest
+ * icon buttons (CAPP-119 treatment — NO hover-reveal, hover only deepens), each a
+ * distinct focusable <button> with a title + aria-label:
+ *  - 🧠 memory + 📄 context in BOTH modes (the untagged "All" bucket has its own
+ *    durable memory + launch context — the untagged entry point).
+ *  - ✏ rename + 🗑 delete only for a SPECIFIC active workspace (rename toggles the
+ *    inline input below; delete keeps the existing window.confirm).
+ *
+ * FOR A SPECIFIC ACTIVE WORKSPACE, below that row (ALWAYS VISIBLE, NO hover-reveal):
+ *  - the inline rename input (shown while renaming; Enter commits, Esc cancels).
  *  - the folder row — shows the folder's PARENT FOLDER NAME (basename of `dir`) or
  *    "No folder selected"; clicking it opens the native single-folder picker and
  *    sets/changes the folder (the ONLY place to set the folder).
- *  - an edit (✎) button that toggles inline rename (Enter commits, Esc cancels).
- *  - a delete button (with the existing window.confirm).
+ *  - the "Restore a conversation" button (only when a folder is set).
  */
 
 // The flat, navigable option list: "All" (index 0), then one per workspace,
@@ -281,54 +288,111 @@ export default function WorkspaceSwitcher({
       )}
       </div>
 
-      {/* CAPP-94 — open the workspace-memory editor. ALWAYS VISIBLE (no hover-reveal),
-          in BOTH "All" and specific-workspace modes (the untagged "All" bucket has its
-          own durable memory too). Opens the companion panel pinned to the active
-          workspace (or the untagged bucket). */}
-      <button
-        type="button"
-        className="workspace-memory-btn"
-        title={
-          isAllActive
-            ? "Edit the shared (All workspaces) memory"
-            : `Edit ${active!.name} memory`
-        }
-        aria-label="Open workspace memory"
-        onClick={onOpenWorkspaceMemory}
-      >
-        <span className="workspace-memory-icon" aria-hidden="true">
-          🧠
-        </span>
-        <span>Workspace memory</span>
-      </button>
+      {/* CAPP-122 — ONE compact control row under the selector pill (replaces the old
+          stacked "Workspace memory" / "Context" full-width buttons + the separate
+          name/rename/delete row). Small, muted-at-rest icon buttons matching the
+          CAPP-119 expand-icon treatment (--text-3 contrast, transparent bg/border at
+          rest, hover DEEPENS — never a hover-REVEAL). Each is a distinct focusable
+          <button> with a title tooltip + aria-label.
+            - 🧠 memory + 📄 context render in BOTH modes (the untagged "All" bucket has
+              its own durable memory + launch context — this is the untagged entry point,
+              preserved; the handlers capture the workspaceId at click time).
+            - ✏ rename + 🗑 delete render only for a SPECIFIC active workspace. */}
+      <div className="workspace-controls">
+        <button
+          type="button"
+          className="workspace-ctl-btn wsctl-memory"
+          title={
+            isAllActive
+              ? "Edit the shared (All workspaces) memory"
+              : `Edit ${active!.name} memory`
+          }
+          aria-label="Open workspace memory"
+          onClick={onOpenWorkspaceMemory}
+        >
+          <span aria-hidden="true">🧠</span>
+        </button>
+        <button
+          type="button"
+          className="workspace-ctl-btn wsctl-context"
+          title={
+            isAllActive
+              ? "Inspect the launch-time context for the All bucket (read-only)"
+              : `Inspect ${active!.name}'s launch-time context (read-only)`
+          }
+          aria-label="Open context inspector"
+          onClick={onOpenContextInspector}
+        >
+          <span aria-hidden="true">📄</span>
+        </button>
+        {!isAllActive && (
+          <>
+            <button
+              type="button"
+              className={`workspace-ctl-btn wsctl-rename${editing ? " is-active" : ""}`}
+              title="Rename workspace"
+              aria-label={`Rename workspace ${active!.name}`}
+              // ✏ enters inline-rename mode; Esc or clicking away (onBlur=commitRename)
+              // exits. Open-only by design, NOT a close toggle: the input blurs before
+              // this click fires, so `editing` is already false here — clicking ✏ while
+              // editing just re-opens the (already-committed) name. The !editing guard
+              // is defensive.
+              onClick={() => {
+                if (!editing) {
+                  setEditValue(active!.name)
+                  setEditing(true)
+                }
+              }}
+            >
+              <span aria-hidden="true">✏</span>
+            </button>
+            <button
+              type="button"
+              className="workspace-ctl-btn wsctl-delete danger"
+              title="Delete workspace"
+              aria-label={`Delete workspace ${active!.name}`}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Delete the workspace "${active!.name}"? Its sessions and missions are kept (they fall back to All).`,
+                  )
+                ) {
+                  onDeleteWorkspace(active!.id)
+                }
+              }}
+            >
+              <span aria-hidden="true">🗑</span>
+            </button>
+          </>
+        )}
+      </div>
 
-      {/* CAPP-98 / I1 — open the READ-ONLY Context Inspector. ALWAYS VISIBLE (no
-          hover-reveal), in BOTH "All" and specific-workspace modes. Shows the complete
-          launch-time native context (CLAUDE.md chain, rules, auto-memory) + our injected
-          primer, by precedence — so the user can see EXACTLY what an agent reads at spawn.
-          Captures the workspaceId at click time (the handler doesn't re-derive from the
-          active workspace later). */}
-      <button
-        type="button"
-        className="workspace-context-btn"
-        title={
-          isAllActive
-            ? "Inspect the launch-time context for the All bucket (read-only)"
-            : `Inspect ${active!.name}'s launch-time context (read-only)`
-        }
-        aria-label="Open context inspector"
-        onClick={onOpenContextInspector}
-      >
-        <span className="workspace-context-icon" aria-hidden="true">
-          📄
-        </span>
-        <span>Context</span>
-      </button>
-
-      {/* WS-H — the active-workspace controls, ALWAYS VISIBLE (no hover-reveal).
-          Only shown for a SPECIFIC active workspace (nothing to edit under "All"). */}
+      {/* WS-H — the active-workspace folder controls, ALWAYS VISIBLE (no hover-reveal).
+          Only shown for a SPECIFIC active workspace (nothing to set under "All"). */}
       {!isAllActive && (
         <div className="workspace-active-controls">
+          {/* The inline rename input — appears while renaming (triggered by ✏ above).
+              Enter commits, Esc cancels, blur commits. */}
+          {editing && (
+            <input
+              ref={editInputRef}
+              className="workspace-rename-input"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  commitRename()
+                } else if (e.key === "Escape") {
+                  e.preventDefault()
+                  setEditing(false)
+                }
+              }}
+              onBlur={commitRename}
+              aria-label="Workspace name"
+            />
+          )}
+
           {/* The folder row: basename of `dir` or "No folder selected" — clicking
               opens the native single-folder picker (the only place to set it). */}
           <button
@@ -367,68 +431,6 @@ export default function WorkspaceSwitcher({
               <span>Restore a conversation</span>
             </button>
           )}
-
-          <div className="workspace-name-controls">
-            {editing ? (
-              <input
-                ref={editInputRef}
-                className="workspace-rename-input"
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault()
-                    commitRename()
-                  } else if (e.key === "Escape") {
-                    e.preventDefault()
-                    setEditing(false)
-                  }
-                }}
-                onBlur={commitRename}
-                aria-label="Workspace name"
-              />
-            ) : (
-              <span className="workspace-name-label" title={active!.name}>
-                {active!.name}
-              </span>
-            )}
-            <button
-              type="button"
-              className={`workspace-edit-btn${editing ? " active" : ""}`}
-              title="Rename workspace"
-              aria-label={`Rename workspace ${active!.name}`}
-              // ✎ enters inline-rename mode; Esc or clicking away (onBlur=commitRename)
-              // exits. Open-only by design, NOT a close toggle: the input blurs before
-              // this click fires, so `editing` is already false here — clicking ✎ while
-              // editing just re-focuses the (already-committed) name. The !editing guard
-              // is defensive.
-              onClick={() => {
-                if (!editing) {
-                  setEditValue(active!.name)
-                  setEditing(true)
-                }
-              }}
-            >
-              ✎
-            </button>
-            <button
-              type="button"
-              className="workspace-delete-btn"
-              title="Delete workspace"
-              aria-label={`Delete workspace ${active!.name}`}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Delete the workspace "${active!.name}"? Its sessions and missions are kept (they fall back to All).`,
-                  )
-                ) {
-                  onDeleteWorkspace(active!.id)
-                }
-              }}
-            >
-              ×
-            </button>
-          </div>
         </div>
       )}
     </div>
