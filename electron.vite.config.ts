@@ -10,7 +10,13 @@ export default defineConfig({
     build: {
       outDir: "out/main",
       rollupOptions: {
-        input: resolve(__dirname_, "electron/main.ts"),
+        // CAPP-120 (STT-1) — TWO main-process entries: the app (`index`) and the STT
+        // recognizer's utility-process worker (`sttWorker`, forked at runtime). Both emit
+        // as `<name>.js` into out/main; the app stays `index.js` (package.json `main`).
+        input: {
+          index: resolve(__dirname_, "electron/main.ts"),
+          sttWorker: resolve(__dirname_, "electron/stt/sttWorker.ts"),
+        },
         external: [
           "electron",
           "node-pty",
@@ -20,10 +26,15 @@ export default defineConfig({
           "zod",
           "raw-body",
           "content-type",
+          // CAPP-120 — native ASR addon (asar-unpacked) + the pure-JS .tar.bz2 extractor
+          // deps; externalized so they resolve from node_modules at runtime (node-pty precedent).
+          "sherpa-onnx-node",
+          "tar-stream",
+          "unbzip2-stream",
         ],
         output: {
           format: "cjs",
-          entryFileNames: "index.js",
+          entryFileNames: "[name].js",
         },
       },
     },

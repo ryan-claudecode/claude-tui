@@ -50,6 +50,11 @@ import { registerAppHandlers } from "./ipc/app-handlers"
 import { registerAttentionHandlers } from "./ipc/attention-handlers"
 import { registerWorkspaceHandlers } from "./ipc/workspace-handlers"
 import { registerLocalHistoryHandlers } from "./ipc/local-history-handlers"
+import { registerSttHandlers } from "./ipc/stt-handlers"
+import { SttService } from "./services/stt"
+import { createSttRuntimeDeps } from "./stt/runtime"
+import { MODEL_DIRNAME } from "./stt/protocol"
+import { resolveSttEnabled } from "./config"
 
 export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
@@ -233,6 +238,21 @@ export const schedulerService = new SchedulerService({
     }),
   raiseAttention: ({ sessionId, terminalId, reason }) => attentionService?.request(sessionId, terminalId, reason),
 })
+
+// CAPP-120 (STT-1) — the push-to-talk dictation engine (Parakeet TDT via sherpa-onnx,
+// hosted in an Electron UTILITY PROCESS so ORT never blocks the main thread). The service
+// is PURE; every effect (utilityProcess.fork, the streaming download, the .tar.bz2 extract,
+// fs) is injected via `createSttRuntimeDeps`. The 680 MB model is NOT bundled — it's
+// acquired on first enable into `~/.claude-tui/stt/parakeet-tdt-0.6b-v2-int8/`. The worker
+// bundle lands beside this one at `out/main/sttWorker.js` (a second electron-vite entry).
+export const sttService = new SttService(
+  createSttRuntimeDeps({
+    modelDir: join(homedir(), ".claude-tui", "stt", MODEL_DIRNAME),
+    sttRoot: join(homedir(), ".claude-tui", "stt"),
+    workerPath: join(__dirname, "sttWorker.js"),
+    logWarn: (m) => logWarn("stt", m),
+  }),
+)
 
 export async function setupIpc(win: BrowserWindow) {
   const config = loadConfig()
@@ -630,6 +650,13 @@ export async function setupIpc(win: BrowserWindow) {
   })
   registerMissionHandlers({ missionService })
   registerScheduleHandlers({ schedulerService })
+  // CAPP-120 (STT-1) — push acquisition progress to the renderer's inline download flow
+  // (the composer's mic overlay listens on `stt:progress`). Mirrors schedule:updated.
+  sttService.onProgress((p) => {
+    if (!win.isDestroyed()) win.webContents.send("stt:progress", p)
+  })
+  // `isEnabled` is read FRESH (loadConfig) so a config edit is honored without a restart.
+  registerSttHandlers({ sttService, isEnabled: () => resolveSttEnabled(loadConfig()) })
   registerAttentionHandlers({ getAttention: () => attentionService })
   // WS-B — id-based workspace ops (get/create/rename/add-dir/remove-dir/delete/
   // set-active/get-active/launch). Legacy index-based workspace:list/activate
@@ -662,5 +689,14 @@ export async function setupIpc(win: BrowserWindow) {
   })
 
   // Cleanup
-  app.on("before-quit", () => sessionService.killAll())
+  app.on("before-quit", () => {
+    sessionService.killAll()
+    // CAPP-120 (STT-1) — kill the dictation utility process + cancel any in-flight
+    // download so a quit never leaves an orphaned worker. Best-effort.
+    try {
+      sttService.dispose()
+    } catch {
+      /* never block quit on the dictation engine */
+    }
+  })
 }

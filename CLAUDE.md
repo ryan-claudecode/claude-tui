@@ -421,6 +421,7 @@ Until all three steps are done the updater silently does nothing. Update-availab
 | Ctrl+Shift+P | Command palette |
 | Ctrl+Shift+F | Search session history |
 | Ctrl+J | Jump to the top "NEEDS YOU" attention-queue entry |
+| Ctrl+M | Toggle dictation (composer focused) |
 | Ctrl+Shift+Z | Focus mode (hide sidebar + tab bar) |
 | Ctrl+/ | Keyboard shortcuts overlay |
 

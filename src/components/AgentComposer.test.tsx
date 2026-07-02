@@ -1,7 +1,7 @@
 import React from "react"
 import { describe, it, expect } from "vitest"
 import { renderToStaticMarkup } from "react-dom/server"
-import AgentComposer from "./AgentComposer"
+import AgentComposer, { dictationProgressLabel, dictationProgressPct } from "./AgentComposer"
 
 /**
  * BO-10 — the composer must be HONEST about a busy agent. While the structured
@@ -61,5 +61,46 @@ describe("AgentComposer — WS3 persistent hint strip", () => {
     expect(html).toMatch(/Agent is working/i)
     expect(html).toMatch(/Esc or Stop to interrupt/i)
     expect(html).not.toContain("composer-hint-keys")
+  })
+})
+
+/**
+ * CAPP-120 (STT-1) — the push-to-talk mic affordance. It must be STATICALLY VISIBLE in
+ * the composer controls row (no hover-reveal): the button is in the initial static markup,
+ * so it is always rendered, not gated behind a hover state.
+ */
+describe("AgentComposer — CAPP-120 dictation mic", () => {
+  it("renders a statically-visible mic button in the controls row", () => {
+    const html = renderToStaticMarkup(<AgentComposer terminalId="t1" busy={false} />)
+    // The button is present unconditionally (no hover-reveal wrapper hides it).
+    expect(html).toContain("composer-mic-wrap")
+    expect(html).toContain("composer-mic")
+    // Idle state shows the mic glyph and an explicit label.
+    expect(html).toContain("🎤")
+    expect(html).toMatch(/aria-label="[^"]*(Dictate|Set up voice dictation)/i)
+  })
+
+  it("does not open the download overlay until the mic is pressed", () => {
+    const html = renderToStaticMarkup(<AgentComposer terminalId="t1" busy={false} />)
+    expect(html).not.toContain("composer-mic-download")
+  })
+})
+
+describe("AgentComposer — dictation progress helpers", () => {
+  it("labels each acquisition phase", () => {
+    expect(dictationProgressLabel(null)).toMatch(/Preparing/)
+    expect(dictationProgressLabel({ phase: "downloading", receivedBytes: 340_000_000, totalBytes: 680_000_000 })).toMatch(
+      /Downloading.*324.*648.*MB/,
+    )
+    expect(dictationProgressLabel({ phase: "downloading", receivedBytes: 1_000_000 })).toMatch(/Downloading/)
+    expect(dictationProgressLabel({ phase: "extracting" })).toBe("Extracting…")
+    expect(dictationProgressLabel({ phase: "verifying" })).toBe("Verifying…")
+  })
+
+  it("computes a bounded percent (0 when total unknown)", () => {
+    expect(dictationProgressPct({ phase: "downloading", receivedBytes: 340, totalBytes: 680 })).toBe(50)
+    expect(dictationProgressPct({ phase: "downloading", receivedBytes: 100 })).toBe(0)
+    expect(dictationProgressPct({ phase: "extracting" })).toBe(0)
+    expect(dictationProgressPct(null)).toBe(0)
   })
 })

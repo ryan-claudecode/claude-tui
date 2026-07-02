@@ -7910,6 +7910,117 @@ body {
 .agent-model-picker-composer .agent-model-picker-custom { width: 130px; }
 
 /* ------------------------------------------------------------------ */
+/* CAPP-120 (STT-1) — push-to-talk dictation mic + inline download flow */
+/* Statically visible (no hover-reveal); light secondary chrome next to */
+/* the model/effort/ultracode controls in the composer footer row.      */
+/* ------------------------------------------------------------------ */
+.composer-mic-wrap { position: relative; display: inline-flex; flex: 0 0 auto; }
+.composer-mic {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 26px;
+  height: 24px;
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-2);
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease-out),
+    color var(--fast) var(--ease-out),
+    border-color var(--fast) var(--ease-out);
+  -webkit-app-region: no-drag;
+  touch-action: none; /* pointer capture / hold gesture must not scroll */
+}
+.composer-mic:hover:not(:disabled) { background: var(--bg-1); color: var(--text-0); }
+.composer-mic:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.composer-mic:disabled { opacity: 0.6; cursor: default; }
+.composer-mic-icon { font-size: 12px; }
+/* Setup state — the model isn't downloaded yet (a dashed hint). */
+.composer-mic-setup { border-style: dashed; }
+/* Recording — tinted red with a pulsing dot + a tabular elapsed counter. */
+.composer-mic-recording { color: var(--red); border-color: var(--red); background: var(--red-soft); }
+.composer-mic-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  animation: composer-mic-pulse 1.2s var(--ease-out) infinite;
+}
+.composer-mic-elapsed { font-variant-numeric: tabular-nums; font-weight: 600; }
+@keyframes composer-mic-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+/* Transcribing — a small spinner. */
+.composer-mic-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: composer-mic-spin 0.7s linear infinite;
+}
+@keyframes composer-mic-spin { to { transform: rotate(360deg); } }
+
+/* The inline enable/download overlay — anchored above the mic, renderer-local
+   (NOT a PanelService panel). */
+.composer-mic-download {
+  position: absolute;
+  bottom: calc(100% + var(--s-2));
+  right: 0;
+  z-index: 40;
+  width: 264px;
+  padding: var(--s-3);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  text-align: left;
+}
+.composer-mic-download-head { display: flex; align-items: center; justify-content: space-between; }
+.composer-mic-download-title { font-size: 12px; font-weight: 600; color: var(--text-0); }
+.composer-mic-download-x {
+  border: none;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.composer-mic-download-x:hover { color: var(--text-0); }
+.composer-mic-download-desc { margin: 0; font-size: 11px; color: var(--text-2); line-height: 1.45; }
+.composer-mic-download-error { margin: 0; font-size: 11px; color: var(--red); line-height: 1.4; }
+.composer-mic-download-go,
+.composer-mic-download-cancel {
+  align-self: flex-start;
+  padding: var(--s-2) var(--s-3);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--r-ctl);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease-out);
+}
+.composer-mic-download-go { color: #fff; background: var(--accent); border: 1px solid transparent; }
+.composer-mic-download-go:hover { background: var(--accent-bright); }
+.composer-mic-download-cancel { color: var(--text-1); background: var(--bg-0); border: 1px solid var(--border); }
+.composer-mic-download-cancel:hover { background: var(--bg-2); }
+.composer-mic-progress-label { font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.composer-mic-progress {
+  height: 6px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.composer-mic-progress-bar { height: 100%; background: var(--accent); transition: width var(--fast) var(--ease-out); }
+.composer-mic-attribution { margin: 0; font-size: 10px; color: var(--text-3); line-height: 1.4; }
+
+/* ------------------------------------------------------------------ */
 /* BO-3 — tool-permission prompt overlay                               */
 /* ------------------------------------------------------------------ */
 

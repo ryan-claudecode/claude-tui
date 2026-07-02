@@ -7,6 +7,7 @@ import {
   type PermissionRequest,
   type PermissionDecision,
 } from "./services/streamProtocol"
+import type { SttProgress } from "./stt/protocol"
 
 // CAPP-106 / S1 — capture the exposed object in a const so its INFERRED shape can be
 // exported (`MainApi`) and structurally checked against `PanelApi` by the parity GATE
@@ -375,6 +376,24 @@ const mainApi = {
   // BO-7 — the structured composer's `/`-picker catalog (slash commands + skills)
   // captured off the headless `init` event. Returns null until init arrives.
   getAgentCatalog: (terminalId: string) => ipcRenderer.invoke("agent:catalog", terminalId),
+
+  // CAPP-120 (STT-1) — push-to-talk dictation. sttStatus returns { status, enabled,
+  // modelDir, attribution, message }; sttTranscribe sends 16 kHz mono Float32 samples to
+  // the utility-process recognizer and resolves { text, engine, ms }; sttAcquire kicks off
+  // the first-enable model download (progress rides onSttProgress) and returns the coarse
+  // status — `force` (review finding 6c) deletes the model dir first and re-downloads (the
+  // corrupt-model recovery); sttCancelAcquire aborts an in-flight download (responsive in
+  // BOTH the download and extract phases). NO MCP tool (user input affordance).
+  sttStatus: () => ipcRenderer.invoke("stt:status"),
+  sttTranscribe: (samples: Float32Array, sampleRate: number) =>
+    ipcRenderer.invoke("stt:transcribe", samples, sampleRate),
+  sttAcquire: (force?: boolean) => ipcRenderer.invoke("stt:acquire", force === true),
+  sttCancelAcquire: () => ipcRenderer.invoke("stt:cancel-acquire"),
+  onSttProgress: (callback: (p: SttProgress) => void) => {
+    const handler = (_e: unknown, p: SttProgress) => callback(p)
+    ipcRenderer.on("stt:progress", handler)
+    return () => ipcRenderer.removeListener("stt:progress", handler)
+  },
 
   // BO-12 — prior turns of a conversation (by its Claude Code id), read off the
   // on-disk transcript, to rehydrate a respawned/restored structured chat view.

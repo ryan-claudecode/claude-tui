@@ -153,6 +153,21 @@ export interface ModelsConfig {
   xhigh?: string[]
 }
 
+/**
+ * CAPP-120 (STT-1) — push-to-talk dictation options. Additive/optional — no schema
+ * version bump (mirrors the RenderingConfig/AttentionConfig/ModelsConfig precedent).
+ *
+ * `enabled` gates whether the composer surfaces the 🎤 mic affordance at all. The
+ * DEFAULT is ON (the button is visible) unless `stt.enabled` is EXPLICITLY `false`,
+ * mirroring the "explicit off switch" posture of {@link resolveSkipApproval}. Note the
+ * mic being visible does NOT mean the 680 MB Parakeet model is downloaded — acquisition
+ * is a separate, first-use, opt-in flow; the button opens the download UI when the model
+ * is absent. So an off switch here is the ONLY thing that hides the affordance entirely.
+ */
+export interface SttConfig {
+  enabled?: boolean
+}
+
 export interface TuiConfig {
   workspaceScanPaths: string[]
   defaultCommand?: string
@@ -164,6 +179,7 @@ export interface TuiConfig {
   agentRail?: AgentRailConfig
   context?: ContextConfig
   models?: ModelsConfig
+  stt?: SttConfig
 }
 
 /**
@@ -245,6 +261,16 @@ export function resolveAgentRailOpen(config?: { agentRail?: AgentRailConfig } | 
  */
 export function resolvePrimerRecall(config?: { context?: ContextConfig } | null): boolean {
   return config?.context?.primerRecall === true
+}
+
+/**
+ * CAPP-120 (STT-1) — resolve whether push-to-talk dictation is available in the
+ * composer. Returns `true` (visible) unless `stt.enabled` is EXPLICITLY `false`. The
+ * single place the default lives, shared by the wiring layer (the stt:status handler
+ * folds it into the status the composer reads). Pure + deterministic.
+ */
+export function resolveSttEnabled(config?: { stt?: SttConfig } | null): boolean {
+  return config?.stt?.enabled !== false
 }
 
 /** CAPP-96 — the default auto-load payload cap (8 KB) per the design doc §B.3. */
@@ -446,5 +472,8 @@ export function loadConfig(): TuiConfig {
     // renderer picker (config:get → resolveModelOptions) + the wiring layer (default
     // override, xhigh matcher). Absent → the resolvers degrade to the built-in aliases.
     models: data.models,
+    // CAPP-120 (STT-1) — surface `stt` so the wiring layer (stt:status handler) sees the
+    // on-disk enable/off-switch, not just the type. Absent → resolveSttEnabled defaults ON.
+    stt: data.stt,
   }
 }
