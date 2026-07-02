@@ -40,6 +40,14 @@ async function createWindow() {
     frame: false,
   })
 
+  // CAPP-120 (STT-1) — allow microphone capture for push-to-talk dictation. Electron
+  // default-DENIES the `media` permission getUserMedia flows through; grant ONLY media
+  // (every other web permission stays denied — the renderer requests none). Scoped to
+  // this window's session so it never widens permissions app-wide.
+  mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === "media")
+  })
+
   // Window control IPC
   ipcMain.on("window:minimize", () => mainWindow?.minimize())
   ipcMain.on("window:maximize", () => {

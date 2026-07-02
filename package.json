@@ -25,11 +25,15 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "sherpa-onnx-node": "^1.13.3",
+    "tar-stream": "^3.1.7",
+    "unbzip2-stream": "^1.4.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "@types/diff": "^5.2.3",
+    "@types/tar-stream": "^3.1.4",
     "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",
     "@types/semver": "^7.7.1",

@@ -10,6 +10,8 @@ import type {
 // CAPP-113 — the config-extensible model option derivation (pure, zero-dep) + the
 // built-in alias list, shared with the picker so the effective list can't drift.
 import { MODEL_ALIASES, resolveModelOptions } from "../electron/services/streamProtocol"
+// CAPP-120 (STT-1) — dictation status/progress/transcription contract (zero-dep types).
+import type { SttStatusSnapshot, SttProgress, SttTranscription } from "../electron/stt/protocol"
 import type { PromoteEntry } from "./lib/killSessionPromote"
 import Sidebar from "./components/Sidebar"
 import TabBar from "./components/TabBar"
@@ -77,6 +79,12 @@ declare global {
       sendAgentInput: (terminalId: string, msg: { text?: string; attachments?: string[] }) => void
       // BO-7: structured composer `/`-command picker catalog + native-command bridge
       getAgentCatalog: (terminalId: string) => Promise<AgentCatalog | null>
+      // CAPP-120 (STT-1): push-to-talk dictation (Parakeet/sherpa-onnx utility process)
+      sttStatus: () => Promise<SttStatusSnapshot>
+      sttTranscribe: (samples: Float32Array, sampleRate: number) => Promise<SttTranscription>
+      sttAcquire: () => Promise<SttStatusSnapshot["status"]>
+      sttCancelAcquire: () => Promise<void>
+      onSttProgress: (callback: (p: SttProgress) => void) => () => void
       // BO-12: prior turns of a conversation (by Claude Code id) to rehydrate a chat view
       getTranscriptEvents: (ccConversationId: string) => Promise<StreamEvent[]>
       onUiSlashCommand: (

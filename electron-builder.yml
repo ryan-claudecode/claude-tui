@@ -28,6 +28,14 @@ files:
 # resources/app.asar.unpacked/node_modules/node-pty/.
 asarUnpack:
   - "**/node_modules/node-pty/**"
+  # CAPP-120 (STT-1) — sherpa-onnx-node is a NATIVE ASR addon. Its `sherpa-onnx.node` and
+  # the ORT runtime DLLs (onnxruntime.dll / onnxruntime_providers_shared.dll) + sherpa's
+  # own C/C++ API DLLs live in the PLATFORM package (`sherpa-onnx-win-x64`, a peer in
+  # node_modules loaded by relative require). Both the loader package and the platform
+  # binary package MUST live OUTSIDE the asar or the addon fails to load in the packaged
+  # app (node-pty precedent). The glob catches every `sherpa-onnx-*` platform variant.
+  - "**/node_modules/sherpa-onnx-node/**"
+  - "**/node_modules/sherpa-onnx-*/**"
 
 win:
   # dir = unpacked tree (fast, for validation); nsis = the installer.
