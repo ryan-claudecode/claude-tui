@@ -15,6 +15,8 @@ import {
   settleRunningTools,
   panelForBlock,
   expandLabelForBlock,
+  assistantExpandUseful,
+  ASSISTANT_EXPAND_MIN_CHARS,
   classifyInjectedUserContent,
   modelErrorFromResult,
   type TranscriptBlock,
@@ -649,6 +651,37 @@ describe("reduceTranscript — user_message classification (CAPP-118)", () => {
     const req = panelForBlock({ kind: "injected", id: "b", wrapper: "system-reminder", label: "system reminder", raw: "<system-reminder>x</system-reminder>" })
     expect(req?.type).toBe("markdown")
     expect((req?.props as { content: string }).content).toContain("<system-reminder>x</system-reminder>")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CAPP-119 — the assistant expand-button USEFULNESS gate: short prose gets NO icon;
+// long / code / table prose does. Pure string gate, tested as a table.
+// ---------------------------------------------------------------------------
+describe("assistantExpandUseful — the CAPP-119 usefulness gate", () => {
+  it("a short plain paragraph is NOT useful to expand (no icon)", () => {
+    expect(assistantExpandUseful("Sure, done.")).toBe(false)
+    expect(assistantExpandUseful("The build passed and all 280 tests are green.")).toBe(false)
+  })
+
+  it("long prose (over the threshold) IS useful to expand", () => {
+    expect(assistantExpandUseful("x".repeat(ASSISTANT_EXPAND_MIN_CHARS))).toBe(true)
+    expect(assistantExpandUseful("x".repeat(ASSISTANT_EXPAND_MIN_CHARS - 1))).toBe(false)
+  })
+
+  it("prose containing a fenced code block IS useful (even if short)", () => {
+    expect(assistantExpandUseful("Here:\n```js\nconst x = 1\n```")).toBe(true)
+    // A fence must be at a line start — an inline triple-backtick mention is not enough.
+    expect(assistantExpandUseful("we write ``` to open a fence")).toBe(false)
+  })
+
+  it("prose containing a markdown table IS useful (even if short)", () => {
+    const table = "| a | b |\n| --- | --- |\n| 1 | 2 |"
+    expect(assistantExpandUseful(table)).toBe(true)
+  })
+
+  it("a bare '---' thematic break is NOT mistaken for a table", () => {
+    expect(assistantExpandUseful("above\n\n---\n\nbelow")).toBe(false)
   })
 })
 

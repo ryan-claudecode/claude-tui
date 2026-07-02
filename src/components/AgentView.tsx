@@ -6,6 +6,7 @@ import {
   settleRunningTools,
   panelForBlock,
   expandLabelForBlock,
+  assistantExpandUseful,
   USER_BLOCK_KIND,
   type TranscriptBlock,
   type TranscriptState,
@@ -590,10 +591,13 @@ function AssistantBlock({
   // CAPP-77 reveal use (`streaming`). It must never paint over reveal-animated
   // text or the typing caret (the stream-reveal-flicker-trap), and it sits OUTSIDE
   // the `.markdown-body` flow (absolute, top-right) so it never disturbs layout.
+  // CAPP-119 — additionally gated on USEFULNESS: a short paragraph gains nothing
+  // from the roomier panel, so it renders no ⤢ (only long / code / table prose does).
   const ex = expandLabelForBlock(block)
+  const showExpand = !streaming && ex != null && assistantExpandUseful(block.text)
   return (
     <div className={assistantBlockClass(streaming, active)}>
-      {!streaming && ex && (
+      {showExpand && ex && (
         <BlockExpandButton label={ex.label} compact={ex.compact} onExpand={onExpand} />
       )}
       {/* WS5 — the streaming caret is a CSS `::after` on the LAST block of the

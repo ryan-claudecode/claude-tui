@@ -2000,7 +2000,20 @@ body {
   padding: var(--s-4);
   display: flex;
   flex-direction: column;
-  gap: var(--s-3);
+  /* CAPP-119 — tighter vertical rhythm (stepped down from --s-3). Prose blocks keep
+     this bit of air; adjacent dense tool/raw rows pull closer via the sibling rules
+     below so a run of tool calls reads as one group. */
+  gap: var(--s-2);
+}
+
+/* CAPP-119 — GROUP a run of dense rows: adjacent tool/raw rows pull up (a negative
+   margin against the flex gap) so consecutive tool calls read as one tight block,
+   while text paragraphs keep the fuller --s-2 gap. */
+.agent-tool + .agent-tool,
+.agent-tool + .agent-raw,
+.agent-raw + .agent-raw,
+.agent-raw + .agent-tool {
+  margin-top: calc(-1 * var(--s-1));
 }
 
 .agent-view.hidden { display: none; }
@@ -2293,7 +2306,8 @@ body {
 .agent-assistant {
   color: var(--text-0);
   position: relative;
-  padding-right: 2.2rem;
+  /* CAPP-119 — reserve room for the now-smaller muted expand button. */
+  padding-right: 1.6rem;
 }
 
 /* Trim the renderer's trailing block margin inside the chat so consecutive blocks
@@ -2314,23 +2328,26 @@ body {
   background: var(--accent-soft);
   border: 1px solid var(--accent-glow);
   color: var(--text-0);
-  padding: var(--s-2) var(--s-3);
+  /* CAPP-119 — slimmer bubble (vertical stepped down from --s-2). */
+  padding: var(--s-1) var(--s-3);
   border-radius: var(--r-md);
   border-bottom-right-radius: 4px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+/* CAPP-119 — the collapsed THINKING row is quiet chrome; compact its footprint
+   (padding stepped down from --s-3, body margin from --s-2). */
 .agent-thinking {
   border-left: 2px solid var(--border-strong);
-  padding-left: var(--s-3);
+  padding-left: var(--s-2);
   color: var(--text-3);
   font-style: italic;
 }
 
 .agent-thinking > summary {
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-3);
@@ -2338,7 +2355,7 @@ body {
 }
 
 .agent-thinking-body {
-  margin-top: var(--s-2);
+  margin-top: var(--s-1);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -2347,7 +2364,8 @@ body {
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  padding: var(--s-2) var(--s-3);
+  /* CAPP-119 — slimmer dense row (stepped down from --s-2 --s-3). */
+  padding: var(--s-1) var(--s-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-1);
@@ -2515,9 +2533,10 @@ body {
    error cards, so a completed turn reads as a quiet summary card. */
 .agent-result {
   padding: var(--s-2) var(--s-3);
-  /* CAPP-111 — anchor the absolute top-right expand button + reserve room for it. */
+  /* CAPP-111 — anchor the absolute top-right expand button + reserve room for it.
+     CAPP-119 — right padding trimmed to the now-smaller muted button. */
   position: relative;
-  padding-right: 2.2rem;
+  padding-right: 1.6rem;
   margin-top: var(--s-1);
   border: 1px solid var(--border);
   border-left: 3px solid var(--border-strong);
@@ -2594,6 +2613,10 @@ body {
    (assistant/result) it's absolute top-right (outside `.markdown-body` flow so it
    never disturbs layout); on the dense flex rows (tool/raw) it's the trailing child,
    pushed right by `margin-left:auto`. */
+/* CAPP-119 — MUTED at rest: smaller, low-contrast (--text-3), NO background/border
+   so the ⤢ recedes into the block instead of reading as a chip. STILL statically
+   visible (full opacity — the hard no-hover rule); hover only DEEPENS contrast +
+   adds a faint fill (intensify ≠ reveal). */
 .agent-block-expand {
   display: inline-flex;
   align-items: center;
@@ -2601,13 +2624,13 @@ body {
   flex: none;
   margin-left: auto;
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1;
-  color: var(--text-2);
-  background: var(--bg-2);
-  border: 1px solid var(--border-subtle);
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
-  padding: 3px 7px;
+  padding: 2px 4px;
   cursor: pointer;
   opacity: 1;
   transition: border-color 0.12s var(--ease-out), color 0.12s var(--ease-out),
@@ -2615,16 +2638,17 @@ body {
 }
 .agent-block-expand:hover {
   color: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--border-subtle);
+  background: var(--bg-2);
 }
 .agent-block-expand:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-/* Icon-only (compact) variant for the dense tool/raw rows: a small square, no text. */
+/* Icon-only (compact) variant for the dense tool/raw/injected rows: no text label. */
 .agent-block-expand.compact {
-  padding: 3px 5px;
+  padding: 2px 3px;
   gap: 0;
 }
 
@@ -2636,8 +2660,8 @@ body {
 .agent-assistant > .agent-block-expand,
 .agent-result > .agent-block-expand {
   position: absolute;
-  top: var(--s-2);
-  right: var(--s-2);
+  top: var(--s-1);
+  right: var(--s-1);
 }
 
 /* Empty state */

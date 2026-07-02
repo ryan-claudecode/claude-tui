@@ -768,3 +768,28 @@ export function expandLabelForBlock(
   }
   return null
 }
+
+/**
+ * CAPP-119 — usefulness GATE for an assistant text block's expand button. A short
+ * paragraph reads fine inline and gains nothing from the roomier panel, so it renders
+ * NO icon (killing the per-paragraph ⤢ noise). Expansion is deemed useful when the
+ * prose is long (over {@link ASSISTANT_EXPAND_MIN_CHARS}) OR carries structured
+ * content that benefits from the panel — a fenced code block or a markdown table.
+ * Pure + string-only so it's unit-testable beside {@link expandLabelForBlock}; the
+ * tool/result/raw rows keep their compact icons unconditionally (unchanged).
+ */
+export const ASSISTANT_EXPAND_MIN_CHARS = 280
+
+/** True IFF `text` contains a GFM table delimiter row (`| --- | :--: |`, pipe + 3+ dashes). */
+function hasMarkdownTable(text: string): boolean {
+  return text.split("\n").some((ln) => {
+    const t = ln.trim()
+    return t.includes("|") && /-{3,}/.test(t) && /^[|:\-\s]+$/.test(t)
+  })
+}
+
+export function assistantExpandUseful(text: string): boolean {
+  if (text.length >= ASSISTANT_EXPAND_MIN_CHARS) return true
+  if (/(^|\n)\s*```/.test(text)) return true // a fenced code block
+  return hasMarkdownTable(text)
+}

@@ -110,6 +110,23 @@ describe("AgentView markdown rendering", () => {
     expect(html).toContain("agent-block-expand")
   })
 
+  // CAPP-119 — a SHORT settled assistant paragraph gets NO expand button (kills the
+  // per-paragraph ⤢ noise); long / code / table prose keeps it.
+  it("renders NO expand button on a short settled assistant block", () => {
+    const html = renderAssistant("Sure, done.")
+    expect(html).not.toContain("agent-block-expand")
+  })
+
+  it("renders the expand button on an assistant block with a fenced code block", () => {
+    const html = renderAssistant("Here:\n```js\nconst x = 1\n```")
+    expect(html).toContain("agent-block-expand")
+  })
+
+  it("renders the expand button on a long assistant block (over the usefulness threshold)", () => {
+    const html = renderAssistant("word ".repeat(80))
+    expect(html).toContain("agent-block-expand")
+  })
+
   it("keeps the user bubble PLAIN (no markdown rendering)", () => {
     const block: UserBlock = { kind: "user", id: "b2", text: "**not bold** and `not code`" }
     const html = renderToStaticMarkup(
