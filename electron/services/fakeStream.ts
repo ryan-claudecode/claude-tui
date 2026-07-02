@@ -41,7 +41,12 @@ const REPLY_DELTAS = [
   "const x = 1\n```\n\n| key | value |\n| --- | ----- |\n| a   | 1     |\n\n",
   "See [the docs](https://example.com).\n",
 ] as const
-const REPLY_TEXT = REPLY_DELTAS.join("")
+/** EXPORTED (CAPP-119 review, finding 4) so the unit suite can PIN that this canned
+ *  reply passes `assistantExpandUseful` — the CAPP-111 e2e clicks the settled
+ *  assistant block's expand button, which only renders because this text carries a
+ *  fenced code block. The pin fails FIRST (fast, in vitest) if the fixture and the
+ *  usefulness gate ever drift apart. */
+export const REPLY_TEXT = REPLY_DELTAS.join("")
 
 /**
  * CAPP-49 — test-only opt-in: a user message containing this sentinel keeps the turn

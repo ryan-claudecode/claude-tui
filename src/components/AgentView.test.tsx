@@ -7,6 +7,7 @@ import type {
   AssistantTextBlock,
   ResultBlock,
   UserBlock,
+  InjectedBlock,
 } from "../lib/agentTranscript"
 
 /**
@@ -86,6 +87,44 @@ describe("AgentView markdown rendering", () => {
     expect(() => renderAssistant("```js\nconst x = 1")).not.toThrow()
     expect(() => renderAssistant("a **bold")).not.toThrow()
     expect(() => renderAssistant("| a | b |\n| - | - |\n| 1")).not.toThrow()
+  })
+
+  // CAPP-118 — harness-injected content renders as a muted system CHIP, never a
+  // user bubble. Render the real block renderer to static markup and assert it.
+  it("renders an injected block as a system chip (NOT a user bubble)", () => {
+    const block: InjectedBlock = {
+      kind: "injected",
+      id: "bi",
+      wrapper: "task-notification",
+      label: "background task — npm install completed",
+      raw: "<task-notification><summary>npm install completed</summary></task-notification>",
+    }
+    const html = renderToStaticMarkup(
+      <BlockView block={block} onExpand={() => {}} terminalId="t1" sessionId={null} />,
+    )
+    expect(html).toContain("agent-injected")
+    expect(html).toContain("background task — npm install completed")
+    // NOT a user bubble (the whole point of CAPP-118).
+    expect(html).not.toContain("agent-user-bubble")
+    // Collapsed-but-inspectable: the compact ⤢ expand button is present.
+    expect(html).toContain("agent-block-expand")
+  })
+
+  // CAPP-119 — a SHORT settled assistant paragraph gets NO expand button (kills the
+  // per-paragraph ⤢ noise); long / code / table prose keeps it.
+  it("renders NO expand button on a short settled assistant block", () => {
+    const html = renderAssistant("Sure, done.")
+    expect(html).not.toContain("agent-block-expand")
+  })
+
+  it("renders the expand button on an assistant block with a fenced code block", () => {
+    const html = renderAssistant("Here:\n```js\nconst x = 1\n```")
+    expect(html).toContain("agent-block-expand")
+  })
+
+  it("renders the expand button on a long assistant block (over the usefulness threshold)", () => {
+    const html = renderAssistant("word ".repeat(80))
+    expect(html).toContain("agent-block-expand")
   })
 
   it("keeps the user bubble PLAIN (no markdown rendering)", () => {

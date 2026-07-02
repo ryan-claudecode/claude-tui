@@ -6,6 +6,7 @@ import {
   settleRunningTools,
   panelForBlock,
   expandLabelForBlock,
+  assistantExpandUseful,
   USER_BLOCK_KIND,
   type TranscriptBlock,
   type TranscriptState,
@@ -590,10 +591,13 @@ function AssistantBlock({
   // CAPP-77 reveal use (`streaming`). It must never paint over reveal-animated
   // text or the typing caret (the stream-reveal-flicker-trap), and it sits OUTSIDE
   // the `.markdown-body` flow (absolute, top-right) so it never disturbs layout.
+  // CAPP-119 — additionally gated on USEFULNESS: a short paragraph gains nothing
+  // from the roomier panel, so it renders no ⤢ (only long / code / table prose does).
   const ex = expandLabelForBlock(block)
+  const showExpand = !streaming && ex != null && assistantExpandUseful(block.text)
   return (
     <div className={assistantBlockClass(streaming, active)}>
-      {!streaming && ex && (
+      {showExpand && ex && (
         <BlockExpandButton label={ex.label} compact={ex.compact} onExpand={onExpand} />
       )}
       {/* WS5 — the streaming caret is a CSS `::after` on the LAST block of the
@@ -652,6 +656,21 @@ export function BlockView({
       )
     case "tool":
       return <ToolView tool={block} onExpand={onExpand} />
+    case "injected": {
+      // CAPP-118 — harness-injected content (task-notification / system-reminder /
+      // local-command) as a MUTED, compact one-line system chip (NOT a user bubble).
+      // The statically-visible compact ⤢ opens the raw wrapper text VERBATIM in the
+      // read-only code panel — collapsed but never hidden. `ex` is non-null for
+      // `injected` but computed through the helper so it stays the source of truth.
+      const ex = expandLabelForBlock(block)
+      return (
+        <div className="agent-block agent-injected">
+          <span className="agent-injected-glyph" aria-hidden="true">⚙</span>
+          <span className="agent-injected-label">{block.label}</span>
+          {ex && <BlockExpandButton label={ex.label} compact={ex.compact} onExpand={onExpand} />}
+        </div>
+      )
+    }
     case "error":
       return (
         <div className="agent-block agent-error" role="alert">

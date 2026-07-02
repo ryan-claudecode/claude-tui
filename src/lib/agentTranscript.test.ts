@@ -7,6 +7,9 @@ import {
   RESULT,
   RATE_LIMIT,
 } from "../../electron/services/streamEvents.fixtures"
+// The canned fake reply (CAPP-119 review finding 4 — the e2e↔gate linking pin).
+// Import-safe from a src test: fakeStream's only ./terminals import is type-only.
+import { REPLY_TEXT } from "../../electron/services/fakeStream"
 import type { StreamEvent } from "../../electron/services/streamProtocol"
 import {
   foldTranscript,
@@ -15,12 +18,19 @@ import {
   settleRunningTools,
   panelForBlock,
   expandLabelForBlock,
+  assistantExpandUseful,
+  ASSISTANT_EXPAND_MIN_CHARS,
+  classifyInjectedUserContent,
+  INJECTED_CLASSIFY_MAX_CHARS,
+  INJECTED_CLOSE_SCAN_WINDOW,
   modelErrorFromResult,
   type TranscriptBlock,
   type ToolBlock,
   type AssistantTextBlock,
   type ResultBlock,
   type UserBlock,
+  type InjectedBlock,
+  type InjectedSegment,
   type ModelErrorBlock,
   type NeedsAuthBlock,
 } from "./agentTranscript"
@@ -440,6 +450,7 @@ describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => 
     { kind: "result", id: "b", isError: false, text: "done" },
     { kind: "model_error", id: "b", message: "model x unavailable" },
     { kind: "needs_auth", id: "b", message: "Not logged in" },
+    { kind: "injected", id: "b", wrapper: "system-reminder", label: "system reminder", raw: "<system-reminder>x</system-reminder>" },
     { kind: "raw", id: "b", raw: { a: 1 } },
   ]
 
@@ -456,9 +467,10 @@ describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => 
     }
   })
 
-  it("returns the 4 expected detail-view kinds and NO others", () => {
+  it("returns the 5 expected detail-view kinds and NO others", () => {
     const labelled = samples.filter((b) => expandLabelForBlock(b) != null).map((b) => b.kind)
-    expect(new Set(labelled)).toEqual(new Set(["assistant", "tool", "result", "raw"]))
+    // CAPP-118 — `injected` joins the detail-view kinds (its raw wrapper text opens).
+    expect(new Set(labelled)).toEqual(new Set(["assistant", "tool", "result", "raw", "injected"]))
   })
 
   // Exhaustiveness tie to the union (CAPP-111 review nit): a Record keyed by the
@@ -467,7 +479,7 @@ describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => 
   // then forces that kind into `samples` too.
   const KIND_COVERAGE: Record<TranscriptBlock["kind"], true> = {
     user: true, assistant: true, thinking: true, tool: true, error: true,
-    result: true, model_error: true, needs_auth: true, raw: true,
+    result: true, model_error: true, needs_auth: true, injected: true, raw: true,
   }
   it("samples cover EVERY TranscriptBlock kind (so no kind dodges the drift-pin)", () => {
     const sampled = new Set(samples.map((b) => b.kind))
@@ -481,6 +493,320 @@ describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => 
     expect(expandLabelForBlock({ kind: "raw", id: "b", raw: {} })?.compact).toBe(true)
     expect(expandLabelForBlock({ kind: "assistant", id: "b", text: "" })?.compact).toBe(true)
     expect(expandLabelForBlock({ kind: "result", id: "b", isError: false })?.compact).toBe(true)
+    expect(expandLabelForBlock({ kind: "injected", id: "b", wrapper: "system-reminder", label: "system reminder", raw: "<system-reminder>x</system-reminder>" })?.compact).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CAPP-118 — the injected-content classifier: harness user-role wrappers become
+// system chips, genuine prose stays a user bubble. Fixtures below are VERBATIM
+// shapes captured from a live Claude Code session (review finding 3 — not authored
+// approximations), plus the negative controls (a mid-sentence mention / an
+// unterminated tag must NEVER be reclassified).
+//
+// History-path note: the PLAIN-PROSE caveat variant ("Caveat: the messages below
+// were generated…" with NO tags) arrives as an `isMeta:true` transcript line and is
+// dropped UPSTREAM by transcriptHistory.parseTranscriptLine — it never reaches this
+// classifier. If a prose caveat ever did arrive as a live user_message, it matches
+// no tag and (acceptably) stays a user bubble.
+// ---------------------------------------------------------------------------
+describe("classifyInjectedUserContent — harness-injected user-role content (CAPP-118)", () => {
+  // CAPTURED: a real background-task notice, byte-for-byte (task-id / tool-use-id /
+  // output-file / status / summary), as Claude Code injects when a task finishes.
+  const TASK_NOTIFICATION = [
+    "<task-notification>",
+    "<task-id>byz6q6f7j</task-id>",
+    "<tool-use-id>toolu_01RzhTKnV4qyGgCh5SzbaXnQ</tool-use-id>",
+    "<output-file>C:\\Users\\ryguy\\AppData\\Local\\Temp\\claude\\C--Users-ryguy-projects-claude-tui-app\\6559fd4d-3334-431a-b95a-816c64c4abe0\\tasks\\byz6q6f7j.output</output-file>",
+    "<status>completed</status>",
+    '<summary>Background command "Repackage the desktop build" completed (exit code 0)</summary>',
+    "</task-notification>",
+  ].join("\n")
+
+  // CAPTURED variant: with an additional multi-line <note> and a <result> element
+  // spanning many lines that carries markdown/code fences.
+  const TASK_NOTIFICATION_WITH_RESULT = [
+    "<task-notification>",
+    "<task-id>byz6q6f7j</task-id>",
+    "<tool-use-id>toolu_01RzhTKnV4qyGgCh5SzbaXnQ</tool-use-id>",
+    "<output-file>C:\\Users\\ryguy\\AppData\\Local\\Temp\\claude\\tasks\\byz6q6f7j.output</output-file>",
+    "<status>completed</status>",
+    '<summary>Background command "npm test" completed (exit code 0)</summary>',
+    "<note>The full output is available in the output file.",
+    "Use Read to inspect it if needed.</note>",
+    "<result>",
+    "Test run finished:",
+    "```",
+    "Test Files  85 passed (88)",
+    "```",
+    "</result>",
+    "</task-notification>",
+  ].join("\n")
+
+  // Real shape: `<system-reminder>` + free text + `</system-reminder>` (standalone
+  // or appended after real user text in the same message — both covered below).
+  const SYSTEM_REMINDER =
+    "<system-reminder>\nAs you answer, remember the codebase instructions.\n</system-reminder>"
+
+  // CAPTURED: the real caveat prose, followed IN THE SAME MESSAGE by the
+  // slash-command echo triple (the /model shape).
+  const CAVEAT_TEXT =
+    "<local-command-caveat>Caveat: The messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.</local-command-caveat>"
+  const LOCAL_COMMAND_MODEL = [
+    CAVEAT_TEXT,
+    "<command-name>/model</command-name>",
+    "<command-message>model</command-message>",
+    "<command-args>opus</command-args>",
+  ].join("\n")
+
+  // CAPTURED: the caveat followed by the `!`-bash echo — note bash-stdout and the
+  // (empty) bash-stderr sit ADJACENT on one line, exactly as captured.
+  const LOCAL_COMMAND_BASH = [
+    CAVEAT_TEXT,
+    "<bash-input>pwd</bash-input>",
+    "<bash-stdout>C:\\Users\\ryguy\\projects\\claude-tui-app</bash-stdout><bash-stderr></bash-stderr>",
+  ].join("\n")
+
+  it("a lone task-notification → ONE injected chip carrying the summary, no user bubble", () => {
+    const segs = classifyInjectedUserContent(TASK_NOTIFICATION)
+    expect(segs).toHaveLength(1)
+    expect(segs[0].kind).toBe("injected")
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("task-notification")
+    expect(inj.label).toBe('background task — Background command "Repackage the desktop build" completed (exit code 0)')
+    // The RAW wrapper text is preserved verbatim (inspectable behind the ⤢).
+    expect(inj.raw).toBe(TASK_NOTIFICATION)
+  })
+
+  it("the note+result variant (multi-line, fenced code inside) → still ONE chip, raw verbatim", () => {
+    const segs = classifyInjectedUserContent(TASK_NOTIFICATION_WITH_RESULT)
+    expect(segs).toHaveLength(1)
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("task-notification")
+    expect(inj.label).toBe('background task — Background command "npm test" completed (exit code 0)')
+    // The many-line <result> (with its ``` fence) rides inside the chip's raw whole.
+    expect(inj.raw).toBe(TASK_NOTIFICATION_WITH_RESULT)
+  })
+
+  it("a task-notification with NO summary falls back to a generic label", () => {
+    const raw = "<task-notification><status>running</status></task-notification>"
+    const inj = classifyInjectedUserContent(raw)[0] as InjectedSegment
+    expect(inj.kind).toBe("injected")
+    expect(inj.label).toBe("background task")
+  })
+
+  it("a system-reminder → ONE injected chip labelled 'system reminder'", () => {
+    const segs = classifyInjectedUserContent(SYSTEM_REMINDER)
+    expect(segs).toHaveLength(1)
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("system-reminder")
+    expect(inj.label).toBe("system reminder")
+  })
+
+  it("caveat + /model command triple (same message) → ONE local-command chip labelled '/model'", () => {
+    const segs = classifyInjectedUserContent(LOCAL_COMMAND_MODEL)
+    expect(segs).toHaveLength(1)
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("local-command")
+    expect(inj.label).toBe("/model")
+    // Sticky caveat: the whole echo (caveat + triple) folds into one chip's raw.
+    expect(inj.raw).toBe(LOCAL_COMMAND_MODEL)
+  })
+
+  it("caveat + bash echo (adjacent bash-stdout/bash-stderr) → ONE 'local command output' chip", () => {
+    const segs = classifyInjectedUserContent(LOCAL_COMMAND_BASH)
+    expect(segs).toHaveLength(1)
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("local-command")
+    expect(inj.label).toBe("local command output")
+    expect(inj.raw).toContain("<bash-input>pwd</bash-input>")
+    expect(inj.raw).toContain("<bash-stdout>C:\\Users\\ryguy\\projects\\claude-tui-app</bash-stdout><bash-stderr></bash-stderr>")
+  })
+
+  it("a later stdout-only message (the /model result arrives separately) → its own chip", () => {
+    const segs = classifyInjectedUserContent("<local-command-stdout>Set model to opus</local-command-stdout>")
+    expect(segs).toHaveLength(1)
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("local-command")
+    expect(inj.label).toBe("local command output")
+  })
+
+  it("a standalone bash echo WITHOUT the caveat still folds into one chip (bash-* recognized)", () => {
+    const text = "<bash-input>pwd</bash-input>\n<bash-stdout>out</bash-stdout><bash-stderr></bash-stderr>"
+    const segs = classifyInjectedUserContent(text)
+    expect(segs).toHaveLength(1)
+    expect((segs[0] as InjectedSegment).wrapper).toBe("local-command")
+    expect((segs[0] as InjectedSegment).raw).toBe(text)
+  })
+
+  it("MIXED: real user prose then a trailing system-reminder appendix → bubble + chip", () => {
+    const text = `Please refactor the parser.\n\n${SYSTEM_REMINDER}`
+    const segs = classifyInjectedUserContent(text)
+    expect(segs.map((s) => s.kind)).toEqual(["user", "injected"])
+    expect((segs[0] as PlainUserSegmentT).text).toBe("Please refactor the parser.")
+    expect((segs[1] as InjectedSegment).wrapper).toBe("system-reminder")
+  })
+
+  it("MIXED: an injected block PRECEDING user prose → chip + bubble", () => {
+    const text = `${SYSTEM_REMINDER}\nNow do the actual work.`
+    const segs = classifyInjectedUserContent(text)
+    expect(segs.map((s) => s.kind)).toEqual(["injected", "user"])
+    expect((segs[1] as PlainUserSegmentT).text).toBe("Now do the actual work.")
+  })
+
+  it("NEGATIVE CONTROL: a mid-sentence MENTION of a tag stays a single user bubble", () => {
+    const text = "The <task-notification> element is what Claude Code injects — see the docs."
+    const segs = classifyInjectedUserContent(text)
+    expect(segs).toHaveLength(1)
+    expect(segs[0].kind).toBe("user")
+    // Byte-for-byte unchanged (never mangled).
+    expect((segs[0] as PlainUserSegmentT).text).toBe(text)
+  })
+
+  it("NEGATIVE CONTROL: an UNTERMINATED leading tag (user quoting it) stays a user bubble", () => {
+    const text = "<system-reminder> is an XML-ish tag I was asking about"
+    const segs = classifyInjectedUserContent(text)
+    expect(segs).toHaveLength(1)
+    expect(segs[0].kind).toBe("user")
+    expect((segs[0] as PlainUserSegmentT).text).toBe(text)
+  })
+
+  it("a plain user message is returned as ONE unchanged user segment (byte-identical)", () => {
+    const text = "fix the flaky test in transcriptWindow.test.ts"
+    const segs = classifyInjectedUserContent(text)
+    expect(segs).toEqual([{ kind: "user", text }])
+  })
+
+  // Review finding 1 — the classifier's WORST case is bounded (it runs synchronously
+  // in reduceTranscript, incl. rehydration replay). The wall clock is not asserted
+  // (flaky under CI load); the named caps + the fallback SHAPE are.
+  it("ADVERSARIAL: a huge message of unterminated wrapper-opens skips classification (size bound)", () => {
+    // 50k lines each opening (never closing) a wrapper — the pre-fix O(K·n) freezer.
+    const text = Array.from({ length: 50_000 }, () => "<system-reminder> x").join("\n")
+    expect(text.length).toBeGreaterThan(INJECTED_CLASSIFY_MAX_CHARS) // takes bound (a)'s fast path
+    expect(classifyInjectedUserContent(text)).toEqual([{ kind: "user", text }])
+  })
+
+  it("ADVERSARIAL: a close tag beyond the scan window reads as unterminated → plain text (window bound)", () => {
+    // Under the size bound, but the close sits past INJECTED_CLOSE_SCAN_WINDOW —
+    // closeTagEnd's bounded slice must not find it, so the open stays user prose.
+    const text = "<system-reminder>" + "x".repeat(INJECTED_CLOSE_SCAN_WINDOW) + "</system-reminder>"
+    expect(text.length).toBeLessThanOrEqual(INJECTED_CLASSIFY_MAX_CHARS)
+    expect(classifyInjectedUserContent(text)).toEqual([{ kind: "user", text }])
+  })
+
+  it("control: a close WITHIN the scan window still classifies (the bound only bites adversarial input)", () => {
+    const text = "<system-reminder>" + "x".repeat(1000) + "</system-reminder>"
+    const segs = classifyInjectedUserContent(text)
+    expect(segs).toHaveLength(1)
+    expect(segs[0].kind).toBe("injected")
+  })
+})
+
+// The classifier's PlainUserSegment type, aliased so the assertions read clearly.
+type PlainUserSegmentT = { kind: "user"; text: string }
+
+describe("reduceTranscript — user_message classification (CAPP-118)", () => {
+  it("folds a task-notification user_message into an injected block, NOT a user block", () => {
+    const blocks = foldTranscript([
+      { kind: "user_message", text: "<task-notification><summary>done</summary></task-notification>" },
+    ])
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].kind).toBe("injected")
+    expect((blocks[0] as InjectedBlock).label).toBe("background task — done")
+  })
+
+  it("a MIXED user_message folds into an ordered user block THEN an injected block", () => {
+    const blocks = foldTranscript([
+      { kind: "user_message", text: "ship it\n<system-reminder>be careful</system-reminder>" },
+    ])
+    expect(blocks.map((b) => b.kind)).toEqual(["user", "injected"])
+    expect((blocks[0] as UserBlock).text).toBe("ship it")
+    // Distinct, stable, creation-ordered ids for the two blocks.
+    expect(blocks[0].id).not.toBe(blocks[1].id)
+  })
+
+  it("a normal user_message still folds into ONE user block (byte-identical)", () => {
+    const blocks = foldTranscript([{ kind: "user_message", text: "remember the number 42" }])
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].kind).toBe("user")
+    expect((blocks[0] as UserBlock).text).toBe("remember the number 42")
+  })
+
+  // Review finding 2 — the "open raw" must be ACTUALLY verbatim: the read-only CODE
+  // panel, byte-for-byte. The earlier markdown-fence wrapper broke on an inner ```.
+  it("panelForBlock opens an injected block VERBATIM in the code panel", () => {
+    const raw = "<system-reminder>x</system-reminder>"
+    const req = panelForBlock({ kind: "injected", id: "b", wrapper: "system-reminder", label: "system reminder", raw })
+    expect(req?.type).toBe("code")
+    expect((req?.props as { code: string }).code).toBe(raw) // byte-identical, no wrapper
+    expect((req?.props as { wrap?: boolean }).wrap).toBe(true)
+  })
+
+  it("a ``` run INSIDE the raw cannot break the verbatim view (the markdown-fence regression)", () => {
+    const raw = [
+      "<task-notification>",
+      "<summary>npm test finished</summary>",
+      "<result>",
+      "```",
+      "Test Files  85 passed (88)",
+      "```",
+      "**not bold** and `not code` after the inner fence",
+      "</result>",
+      "</task-notification>",
+    ].join("\n")
+    const req = panelForBlock({ kind: "injected", id: "b", wrapper: "task-notification", label: "background task", raw })
+    // Code panel: the payload is the raw string itself — the inner ``` is DATA, not
+    // markup, so nothing after it can render as interpreted markdown.
+    expect(req?.type).toBe("code")
+    expect((req?.props as { code: string }).code).toBe(raw)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CAPP-119 review (finding 4) — the e2e ↔ fixture LINKING PIN. The CAPP-111 spec
+// (e2e/structured.spec.ts, "CAPP-111 / S4: each block has a STATICALLY-VISIBLE
+// top-right expand button…") drives a fakeStream turn and CLICKS the settled
+// assistant block's `.agent-block-expand` — a button that only renders because the
+// canned REPLY_TEXT passes the CAPP-119 usefulness gate (it carries a fenced code
+// block). If the fixture or the gate ever drift apart, this pin fails FIRST in the
+// fast unit suite instead of as an opaque e2e timeout. (fakeStream is import-safe
+// from src tests: its only ./terminals import is type-only, erased at build.)
+// ---------------------------------------------------------------------------
+describe("fakeStream ↔ usefulness-gate linking pin (CAPP-119 review)", () => {
+  it("the canned fake reply passes assistantExpandUseful (the CAPP-111 e2e depends on it)", () => {
+    expect(assistantExpandUseful(REPLY_TEXT)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CAPP-119 — the assistant expand-button USEFULNESS gate: short prose gets NO icon;
+// long / code / table prose does. Pure string gate, tested as a table.
+// ---------------------------------------------------------------------------
+describe("assistantExpandUseful — the CAPP-119 usefulness gate", () => {
+  it("a short plain paragraph is NOT useful to expand (no icon)", () => {
+    expect(assistantExpandUseful("Sure, done.")).toBe(false)
+    expect(assistantExpandUseful("The build passed and all 280 tests are green.")).toBe(false)
+  })
+
+  it("long prose (over the threshold) IS useful to expand", () => {
+    expect(assistantExpandUseful("x".repeat(ASSISTANT_EXPAND_MIN_CHARS))).toBe(true)
+    expect(assistantExpandUseful("x".repeat(ASSISTANT_EXPAND_MIN_CHARS - 1))).toBe(false)
+  })
+
+  it("prose containing a fenced code block IS useful (even if short)", () => {
+    expect(assistantExpandUseful("Here:\n```js\nconst x = 1\n```")).toBe(true)
+    // A fence must be at a line start — an inline triple-backtick mention is not enough.
+    expect(assistantExpandUseful("we write ``` to open a fence")).toBe(false)
+  })
+
+  it("prose containing a markdown table IS useful (even if short)", () => {
+    const table = "| a | b |\n| --- | --- |\n| 1 | 2 |"
+    expect(assistantExpandUseful(table)).toBe(true)
+  })
+
+  it("a bare '---' thematic break is NOT mistaken for a table", () => {
+    expect(assistantExpandUseful("above\n\n---\n\nbelow")).toBe(false)
   })
 })
 
