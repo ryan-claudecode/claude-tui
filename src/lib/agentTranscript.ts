@@ -99,6 +99,28 @@ export interface RawBlock {
 }
 
 /**
+ * CAPP-118 — harness-injected user-role content, rendered as a compact system CHIP
+ * instead of a giant user bubble. Claude Code injects background-task notices
+ * (`<task-notification>`), `<system-reminder>` blocks, and local-command echoes
+ * (`<command-name>`/`<command-message>`/`<command-args>`,
+ * `<local-command-stdout>`/`<local-command-stderr>`, the `<local-command-caveat>`
+ * wrapper) into a conversation as USER-role turns. The stream-json carries them as
+ * `user` events, so without this classification they render as user-authored
+ * bubbles (worst on `--resume` replay). The chip is muted + one-line; its raw text
+ * stays inspectable behind the expand button (see {@link classifyInjectedUserContent}).
+ */
+export interface InjectedBlock {
+  kind: "injected"
+  id: string
+  /** The wrapper family — drives the chip glyph/label + is a stable test seam. */
+  wrapper: InjectedWrapper
+  /** A human one-line label (no glyph), e.g. `background task — <summary>`. */
+  label: string
+  /** The RAW wrapper text, verbatim — opened in the markdown detail view, never lost. */
+  raw: string
+}
+
+/**
  * CAPP-39 gate ② — a turn that failed because the user isn't signed in to Claude.
  * Folded from a `needs_auth` StreamEvent (synthesized by the transport on
  * exit-before-init OR parsed from the post-init "Not logged in" failure shape).
@@ -139,6 +161,7 @@ export type TranscriptBlock =
   | ResultBlock
   | ModelErrorBlock
   | NeedsAuthBlock
+  | InjectedBlock
   | RawBlock
 
 /**
@@ -255,6 +278,178 @@ export function modelErrorFromResult(
   return { message: text, model: m ? m[1].trim() : undefined }
 }
 
+// ---------------------------------------------------------------------------
+// CAPP-118 — classify a user_message's text into ordered segments: genuine user
+// prose stays a user bubble; each harness-injected wrapper becomes a system chip.
+//
+// SAFETY (the negative controls): a wrapper is injected-content ONLY when its
+// opening tag sits at a segment boundary (start-of-message or start-of-line, after
+// optional leading whitespace) AND has a matching closing tag. A tag merely
+// MENTIONED mid-sentence — or an unterminated tag the user quoted — is never
+// reclassified; it stays user prose. A message with NO well-formed injected wrapper
+// is returned byte-for-byte as one user segment (the overwhelming common case).
+// ---------------------------------------------------------------------------
+
+/** The injected-wrapper families we render as chips (the discriminant + test seam). */
+export type InjectedWrapper = "task-notification" | "system-reminder" | "local-command"
+
+/** An injected wrapper block extracted from a user_message. */
+export interface InjectedSegment {
+  kind: "injected"
+  wrapper: InjectedWrapper
+  label: string
+  raw: string
+}
+/** A run of genuine user prose (trimmed) between/around injected wrappers. */
+export interface PlainUserSegment {
+  kind: "user"
+  text: string
+}
+export type ClassifiedSegment = InjectedSegment | PlainUserSegment
+
+/** Standalone single-block wrappers — presence at a boundary is its own chip. */
+const SINGLE_WRAPPERS: { tag: string; wrapper: InjectedWrapper }[] = [
+  { tag: "task-notification", wrapper: "task-notification" },
+  { tag: "system-reminder", wrapper: "system-reminder" },
+]
+/** The local-command family — a CONSECUTIVE run of these folds into ONE chip. */
+const LOCAL_COMMAND_TAGS = [
+  "command-name",
+  "command-message",
+  "command-args",
+  "local-command-stdout",
+  "local-command-stderr",
+]
+/** Claude Code's "everything below is local-command output, do not respond" marker. */
+const CAVEAT_TAG = "local-command-caveat"
+
+function startsWithTag(text: string, pos: number, tag: string): boolean {
+  return text.startsWith(`<${tag}>`, pos)
+}
+
+/** Index just past the matching `</tag>` after an open at `openPos`, or -1. */
+function closeTagEnd(text: string, openPos: number, tag: string): number {
+  const closeTag = `</${tag}>`
+  const idx = text.indexOf(closeTag, openPos + tag.length + 2)
+  return idx < 0 ? -1 : idx + closeTag.length
+}
+
+/** The verbatim inner text of the FIRST `<tag>…</tag>` in `raw`, or undefined. */
+function innerTag(raw: string, tag: string): string | undefined {
+  const open = `<${tag}>`
+  const close = `</${tag}>`
+  const a = raw.indexOf(open)
+  if (a < 0) return undefined
+  const b = raw.indexOf(close, a + open.length)
+  if (b < 0) return undefined
+  return raw.slice(a + open.length, b)
+}
+
+/** Collapse whitespace + cap length so a chip label never overflows its one line. */
+function collapseLabel(s: string): string {
+  const t = s.replace(/\s+/g, " ").trim()
+  return t.length > 120 ? t.slice(0, 119) + "…" : t
+}
+
+/** The human one-line label for a resolved wrapper (no glyph — the chip adds ⚙). */
+function labelForSingle(wrapper: InjectedWrapper, raw: string): string {
+  if (wrapper === "system-reminder") return "system reminder"
+  // task-notification: prefer its <summary>, else a generic line.
+  const summary = innerTag(raw, "summary")
+  const s = summary != null ? collapseLabel(summary) : ""
+  return s ? `background task — ${s}` : "background task"
+}
+function labelForLocalCommand(raw: string): string {
+  const name = innerTag(raw, "command-name")
+  const n = name != null ? name.trim().replace(/^\/+/, "") : ""
+  return n ? `/${n}` : "local command output"
+}
+
+/** Match an injected wrapper anchored at `p` (a boundary), or null. */
+function matchWrapperAt(text: string, p: number): { end: number; seg: InjectedSegment } | null {
+  // Caveat is sticky-to-end: from here on is local-command output (its own close
+  // tag ends the caveat, but the bash-input/stdout echo that follows is part of it).
+  if (startsWithTag(text, p, CAVEAT_TAG)) {
+    if (closeTagEnd(text, p, CAVEAT_TAG) < 0) return null // unterminated → not a wrapper
+    const raw = text.slice(p)
+    return { end: text.length, seg: { kind: "injected", wrapper: "local-command", label: "local command output", raw } }
+  }
+  for (const { tag, wrapper } of SINGLE_WRAPPERS) {
+    if (startsWithTag(text, p, tag)) {
+      const end = closeTagEnd(text, p, tag)
+      if (end < 0) return null
+      const raw = text.slice(p, end)
+      return { end, seg: { kind: "injected", wrapper, label: labelForSingle(wrapper, raw), raw } }
+    }
+  }
+  // A run of consecutive local-command-family wrappers (whitespace-separated) → ONE chip.
+  if (LOCAL_COMMAND_TAGS.some((t) => startsWithTag(text, p, t))) {
+    let end = -1
+    let q = p
+    while (q < text.length) {
+      while (q < text.length && /\s/.test(text[q])) q++
+      const tag = LOCAL_COMMAND_TAGS.find((t) => startsWithTag(text, q, t))
+      if (!tag) break
+      const e = closeTagEnd(text, q, tag)
+      if (e < 0) break
+      end = e
+      q = e
+    }
+    if (end < 0) return null
+    const raw = text.slice(p, end)
+    return { end, seg: { kind: "injected", wrapper: "local-command", label: labelForLocalCommand(raw), raw } }
+  }
+  return null
+}
+
+/** The next injected wrapper at/after `from` that sits at a boundary, or null. */
+function findNextWrapper(
+  text: string,
+  from: number,
+): { start: number; end: number; seg: InjectedSegment } | null {
+  const n = text.length
+  let ls = from
+  while (ls <= n) {
+    let p = ls
+    while (p < n && (text[p] === " " || text[p] === "\t")) p++
+    const m = matchWrapperAt(text, p)
+    if (m) return { start: p, end: m.end, seg: m.seg }
+    const nl = text.indexOf("\n", ls)
+    if (nl < 0) break
+    ls = nl + 1
+  }
+  return null
+}
+
+function pushUser(out: ClassifiedSegment[], raw: string): void {
+  const t = raw.trim()
+  if (t) out.push({ kind: "user", text: t })
+}
+
+/**
+ * Split a user_message's text into ordered user/injected segments (CAPP-118). Pure.
+ * Returns a single unchanged user segment when there's no injected wrapper.
+ */
+export function classifyInjectedUserContent(text: string): ClassifiedSegment[] {
+  const segments: ClassifiedSegment[] = []
+  let i = 0
+  const n = text.length
+  while (i < n) {
+    const next = findNextWrapper(text, i)
+    if (!next) {
+      pushUser(segments, text.slice(i))
+      break
+    }
+    if (next.start > i) pushUser(segments, text.slice(i, next.start))
+    segments.push(next.seg)
+    i = next.end
+  }
+  // No injected content at all → the whole message is one user bubble, byte-for-byte
+  // (preserves a mid-sentence tag MENTION verbatim + keeps normal messages unchanged).
+  if (!segments.some((s) => s.kind === "injected")) return [{ kind: "user", text }]
+  return segments
+}
+
 /**
  * Fold ONE event into the running state, returning a NEW state (immutable for
  * React). Coalescing replaces the trailing block with a new object that reuses
@@ -266,13 +461,30 @@ export function reduceTranscript(state: TranscriptState, event: StreamEvent): Tr
   const last = blocks[blocks.length - 1]
 
   switch (event.kind) {
-    case "user_message":
+    case "user_message": {
       // The user's own turn — a distinct chat block. Never coalesced (each send is
-      // its own message), always appended.
-      return {
-        blocks: [...blocks, { kind: "user", id: `b${seq}`, text: event.text }],
-        seq: seq + 1,
+      // its own message), always appended. CAPP-118 — the text may carry harness-
+      // injected wrappers (task-notification / system-reminder / local-command);
+      // classify it so injected blocks render as compact chips, not user bubbles. A
+      // normal message classifies to ONE unchanged user segment (byte-identical).
+      const segs = classifyInjectedUserContent(event.text)
+      let s = seq
+      const appended: TranscriptBlock[] = []
+      for (const seg of segs) {
+        appended.push(
+          seg.kind === "user"
+            ? { kind: "user", id: `b${s}`, text: seg.text }
+            : { kind: "injected", id: `b${s}`, wrapper: seg.wrapper, label: seg.label, raw: seg.raw },
+        )
+        s++
       }
+      // Defensive: an all-whitespace message classifies to nothing — keep a (blank)
+      // user block so seq/shape matches the pre-CAPP-118 single-block behavior.
+      if (appended.length === 0) {
+        return { blocks: [...blocks, { kind: "user", id: `b${seq}`, text: event.text }], seq: seq + 1 }
+      }
+      return { blocks: [...blocks, ...appended], seq: s }
+    }
 
     case "assistant_delta": {
       if (last && last.kind === "assistant") {
@@ -511,6 +723,12 @@ export function panelForBlock(block: TranscriptBlock): PanelRequest | null {
     return { type: "code", props: { code: JSON.stringify(block.raw, null, 2), language: "json" } }
   }
 
+  if (block.kind === "injected") {
+    // CAPP-118 — the raw wrapper text, verbatim in the markdown detail view (fenced
+    // so the XML-ish tags show literally, never markdown-interpreted).
+    return { type: "markdown", props: { content: "```\n" + block.raw + "\n```" } }
+  }
+
   return null
 }
 
@@ -542,6 +760,11 @@ export function expandLabelForBlock(
   }
   if (block.kind === "result") {
     return { label: "Open result", compact: true }
+  }
+  if (block.kind === "injected") {
+    // CAPP-118 — the chip is collapsed-but-inspectable: the compact ⤢ opens the raw
+    // wrapper text (never silently hidden).
+    return { label: "Open raw", compact: true }
   }
   return null
 }

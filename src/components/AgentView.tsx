@@ -652,6 +652,21 @@ export function BlockView({
       )
     case "tool":
       return <ToolView tool={block} onExpand={onExpand} />
+    case "injected": {
+      // CAPP-118 — harness-injected content (task-notification / system-reminder /
+      // local-command) as a MUTED, compact one-line system chip (NOT a user bubble).
+      // The statically-visible compact ⤢ opens the raw wrapper text — collapsed but
+      // never hidden. `ex` is non-null for `injected` (markdown detail view) but
+      // computed through the helper so it stays the source of truth.
+      const ex = expandLabelForBlock(block)
+      return (
+        <div className="agent-block agent-injected">
+          <span className="agent-injected-glyph" aria-hidden="true">⚙</span>
+          <span className="agent-injected-label">{block.label}</span>
+          {ex && <BlockExpandButton label={ex.label} compact={ex.compact} onExpand={onExpand} />}
+        </div>
+      )
+    }
     case "error":
       return (
         <div className="agent-block agent-error" role="alert">

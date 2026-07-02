@@ -15,12 +15,15 @@ import {
   settleRunningTools,
   panelForBlock,
   expandLabelForBlock,
+  classifyInjectedUserContent,
   modelErrorFromResult,
   type TranscriptBlock,
   type ToolBlock,
   type AssistantTextBlock,
   type ResultBlock,
   type UserBlock,
+  type InjectedBlock,
+  type InjectedSegment,
   type ModelErrorBlock,
   type NeedsAuthBlock,
 } from "./agentTranscript"
@@ -440,6 +443,7 @@ describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => 
     { kind: "result", id: "b", isError: false, text: "done" },
     { kind: "model_error", id: "b", message: "model x unavailable" },
     { kind: "needs_auth", id: "b", message: "Not logged in" },
+    { kind: "injected", id: "b", wrapper: "system-reminder", label: "system reminder", raw: "<system-reminder>x</system-reminder>" },
     { kind: "raw", id: "b", raw: { a: 1 } },
   ]
 
@@ -456,9 +460,10 @@ describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => 
     }
   })
 
-  it("returns the 4 expected detail-view kinds and NO others", () => {
+  it("returns the 5 expected detail-view kinds and NO others", () => {
     const labelled = samples.filter((b) => expandLabelForBlock(b) != null).map((b) => b.kind)
-    expect(new Set(labelled)).toEqual(new Set(["assistant", "tool", "result", "raw"]))
+    // CAPP-118 — `injected` joins the detail-view kinds (its raw wrapper text opens).
+    expect(new Set(labelled)).toEqual(new Set(["assistant", "tool", "result", "raw", "injected"]))
   })
 
   // Exhaustiveness tie to the union (CAPP-111 review nit): a Record keyed by the
@@ -467,7 +472,7 @@ describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => 
   // then forces that kind into `samples` too.
   const KIND_COVERAGE: Record<TranscriptBlock["kind"], true> = {
     user: true, assistant: true, thinking: true, tool: true, error: true,
-    result: true, model_error: true, needs_auth: true, raw: true,
+    result: true, model_error: true, needs_auth: true, injected: true, raw: true,
   }
   it("samples cover EVERY TranscriptBlock kind (so no kind dodges the drift-pin)", () => {
     const sampled = new Set(samples.map((b) => b.kind))
@@ -481,6 +486,169 @@ describe("expandLabelForBlock — parity with panelForBlock (drift-pin)", () => 
     expect(expandLabelForBlock({ kind: "raw", id: "b", raw: {} })?.compact).toBe(true)
     expect(expandLabelForBlock({ kind: "assistant", id: "b", text: "" })?.compact).toBe(true)
     expect(expandLabelForBlock({ kind: "result", id: "b", isError: false })?.compact).toBe(true)
+    expect(expandLabelForBlock({ kind: "injected", id: "b", wrapper: "system-reminder", label: "system reminder", raw: "<system-reminder>x</system-reminder>" })?.compact).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CAPP-118 — the injected-content classifier: harness user-role wrappers become
+// system chips, genuine prose stays a user bubble. Fixture-driven with REALISTIC
+// shapes, plus the negative controls (a mid-sentence mention / an unterminated tag
+// must NEVER be reclassified).
+// ---------------------------------------------------------------------------
+describe("classifyInjectedUserContent — harness-injected user-role content (CAPP-118)", () => {
+  // A full background-task notice (the real shape: task-id / tool-use-id / output-file
+  // / status / summary elements), as Claude Code injects when a background task finishes.
+  const TASK_NOTIFICATION = [
+    "<task-notification>",
+    "<task-id>bk5eyidus</task-id>",
+    "<tool-use-id>toolu_018ALNKjjbvakYkP3g5DTPmh</tool-use-id>",
+    "<output-file>C:\\tmp\\bk5eyidus.output</output-file>",
+    "<status>completed</status>",
+    '<summary>Background command "npm install" completed (exit code 0)</summary>',
+    "</task-notification>",
+  ].join("\n")
+
+  const SYSTEM_REMINDER =
+    "<system-reminder>\nAs you answer, remember the codebase instructions.\n</system-reminder>"
+
+  // The local-command echo: a command-name/message/args triple + its stdout, as one turn.
+  const LOCAL_COMMAND = [
+    "<command-name>/clear</command-name>",
+    "<command-message>clear</command-message>",
+    "<command-args></command-args>",
+    "<local-command-stdout>Conversation cleared.</local-command-stdout>",
+  ].join("\n")
+
+  // A caveat wrapper followed by a bash echo (bash-input/stdout) — Claude Code's
+  // "do not respond to anything below" local-command output.
+  const CAVEAT = [
+    "<local-command-caveat>Caveat: the messages below were generated while running local commands.</local-command-caveat>",
+    "<bash-input>ls -la</bash-input>",
+    "<bash-stdout>total 0\ndrwxr-xr-x  2 me me</bash-stdout>",
+  ].join("\n")
+
+  it("a lone task-notification → ONE injected chip carrying the summary, no user bubble", () => {
+    const segs = classifyInjectedUserContent(TASK_NOTIFICATION)
+    expect(segs).toHaveLength(1)
+    expect(segs[0].kind).toBe("injected")
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("task-notification")
+    expect(inj.label).toBe('background task — Background command "npm install" completed (exit code 0)')
+    // The RAW wrapper text is preserved verbatim (inspectable behind the ⤢).
+    expect(inj.raw).toBe(TASK_NOTIFICATION)
+  })
+
+  it("a task-notification with NO summary falls back to a generic label", () => {
+    const raw = "<task-notification><status>running</status></task-notification>"
+    const inj = classifyInjectedUserContent(raw)[0] as InjectedSegment
+    expect(inj.kind).toBe("injected")
+    expect(inj.label).toBe("background task")
+  })
+
+  it("a system-reminder → ONE injected chip labelled 'system reminder'", () => {
+    const segs = classifyInjectedUserContent(SYSTEM_REMINDER)
+    expect(segs).toHaveLength(1)
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("system-reminder")
+    expect(inj.label).toBe("system reminder")
+  })
+
+  it("a command-name/message/args triple + stdout → ONE local-command chip labelled '/clear'", () => {
+    const segs = classifyInjectedUserContent(LOCAL_COMMAND)
+    expect(segs).toHaveLength(1)
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("local-command")
+    expect(inj.label).toBe("/clear")
+    // The whole run is folded into one chip's raw (the invocation + its output).
+    expect(inj.raw).toContain("<command-name>/clear</command-name>")
+    expect(inj.raw).toContain("<local-command-stdout>Conversation cleared.</local-command-stdout>")
+  })
+
+  it("a caveat wrapper (sticky-to-end) swallows the following bash echo → ONE local-command chip", () => {
+    const segs = classifyInjectedUserContent(CAVEAT)
+    expect(segs).toHaveLength(1)
+    const inj = segs[0] as InjectedSegment
+    expect(inj.wrapper).toBe("local-command")
+    expect(inj.label).toBe("local command output")
+    // Sticky: the bash-input/stdout that follow the caveat are part of the chip's raw.
+    expect(inj.raw).toContain("<bash-input>ls -la</bash-input>")
+    expect(inj.raw).toContain("<bash-stdout>total 0")
+  })
+
+  it("MIXED: real user prose then a trailing system-reminder appendix → bubble + chip", () => {
+    const text = `Please refactor the parser.\n\n${SYSTEM_REMINDER}`
+    const segs = classifyInjectedUserContent(text)
+    expect(segs.map((s) => s.kind)).toEqual(["user", "injected"])
+    expect((segs[0] as PlainUserSegmentT).text).toBe("Please refactor the parser.")
+    expect((segs[1] as InjectedSegment).wrapper).toBe("system-reminder")
+  })
+
+  it("MIXED: an injected block PRECEDING user prose → chip + bubble", () => {
+    const text = `${SYSTEM_REMINDER}\nNow do the actual work.`
+    const segs = classifyInjectedUserContent(text)
+    expect(segs.map((s) => s.kind)).toEqual(["injected", "user"])
+    expect((segs[1] as PlainUserSegmentT).text).toBe("Now do the actual work.")
+  })
+
+  it("NEGATIVE CONTROL: a mid-sentence MENTION of a tag stays a single user bubble", () => {
+    const text = "The <task-notification> element is what Claude Code injects — see the docs."
+    const segs = classifyInjectedUserContent(text)
+    expect(segs).toHaveLength(1)
+    expect(segs[0].kind).toBe("user")
+    // Byte-for-byte unchanged (never mangled).
+    expect((segs[0] as PlainUserSegmentT).text).toBe(text)
+  })
+
+  it("NEGATIVE CONTROL: an UNTERMINATED leading tag (user quoting it) stays a user bubble", () => {
+    const text = "<system-reminder> is an XML-ish tag I was asking about"
+    const segs = classifyInjectedUserContent(text)
+    expect(segs).toHaveLength(1)
+    expect(segs[0].kind).toBe("user")
+    expect((segs[0] as PlainUserSegmentT).text).toBe(text)
+  })
+
+  it("a plain user message is returned as ONE unchanged user segment (byte-identical)", () => {
+    const text = "fix the flaky test in transcriptWindow.test.ts"
+    const segs = classifyInjectedUserContent(text)
+    expect(segs).toEqual([{ kind: "user", text }])
+  })
+})
+
+// The classifier's PlainUserSegment type, aliased so the assertions read clearly.
+type PlainUserSegmentT = { kind: "user"; text: string }
+
+describe("reduceTranscript — user_message classification (CAPP-118)", () => {
+  it("folds a task-notification user_message into an injected block, NOT a user block", () => {
+    const blocks = foldTranscript([
+      { kind: "user_message", text: "<task-notification><summary>done</summary></task-notification>" },
+    ])
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].kind).toBe("injected")
+    expect((blocks[0] as InjectedBlock).label).toBe("background task — done")
+  })
+
+  it("a MIXED user_message folds into an ordered user block THEN an injected block", () => {
+    const blocks = foldTranscript([
+      { kind: "user_message", text: "ship it\n<system-reminder>be careful</system-reminder>" },
+    ])
+    expect(blocks.map((b) => b.kind)).toEqual(["user", "injected"])
+    expect((blocks[0] as UserBlock).text).toBe("ship it")
+    // Distinct, stable, creation-ordered ids for the two blocks.
+    expect(blocks[0].id).not.toBe(blocks[1].id)
+  })
+
+  it("a normal user_message still folds into ONE user block (byte-identical)", () => {
+    const blocks = foldTranscript([{ kind: "user_message", text: "remember the number 42" }])
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].kind).toBe("user")
+    expect((blocks[0] as UserBlock).text).toBe("remember the number 42")
+  })
+
+  it("panelForBlock opens an injected block's raw text in the markdown panel", () => {
+    const req = panelForBlock({ kind: "injected", id: "b", wrapper: "system-reminder", label: "system reminder", raw: "<system-reminder>x</system-reminder>" })
+    expect(req?.type).toBe("markdown")
+    expect((req?.props as { content: string }).content).toContain("<system-reminder>x</system-reminder>")
   })
 })
 

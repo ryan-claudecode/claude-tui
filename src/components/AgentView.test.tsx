@@ -7,6 +7,7 @@ import type {
   AssistantTextBlock,
   ResultBlock,
   UserBlock,
+  InjectedBlock,
 } from "../lib/agentTranscript"
 
 /**
@@ -86,6 +87,27 @@ describe("AgentView markdown rendering", () => {
     expect(() => renderAssistant("```js\nconst x = 1")).not.toThrow()
     expect(() => renderAssistant("a **bold")).not.toThrow()
     expect(() => renderAssistant("| a | b |\n| - | - |\n| 1")).not.toThrow()
+  })
+
+  // CAPP-118 — harness-injected content renders as a muted system CHIP, never a
+  // user bubble. Render the real block renderer to static markup and assert it.
+  it("renders an injected block as a system chip (NOT a user bubble)", () => {
+    const block: InjectedBlock = {
+      kind: "injected",
+      id: "bi",
+      wrapper: "task-notification",
+      label: "background task — npm install completed",
+      raw: "<task-notification><summary>npm install completed</summary></task-notification>",
+    }
+    const html = renderToStaticMarkup(
+      <BlockView block={block} onExpand={() => {}} terminalId="t1" sessionId={null} />,
+    )
+    expect(html).toContain("agent-injected")
+    expect(html).toContain("background task — npm install completed")
+    // NOT a user bubble (the whole point of CAPP-118).
+    expect(html).not.toContain("agent-user-bubble")
+    // Collapsed-but-inspectable: the compact ⤢ expand button is present.
+    expect(html).toContain("agent-block-expand")
   })
 
   it("keeps the user bubble PLAIN (no markdown rendering)", () => {
