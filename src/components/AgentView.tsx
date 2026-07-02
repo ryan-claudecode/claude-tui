@@ -659,9 +659,9 @@ export function BlockView({
     case "injected": {
       // CAPP-118 — harness-injected content (task-notification / system-reminder /
       // local-command) as a MUTED, compact one-line system chip (NOT a user bubble).
-      // The statically-visible compact ⤢ opens the raw wrapper text — collapsed but
-      // never hidden. `ex` is non-null for `injected` (markdown detail view) but
-      // computed through the helper so it stays the source of truth.
+      // The statically-visible compact ⤢ opens the raw wrapper text VERBATIM in the
+      // read-only code panel — collapsed but never hidden. `ex` is non-null for
+      // `injected` but computed through the helper so it stays the source of truth.
       const ex = expandLabelForBlock(block)
       return (
         <div className="agent-block agent-injected">

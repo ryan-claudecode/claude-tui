@@ -116,7 +116,8 @@ export interface InjectedBlock {
   wrapper: InjectedWrapper
   /** A human one-line label (no glyph), e.g. `background task — <summary>`. */
   label: string
-  /** The RAW wrapper text, verbatim — opened in the markdown detail view, never lost. */
+  /** The RAW wrapper text, verbatim — opened byte-for-byte in the read-only code
+   *  panel (never markdown-interpreted; review finding 2), never lost. */
   raw: string
 }
 
@@ -293,6 +294,20 @@ export function modelErrorFromResult(
 /** The injected-wrapper families we render as chips (the discriminant + test seam). */
 export type InjectedWrapper = "task-notification" | "system-reminder" | "local-command"
 
+// CAPP-118 review (finding 1) — the classifier runs SYNCHRONOUSLY inside
+// reduceTranscript (including full-history replay on rehydration/restart/handoff),
+// so its WORST case must be bounded, not just its common case fast. Unbounded, K
+// unterminated wrapper-open lines each scanning to end-of-string is O(K·n): a ~1MB
+// pasted message of `<system-reminder>`-prefixed lines froze the renderer. Two caps:
+/** Bound (a): messages longer than this skip classification entirely → one plain
+ *  user segment. Real injected wrappers are small; a message this size is a paste,
+ *  not a harness turn — mis-rendering it as a bubble is the safe direction. */
+export const INJECTED_CLASSIFY_MAX_CHARS = 131_072
+/** Bound (b): the max chars past an opening tag that {@link closeTagEnd} scans for
+ *  its close. No close within the window = treated as unterminated = plain user
+ *  text (default-safe: injected→bubble is cosmetic; the reverse eats real prose). */
+export const INJECTED_CLOSE_SCAN_WINDOW = 65_536
+
 /** An injected wrapper block extracted from a user_message. */
 export interface InjectedSegment {
   kind: "injected"
@@ -312,13 +327,20 @@ const SINGLE_WRAPPERS: { tag: string; wrapper: InjectedWrapper }[] = [
   { tag: "task-notification", wrapper: "task-notification" },
   { tag: "system-reminder", wrapper: "system-reminder" },
 ]
-/** The local-command family — a CONSECUTIVE run of these folds into ONE chip. */
+/** The local-command family — a CONSECUTIVE run of these folds into ONE chip.
+ *  Covers both live shapes (review finding 3): the slash-command echo
+ *  (`command-name`/`command-message`/`command-args`, with the stdout arriving later
+ *  as its own `local-command-stdout` message) AND the `!`-bash echo
+ *  (`bash-input` + `bash-stdout`/`bash-stderr`, which can sit adjacent on one line). */
 const LOCAL_COMMAND_TAGS = [
   "command-name",
   "command-message",
   "command-args",
   "local-command-stdout",
   "local-command-stderr",
+  "bash-input",
+  "bash-stdout",
+  "bash-stderr",
 ]
 /** Claude Code's "everything below is local-command output, do not respond" marker. */
 const CAVEAT_TAG = "local-command-caveat"
@@ -327,11 +349,17 @@ function startsWithTag(text: string, pos: number, tag: string): boolean {
   return text.startsWith(`<${tag}>`, pos)
 }
 
-/** Index just past the matching `</tag>` after an open at `openPos`, or -1. */
+/** Index just past the matching `</tag>` after an open at `openPos`, or -1.
+ *  BOUNDED (review finding 1): only the {@link INJECTED_CLOSE_SCAN_WINDOW} chars past
+ *  the opening tag are searched — the slice caps the per-call cost regardless of
+ *  message size, so K unterminated opens can never go quadratic. A close beyond the
+ *  window reads as unterminated → the open stays plain user text. */
 function closeTagEnd(text: string, openPos: number, tag: string): number {
   const closeTag = `</${tag}>`
-  const idx = text.indexOf(closeTag, openPos + tag.length + 2)
-  return idx < 0 ? -1 : idx + closeTag.length
+  const from = openPos + tag.length + 2
+  const windowEnd = Math.min(text.length, openPos + INJECTED_CLOSE_SCAN_WINDOW)
+  const idx = text.slice(from, windowEnd).indexOf(closeTag)
+  return idx < 0 ? -1 : from + idx + closeTag.length
 }
 
 /** The verbatim inner text of the FIRST `<tag>…</tag>` in `raw`, or undefined. */
@@ -368,11 +396,13 @@ function labelForLocalCommand(raw: string): string {
 /** Match an injected wrapper anchored at `p` (a boundary), or null. */
 function matchWrapperAt(text: string, p: number): { end: number; seg: InjectedSegment } | null {
   // Caveat is sticky-to-end: from here on is local-command output (its own close
-  // tag ends the caveat, but the bash-input/stdout echo that follows is part of it).
+  // tag ends the caveat, but the command/bash echo that follows in the SAME message
+  // is part of it). The label still prefers an embedded <command-name> (the real
+  // caveat + /model shape) over the generic line.
   if (startsWithTag(text, p, CAVEAT_TAG)) {
     if (closeTagEnd(text, p, CAVEAT_TAG) < 0) return null // unterminated → not a wrapper
     const raw = text.slice(p)
-    return { end: text.length, seg: { kind: "injected", wrapper: "local-command", label: "local command output", raw } }
+    return { end: text.length, seg: { kind: "injected", wrapper: "local-command", label: labelForLocalCommand(raw), raw } }
   }
   for (const { tag, wrapper } of SINGLE_WRAPPERS) {
     if (startsWithTag(text, p, tag)) {
@@ -429,8 +459,18 @@ function pushUser(out: ClassifiedSegment[], raw: string): void {
 /**
  * Split a user_message's text into ordered user/injected segments (CAPP-118). Pure.
  * Returns a single unchanged user segment when there's no injected wrapper.
+ *
+ * NOTE (history path): on transcript rehydration, Claude Code lines flagged
+ * `isMeta:true` (e.g. the PLAIN-PROSE "Caveat: the messages below were generated…"
+ * synthetic turn — see transcriptHistory.fixtures.ts META_LINE) are dropped UPSTREAM
+ * by transcriptHistory.parseTranscriptLine before any user_message reaches this
+ * classifier — so the prose-form caveat never needs (and never gets) tag matching.
  */
 export function classifyInjectedUserContent(text: string): ClassifiedSegment[] {
+  // Bound (a) — review finding 1: a pathologically large message (a giant paste)
+  // skips classification entirely. Combined with the closeTagEnd scan window this
+  // caps the classifier's worst case; it runs synchronously in reduceTranscript.
+  if (text.length > INJECTED_CLASSIFY_MAX_CHARS) return [{ kind: "user", text }]
   const segments: ClassifiedSegment[] = []
   let i = 0
   const n = text.length
@@ -724,9 +764,12 @@ export function panelForBlock(block: TranscriptBlock): PanelRequest | null {
   }
 
   if (block.kind === "injected") {
-    // CAPP-118 — the raw wrapper text, verbatim in the markdown detail view (fenced
-    // so the XML-ish tags show literally, never markdown-interpreted).
-    return { type: "markdown", props: { content: "```\n" + block.raw + "\n```" } }
+    // CAPP-118 review (finding 2) — ACTUALLY verbatim: the read-only CODE panel
+    // renders `raw` byte-for-byte (wrapped, no language). The earlier markdown-fence
+    // wrapper broke its own guarantee: a ``` run INSIDE the wrapper (a task
+    // notification's <result> often carries fenced output) closed the fence and the
+    // tail rendered as interpreted markdown.
+    return { type: "code", props: { code: block.raw, wrap: true } }
   }
 
   return null
