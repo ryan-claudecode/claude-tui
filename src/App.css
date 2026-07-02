@@ -858,19 +858,19 @@ body {
 .workspace-active-controls {
   display: flex;
   flex-direction: column;
-  gap: var(--s-2);
-  margin-top: var(--s-2);
+  gap: var(--s-1);
+  margin-top: var(--s-1);
 }
 
 /* The folder row — a full-width clickable affordance showing the parent-folder
-   NAME (or "No folder selected"). Slightly larger padding (one step up) to match
-   the pill weight. Clicking opens the native single-folder picker. */
+   NAME (or "No folder selected"). Slim padding (CAPP-122) to match the compact
+   control-row density above it. Clicking opens the native single-folder picker. */
 .workspace-dir-row {
   display: flex;
   align-items: center;
   gap: var(--s-2);
   width: 100%;
-  padding: 8px 11px;
+  padding: 6px 10px;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--r);
@@ -945,97 +945,63 @@ body {
   line-height: 1;
 }
 
-/* CAPP-94 — the always-visible "Workspace memory" button (opens the editor panel).
-   Mirrors .workspace-restore-btn; sits below the selector in both All + specific modes. */
-.workspace-memory-btn {
+/* CAPP-122 — the consolidated workspace control row: one compact strip of muted,
+   icon-only buttons (memory / context / rename / delete) directly under the selector
+   pill. Replaces the old stacked full-width "Workspace memory" + "Context" buttons and
+   the separate name/rename/delete row. Modeled on the CAPP-119 expand-icon treatment —
+   small, low-contrast (--text-3), transparent bg/border at rest so the icons recede;
+   hover DEEPENS contrast + adds a faint fill (intensify, NEVER a hover-reveal). Each is
+   a distinct focusable <button>, STATICALLY VISIBLE (full opacity) at rest. */
+.workspace-controls {
   display: flex;
   align-items: center;
-  gap: var(--s-2);
-  width: 100%;
-  margin-top: 6px;
-  padding: 7px 11px;
+  gap: var(--s-1);
+  margin-top: var(--s-2);
+}
+.workspace-ctl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-3);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--r);
+  border-radius: var(--r-sm);
+  padding: 5px 7px;
   cursor: pointer;
-  color: var(--text-3);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
-    color var(--fast) var(--ease);
+  opacity: 1;
+  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease),
+    background var(--fast) var(--ease);
 }
-.workspace-memory-btn:hover {
+.workspace-ctl-btn:hover {
+  color: var(--text-0);
+  border-color: var(--border-subtle);
   background: var(--bg-2);
-  border-color: var(--border);
-  color: var(--accent);
 }
-.workspace-memory-btn:focus-visible {
+/* Rename is a toggle — its "editing" state reads as a persistent accent press. */
+.workspace-ctl-btn.is-active {
+  color: var(--accent);
+  border-color: var(--border-subtle);
+  background: var(--bg-2);
+}
+/* Delete deepens to red on hover (destructive), matching the old ×. */
+.workspace-ctl-btn.danger:hover {
+  color: var(--red);
+}
+.workspace-ctl-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-.workspace-memory-icon {
-  flex-shrink: 0;
-  font-size: 13px;
-  line-height: 1;
-}
 
-/* CAPP-98 / I1 — the "Context" switcher button. ALWAYS VISIBLE (no hover-reveal),
-   styled identically to the "Workspace memory" button so the two read as a pair. */
-.workspace-context-btn {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  width: 100%;
-  margin-top: 2px;
-  padding: 7px 11px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--r);
-  cursor: pointer;
-  color: var(--text-3);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
-    color var(--fast) var(--ease);
-}
-.workspace-context-btn:hover {
-  background: var(--bg-2);
-  border-color: var(--border);
-  color: var(--accent);
-}
-.workspace-context-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-.workspace-context-icon {
-  flex-shrink: 0;
-  font-size: 13px;
-  line-height: 1;
-}
-
-/* The name + rename/delete row. The name takes the lead; the ✎ and × are
-   ALWAYS visible (never hover-revealed). */
-.workspace-name-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 2px;
-}
-.workspace-name-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12.5px;
-  font-weight: 550;
-  color: var(--text-2);
-}
+/* The inline rename input — a full-width row shown while renaming (below the control
+   row, above the folder row). */
 .workspace-rename-input {
-  flex: 1;
+  width: 100%;
   min-width: 0;
+  margin-bottom: var(--s-1);
   padding: 4px 7px;
   font: inherit;
   font-size: 13px;
@@ -1044,31 +1010,6 @@ body {
   border: 1px solid var(--accent);
   border-radius: var(--r-sm);
   outline: none;
-}
-.workspace-edit-btn,
-.workspace-delete-btn {
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  padding: 4px 6px;
-  border-radius: var(--r-sm);
-  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
-}
-.workspace-edit-btn:hover,
-.workspace-delete-btn:hover {
-  color: var(--text-0);
-  background: var(--bg-4);
-}
-.workspace-edit-btn.active {
-  color: var(--accent);
-  background: var(--bg-4);
-}
-.workspace-delete-btn:hover {
-  color: var(--red);
 }
 
 /* Quiet hint shown when a scoped (specific-workspace) section is empty. */
@@ -1079,8 +1020,6 @@ body {
   font-style: italic;
 }
 
-.workspace-edit-btn:focus-visible,
-.workspace-delete-btn:focus-visible,
 .workspace-dir-row:focus-visible,
 .workspace-pill:focus-visible,
 .workspace-menu-item:focus-visible {
