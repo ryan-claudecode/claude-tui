@@ -1,16 +1,24 @@
 import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync } from "node:fs"
-import { dirname, join, resolve, sep } from "node:path"
+import { dirname, resolve, sep } from "node:path"
 import { utilityProcess } from "electron"
 import { extract as tarExtract } from "tar-stream"
 import unbzip2 from "unbzip2-stream"
 import type { SttDeps } from "../services/stt"
-import type { SttFromWorker, SttWorkerLike } from "./protocol"
+import { downloadToFile } from "./download"
+import {
+  MODEL_ARCHIVE_SHA256,
+  MODEL_ARCHIVE_BYTES,
+  type SttFromWorker,
+  type SttWorkerLike,
+} from "./protocol"
 
 /**
  * CAPP-120 (STT-1) — the REAL {@link SttDeps} implementations (electron `utilityProcess`,
- * a streaming `fetch` download, a pure-JS `.tar.bz2` extractor, fs helpers). Isolated in
- * its own module — imported ONLY by `ipc.ts` — so the SttService stays pure + hermetically
- * testable (the unit suite injects fakes and never loads electron / native code / the net).
+ * the hardened streaming download from `download.ts`, a pure-JS `.tar.bz2` extractor, fs
+ * helpers). Isolated in its own module — imported ONLY by `ipc.ts` — so the SttService
+ * stays pure + hermetically testable (the unit suite injects fakes and never loads
+ * electron / native code / the net). The download itself lives in the electron-free
+ * `download.ts` so ITS failure paths (review MAJOR 1 + finding 6) are unit-tested too.
  */
 
 /** Wrap an Electron UtilityProcess in the {@link SttWorkerLike} the service drives. */
@@ -34,58 +42,57 @@ function createSttWorker(workerPath: string): SttWorkerLike {
   }
 }
 
-/** Stream `url` -> `dest`, reporting byte progress, abortable via `signal`. */
-async function download(opts: {
-  url: string
-  dest: string
-  signal: AbortSignal
-  onProgress: (receivedBytes: number, totalBytes?: number) => void
-}): Promise<void> {
-  const { url, dest, signal, onProgress } = opts
-  const res = await fetch(url, { signal, redirect: "follow" })
-  if (!res.ok || !res.body) {
-    throw new Error(`download failed: HTTP ${res.status} ${res.statusText}`)
-  }
-  const lenHeader = res.headers.get("content-length")
-  const totalBytes = lenHeader ? Number(lenHeader) : undefined
-  mkdirSync(dirname(dest), { recursive: true })
-  const out = createWriteStream(dest)
-  let received = 0
-  try {
-    const reader = res.body.getReader()
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (signal.aborted) throw abortError()
-      received += value.byteLength
-      // Backpressure: wait for the write to drain before pulling more.
-      if (!out.write(Buffer.from(value))) {
-        await new Promise<void>((r) => out.once("drain", r))
-      }
-      onProgress(received, totalBytes && Number.isFinite(totalBytes) ? totalBytes : undefined)
-    }
-    await new Promise<void>((res2, rej) => {
-      out.end(() => res2())
-      out.on("error", rej)
-    })
-  } catch (err) {
-    out.destroy()
-    throw err
-  }
-}
-
 function abortError(): Error {
   const e = new Error("aborted")
   e.name = "AbortError"
   return e
 }
 
-/** Extract a `.tar.bz2` into `destDir` (pure JS: bunzip2 -> tar entries). */
-async function extractTarBz2(archivePath: string, destDir: string): Promise<void> {
+/**
+ * Extract a `.tar.bz2` into `destDir` (pure JS: bunzip2 -> tar entries).
+ *
+ * Review finding 7 — honors the AbortSignal: an abort destroys the source/bunzip2/tar
+ * streams so the promise rejects promptly with an AbortError (cancel stays responsive
+ * mid-extract). The temp-dir cleanup on abort/failure is the CALLER's job
+ * (SttService.acquire wipes the extraction dir on both paths).
+ */
+async function extractTarBz2(archivePath: string, destDir: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw abortError()
   mkdirSync(destDir, { recursive: true })
   const root = resolve(destDir)
-  await new Promise<void>((resolvePromise, reject) => {
+  await new Promise<void>((resolvePromise, rejectPromise) => {
     const ex = tarExtract()
+    const src = createReadStream(archivePath)
+    const bz = unbzip2()
+    let settled = false
+    const done = (err?: Error) => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener("abort", onAbort)
+      if (err) rejectPromise(err)
+      else resolvePromise()
+    }
+    const onAbort = () => {
+      const err = abortError()
+      // Destroy the whole pipeline so no more entries are written after a cancel.
+      try {
+        src.destroy(err)
+      } catch {
+        /* best-effort */
+      }
+      try {
+        bz.destroy(err)
+      } catch {
+        /* best-effort */
+      }
+      try {
+        ex.destroy(err)
+      } catch {
+        /* best-effort */
+      }
+      done(err)
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
     ex.on("entry", (header, stream, next) => {
       // Path-traversal guard: never let an entry escape destDir.
       const outPath = resolve(root, header.name)
@@ -104,15 +111,13 @@ async function extractTarBz2(archivePath: string, destDir: string): Promise<void
       const ws = createWriteStream(outPath)
       stream.pipe(ws)
       ws.on("finish", next)
-      ws.on("error", reject)
-      stream.on("error", reject)
+      ws.on("error", (e) => done(e))
+      stream.on("error", (e) => done(e))
     })
-    ex.on("finish", () => resolvePromise())
-    ex.on("error", reject)
-    const src = createReadStream(archivePath)
-    src.on("error", reject)
-    const bz = unbzip2()
-    bz.on("error", reject)
+    ex.on("finish", () => done())
+    ex.on("error", (e) => done(e))
+    src.on("error", (e) => done(e))
+    bz.on("error", (e) => done(e))
     src.pipe(bz).pipe(ex)
   })
 }
@@ -140,7 +145,14 @@ export function createSttRuntimeDeps(opts: {
       }
     },
     rename: (from, to) => renameSync(from, to),
-    download,
+    // Review finding 6 — the archive is PINNED (exact bytes + SHA-256, hashed streaming
+    // during the download): a truncated/corrupted/silently-re-uploaded asset fails loudly.
+    download: (o) =>
+      downloadToFile({
+        ...o,
+        expectedSha256: MODEL_ARCHIVE_SHA256,
+        expectedBytes: MODEL_ARCHIVE_BYTES,
+      }),
     extract: extractTarBz2,
     logWarn: opts.logWarn,
   }

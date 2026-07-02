@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 import { join, sep } from "node:path"
-import { SttService, type SttDeps } from "./stt"
+import { SttService, WORKER_FAIL_LIMIT, type SttDeps } from "./stt"
 import {
   MODEL_FILES,
   MODEL_EXTRACTED_DIRNAME,
@@ -301,5 +301,209 @@ describe("SttService — acquisition state machine", () => {
     const b = svc.acquire() // no-op: already acquiring
     await Promise.all([a, b])
     expect(started).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review finding 3 — the RPC watchdogs (a wedged, non-crashed worker)
+// ---------------------------------------------------------------------------
+
+describe("SttService — watchdogs (finding 3)", () => {
+  it("init watchdog: a worker that never posts ready times out, rejects, and is KILLED", async () => {
+    const worker = new FakeWorker()
+    worker.initMode = "silent"
+    const svc = new SttService(
+      baseDeps({
+        exists: (p) => modelFilePaths.includes(p),
+        spawnWorker: () => worker,
+        initTimeoutMs: 10,
+      }),
+    )
+    await expect(svc.transcribe(new Float32Array([0.1]), 16000)).rejects.toThrow(/timed out/)
+    expect(worker.killed).toBe(true)
+  })
+
+  it("transcribe watchdog: a wedged decode rejects (no permanent spinner), kills the worker, and the NEXT call respawns", async () => {
+    const w1 = new FakeWorker()
+    w1.transcribeMode = "silent" // inits fine, then never answers a transcribe
+    const w2 = new FakeWorker()
+    const spawn = vi.fn().mockReturnValueOnce(w1).mockReturnValueOnce(w2)
+    const svc = new SttService(
+      baseDeps({
+        exists: (p) => modelFilePaths.includes(p),
+        spawnWorker: spawn,
+        transcribeTimeoutMs: 10,
+      }),
+    )
+    await expect(svc.transcribe(new Float32Array([0.1]), 16000)).rejects.toThrow(/timed out/)
+    expect(w1.killed).toBe(true)
+    const res = await svc.transcribe(new Float32Array([0.2]), 16000)
+    expect(res.text).toBe("hello world")
+    expect(spawn).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review finding 5 — the worker-failure ledger (present-but-unloadable model)
+// ---------------------------------------------------------------------------
+
+describe("SttService — worker-failure ledger (finding 5)", () => {
+  it(`${WORKER_FAIL_LIMIT} consecutive init failures flip status to 'error' with the reason; a later success resets`, async () => {
+    const bad = () => {
+      const w = new FakeWorker()
+      w.initMode = "init-error"
+      return w
+    }
+    const good = new FakeWorker()
+    const spawn = vi
+      .fn<() => FakeWorker>()
+      .mockReturnValueOnce(bad())
+      .mockReturnValueOnce(bad())
+      .mockReturnValueOnce(bad())
+      .mockReturnValueOnce(good)
+    const svc = new SttService(
+      baseDeps({ exists: (p) => modelFilePaths.includes(p), spawnWorker: spawn }),
+    )
+
+    // Below the limit: the model still reads "ready" (each press retries).
+    for (let i = 0; i < WORKER_FAIL_LIMIT - 1; i++) {
+      await expect(svc.transcribe(new Float32Array([0.1]), 16000)).rejects.toThrow(/recognizer boom/)
+      expect(svc.status()).toBe("ready")
+    }
+    // The limit-th consecutive failure surfaces as an ERROR with the message —
+    // no more invisible re-forking of a doomed process on every mic press.
+    await expect(svc.transcribe(new Float32Array([0.1]), 16000)).rejects.toThrow(/recognizer boom/)
+    expect(svc.status()).toBe("error")
+    expect(svc.statusMessage()).toMatch(/recognizer boom/)
+
+    // A successful init resets the ledger.
+    const res = await svc.transcribe(new Float32Array([0.2]), 16000)
+    expect(res.text).toBe("hello world")
+    expect(svc.status()).toBe("ready")
+    expect(svc.statusMessage()).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review finding 6c — force re-acquire (the corrupt-model recovery)
+// ---------------------------------------------------------------------------
+
+describe("SttService — force re-acquire (finding 6c)", () => {
+  it("acquire({force:true}) deletes the model dir and re-downloads to ready", async () => {
+    const vfs = makeVfs([...modelFilePaths]) // model present (possibly corrupt)
+    const removed: string[] = []
+    const remove = (p: string) => {
+      removed.push(p)
+      vfs.remove(p)
+    }
+    const download = vi.fn(async () => {})
+    const extract = vi.fn(async () => {
+      for (const p of extractedFilePaths) vfs.set.add(p)
+    })
+    const svc = new SttService(
+      baseDeps({
+        exists: vfs.exists,
+        ensureDir: vfs.ensureDir,
+        remove,
+        rename: vfs.rename,
+        download,
+        extract,
+      }),
+    )
+    expect(svc.status()).toBe("ready")
+    await svc.acquire({ force: true })
+    expect(removed).toContain(MODEL_DIR)
+    expect(download).toHaveBeenCalledOnce()
+    expect(svc.modelPresent()).toBe(true)
+    expect(svc.status()).toBe("ready")
+  })
+
+  it("force kills a live worker sitting on the old files", async () => {
+    const vfs = makeVfs([...modelFilePaths])
+    const worker = new FakeWorker()
+    const extract = vi.fn(async () => {
+      for (const p of extractedFilePaths) vfs.set.add(p)
+    })
+    const svc = new SttService(
+      baseDeps({
+        exists: vfs.exists,
+        ensureDir: vfs.ensureDir,
+        remove: vfs.remove,
+        rename: vfs.rename,
+        spawnWorker: () => worker,
+        download: async () => {},
+        extract,
+      }),
+    )
+    await svc.transcribe(new Float32Array([0.1]), 16000) // warm worker over the old files
+    await svc.acquire({ force: true })
+    expect(worker.killed).toBe(true)
+    expect(svc.status()).toBe("ready")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review finding 7 — cancel/failure during the EXTRACT phase
+// ---------------------------------------------------------------------------
+
+describe("SttService — extract-phase cancel + cleanup (finding 7)", () => {
+  it("cancelAcquire mid-extract aborts (signal threaded in), cleans the temp dir, status back to not-downloaded", async () => {
+    const vfs = makeVfs()
+    const removed: string[] = []
+    const remove = (p: string) => {
+      removed.push(p)
+      vfs.remove(p)
+    }
+    let extractStarted!: () => void
+    const started = new Promise<void>((r) => (extractStarted = r))
+    const extract = vi.fn(
+      (_a: string, _d: string, signal: AbortSignal) =>
+        new Promise<void>((_res, rej) => {
+          extractStarted()
+          signal.addEventListener("abort", () => {
+            const e = new Error("aborted")
+            e.name = "AbortError"
+            rej(e)
+          })
+        }),
+    )
+    const svc = new SttService(
+      baseDeps({
+        exists: vfs.exists,
+        ensureDir: vfs.ensureDir,
+        remove,
+        rename: vfs.rename,
+        download: async () => {},
+        extract,
+      }),
+    )
+    const progress: SttProgress[] = []
+    svc.onProgress((p) => progress.push(p))
+    const p = svc.acquire()
+    await started
+    expect(svc.status()).toBe("downloading") // still acquiring (extract phase)
+    svc.cancelAcquire()
+    await p
+    expect(progress.at(-1)?.phase).toBe("cancelled")
+    expect(removed).toContain(EXTRACTED_DIR)
+    expect(svc.status()).toBe("not-downloaded")
+  })
+
+  it("a failed extract cleans the temp extraction dir and sets error", async () => {
+    const removed: string[] = []
+    const svc = new SttService(
+      baseDeps({
+        exists: () => false,
+        remove: (p) => removed.push(p),
+        download: async () => {},
+        extract: async () => {
+          throw new Error("bad archive")
+        },
+      }),
+    )
+    await svc.acquire()
+    expect(svc.status()).toBe("error")
+    expect(svc.statusMessage()).toMatch(/bad archive/)
+    expect(removed).toContain(EXTRACTED_DIR)
   })
 })

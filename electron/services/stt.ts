@@ -25,11 +25,20 @@ import {
  * Responsibilities:
  *  - **worker lifecycle** — lazily fork the utility-process recognizer on the first
  *    transcribe (so a cold app never pays the ORT load), keep it WARM, respawn on crash,
- *    and dispose on app quit.
+ *    watchdog-kill it when wedged (review finding 3), and dispose on app quit.
  *  - **model acquisition** — a cancel/retry-able download + extract + verify state machine
- *    for the 680 MB Parakeet model (NOT bundled), with progress pushed to the renderer.
- *  - **status** — a single coarse {@link SttStatus} the composer keys its mic affordance on.
+ *    for the ~460 MB Parakeet archive (NOT bundled), with progress pushed to the renderer,
+ *    integrity-pinned (finding 6) and force-re-downloadable (the corrupt-model recovery).
+ *  - **status** — a single coarse {@link SttStatus} the composer keys its mic affordance on,
+ *    including the present-but-unloadable-model case (finding 5).
  */
+
+/** Review finding 3 — the init watchdog: a worker that never posts `ready`. */
+export const INIT_TIMEOUT_MS = 60_000
+/** Review finding 3 — the per-utterance watchdog: a wedged (non-crashed) decode. */
+export const TRANSCRIBE_TIMEOUT_MS = 30_000
+/** Review finding 5 — consecutive init failures before status() reports "error". */
+export const WORKER_FAIL_LIMIT = 3
 
 /** All external effects, injected. Real impls in `electron/stt/runtime.ts`. */
 export interface SttDeps {
@@ -47,15 +56,22 @@ export interface SttDeps {
   remove: (path: string) => void
   /** Rename/move `from` -> `to` (same volume). */
   rename: (from: string, to: string) => void
-  /** Download `url` -> `dest`, reporting byte progress, abortable via `signal`. */
+  /** Download `url` -> `dest`, reporting byte progress, abortable via `signal`.
+   *  The real impl (runtime.ts → download.ts) also enforces the finding-6 integrity
+   *  pins (Content-Length + exact bytes + SHA-256) and deletes the partial on failure. */
   download: (opts: {
     url: string
     dest: string
     signal: AbortSignal
     onProgress: (receivedBytes: number, totalBytes?: number) => void
   }) => Promise<void>
-  /** Extract a `.tar.bz2` archive into `destDir`. */
-  extract: (archivePath: string, destDir: string) => Promise<void>
+  /** Extract a `.tar.bz2` archive into `destDir`. Review finding 7 — MUST honor the
+   *  signal (reject with an AbortError + destroy its streams) so cancel stays responsive
+   *  during the extract phase, not just the download. */
+  extract: (archivePath: string, destDir: string, signal: AbortSignal) => Promise<void>
+  /** Review finding 3 — watchdog overrides (tests use tiny values); default the constants. */
+  initTimeoutMs?: number
+  transcribeTimeoutMs?: number
   now?: () => number
   logWarn?: (message: string) => void
 }
@@ -63,6 +79,8 @@ export interface SttDeps {
 type Pending = {
   resolve: (t: SttTranscription) => void
   reject: (e: Error) => void
+  /** Finding 3 — the per-utterance watchdog timer, cleared on result/error/teardown. */
+  timer: ReturnType<typeof setTimeout>
 }
 
 export class SttService {
@@ -71,8 +89,18 @@ export class SttService {
   private readyPromise: Promise<void> | null = null
   private readyResolve: (() => void) | null = null
   private readyReject: ((e: Error) => void) | null = null
+  /** Finding 3 — the init watchdog timer for the CURRENT worker. */
+  private initTimer: ReturnType<typeof setTimeout> | null = null
+  /** True once the current worker posted `ready` (gates init-failure accounting). */
+  private workerReady = false
   private seq = 0
   private readonly pending = new Map<number, Pending>()
+
+  /** Finding 5 — the worker-failure ledger: consecutive init failures + the last reason.
+   *  At WORKER_FAIL_LIMIT, status() stops reporting a broken-model dir as "ready" (which
+   *  would otherwise re-fork a doomed process on every mic press, invisibly). */
+  private workerFailCount = 0
+  private lastWorkerError: string | null = null
 
   /** True while an acquisition (download+extract) is in flight. */
   private acquiring = false
@@ -83,10 +111,6 @@ export class SttService {
   private readonly listeners = new Set<(p: SttProgress) => void>()
 
   constructor(private readonly deps: SttDeps) {}
-
-  private now(): number {
-    return this.deps.now ? this.deps.now() : Date.now()
-  }
 
   /** Subscribe to acquisition progress. Returns an unsubscribe fn. */
   onProgress(cb: (p: SttProgress) => void): () => void {
@@ -112,9 +136,22 @@ export class SttService {
   /** The coarse state the composer keys its mic affordance on. */
   status(): SttStatus {
     if (this.acquiring) return "downloading"
-    if (this.modelPresent()) return "ready"
+    if (this.modelPresent()) {
+      // Finding 5 — a present-but-unloadable model (corrupt files, a broken addon) is an
+      // ERROR, not "ready": otherwise every mic press forks a fresh doomed process forever.
+      return this.workerFailCount >= WORKER_FAIL_LIMIT ? "error" : "ready"
+    }
     if (this.lastError) return "error"
     return "not-downloaded"
+  }
+
+  /** The human-readable reason behind an "error" status (null otherwise). */
+  statusMessage(): string | null {
+    if (this.acquiring) return null
+    if (this.modelPresent()) {
+      return this.workerFailCount >= WORKER_FAIL_LIMIT ? this.lastWorkerError : null
+    }
+    return this.lastError
   }
 
   get attribution(): string {
@@ -132,10 +169,22 @@ export class SttService {
   /**
    * Ensure the model is present, downloading + extracting it if not. Idempotent:
    * a second call while one is in flight is a no-op; a call once present emits a
-   * terminal `ready` and returns. Cancellable via {@link cancelAcquire}; a failed or
-   * cancelled run leaves NO half-written model dir (verification gates the rename).
+   * terminal `ready` and returns. Cancellable via {@link cancelAcquire} — responsive
+   * during BOTH the download and the extract phase (finding 7); a failed or cancelled
+   * run leaves NO half-written model dir (verification gates the rename, and partial
+   * artifacts are wiped).
+   *
+   * Finding 6c — `force: true` is the corrupt-model recovery path (the overlay's
+   * "Re-download model"): kill any live worker over the (possibly bad) files, delete
+   * the model dir, reset the worker-failure ledger, and re-download from scratch.
    */
-  async acquire(): Promise<void> {
+  async acquire(opts?: { force?: boolean }): Promise<void> {
+    if (opts?.force && !this.acquiring) {
+      if (this.worker) this.failWorker(new Error("model re-download requested"))
+      this.deps.remove(this.deps.modelDir)
+      this.workerFailCount = 0
+      this.lastWorkerError = null
+    }
     if (this.modelPresent()) {
       this.lastError = null
       this.emit({ phase: "ready" })
@@ -163,7 +212,9 @@ export class SttService {
       })
       if (ac.signal.aborted) throw new DOMExceptionLike("aborted")
       this.emit({ phase: "extracting" })
-      await this.deps.extract(archivePath, sttRoot)
+      // Finding 7 — the signal is threaded INTO extract so a cancel mid-extract rejects
+      // promptly (the impl destroys its streams) instead of running to completion.
+      await this.deps.extract(archivePath, sttRoot, ac.signal)
       if (ac.signal.aborted) throw new DOMExceptionLike("aborted")
       this.emit({ phase: "verifying" })
       // The archive expands to MODEL_EXTRACTED_DIRNAME; adopt it as the canonical dir.
@@ -177,6 +228,9 @@ export class SttService {
       // Reclaim the archive; keep it non-fatal.
       this.deps.remove(archivePath)
       this.lastError = null
+      // Fresh, verified files deserve a fresh worker ledger (finding 5/6 recovery).
+      this.workerFailCount = 0
+      this.lastWorkerError = null
       this.emit({ phase: "ready" })
     } catch (err) {
       if (this.isAbort(err) || ac.signal.aborted) {
@@ -186,6 +240,9 @@ export class SttService {
         this.lastError = null
         this.emit({ phase: "cancelled" })
       } else {
+        // Finding 7 — a failed run also cleans the temp extraction dir (a half-extracted
+        // tree would otherwise sit there and poison nothing but waste ~1.5 GB).
+        this.deps.remove(extractedDir)
         const message = err instanceof Error ? err.message : String(err)
         this.lastError = message
         this.deps.logWarn?.(`stt acquire failed: ${message}`)
@@ -218,6 +275,7 @@ export class SttService {
     if (this.worker && this.readyPromise) return this.readyPromise
     const worker = this.deps.spawnWorker()
     this.worker = worker
+    this.workerReady = false
     // Capture the promise locally: a worker that rejects init SYNCHRONOUSLY (a test fake,
     // or an addon that throws on load) triggers teardownWorker mid-`postMessage`, which nulls
     // `this.readyPromise` — so returning the field would return null and orphan the rejection.
@@ -226,13 +284,44 @@ export class SttService {
       this.readyReject = reject
     })
     this.readyPromise = readyPromise
+
+    // Finding 5 — per-worker, at-most-once init-failure accounting. Counts an init-error
+    // message, an init watchdog expiry, or an exit-before-ready — whichever lands first —
+    // and never a mid-life crash (workerReady gates it).
+    let failureCounted = false
+    const countInitFailure = (message: string) => {
+      if (failureCounted || this.workerReady) return
+      failureCounted = true
+      this.workerFailCount++
+      this.lastWorkerError = message
+    }
+
+    // Finding 3 — the init watchdog: a worker that never posts `ready` (a wedged ORT
+    // load) would otherwise hang the readyPromise forever. On expiry: count the failure,
+    // reject + KILL so the next call respawns.
+    const initMs = this.deps.initTimeoutMs ?? INIT_TIMEOUT_MS
+    this.initTimer = setTimeout(() => {
+      if (this.worker !== worker) return
+      const message = `recognizer init timed out after ${initMs}ms`
+      countInitFailure(message)
+      this.failWorker(new Error(message))
+    }, initMs)
+
     worker.onMessage((msg) => {
+      // A stale worker (already torn down / replaced) must never touch current state.
+      if (this.worker !== worker) return
       if (msg.type === "ready") {
+        this.clearInitTimer()
+        this.workerReady = true
+        // Finding 5 — a successful init resets the consecutive-failure ledger.
+        this.workerFailCount = 0
+        this.lastWorkerError = null
         this.readyResolve?.()
       } else if (msg.type === "result") {
         const p = this.pending.get(msg.id)
         if (p) {
           this.pending.delete(msg.id)
+          clearTimeout(p.timer)
           p.resolve({ text: msg.text ?? "", engine: STT_ENGINE, ms: msg.ms ?? 0 })
         }
       } else if (msg.type === "error") {
@@ -240,38 +329,66 @@ export class SttService {
           const p = this.pending.get(msg.id)
           if (p) {
             this.pending.delete(msg.id)
+            clearTimeout(p.timer)
             p.reject(new Error(msg.message || "transcription failed"))
           }
         } else {
-          // An init-time failure: reject the ready gate + fail the worker so the next
-          // transcribe respawns.
-          this.readyReject?.(new Error(msg.message || "recognizer init failed"))
-          this.teardownWorker(new Error(msg.message || "recognizer init failed"))
+          // An init-time failure: count it (finding 5), reject the ready gate + fail the
+          // worker (teardown + kill) so the next transcribe respawns.
+          const message = msg.message || "recognizer init failed"
+          countInitFailure(message)
+          this.failWorker(new Error(message))
         }
       }
     })
     worker.onExit(() => {
+      if (this.worker !== worker) return
+      countInitFailure(this.lastWorkerError ?? "stt worker exited during startup")
       this.teardownWorker(new Error("stt worker exited"))
     })
     worker.postMessage({ type: "init", modelDir: this.deps.modelDir })
     return readyPromise
   }
 
+  private clearInitTimer(): void {
+    if (this.initTimer) {
+      clearTimeout(this.initTimer)
+      this.initTimer = null
+    }
+  }
+
   /** Drop the current worker + fail every in-flight promise so the next call respawns. */
   private teardownWorker(err: Error): void {
+    this.clearInitTimer()
     this.readyReject?.(err)
     this.readyResolve = null
     this.readyReject = null
     this.readyPromise = null
     this.worker = null
-    for (const [, p] of this.pending) p.reject(err)
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer)
+      p.reject(err)
+    }
     this.pending.clear()
+  }
+
+  /** Teardown AND kill: for a worker that's alive-but-broken (wedged, init-failed). */
+  private failWorker(err: Error): void {
+    const worker = this.worker
+    this.teardownWorker(err)
+    try {
+      worker?.kill()
+    } catch {
+      /* best-effort */
+    }
   }
 
   /**
    * Transcribe 16 kHz mono Float32 audio. Lazily spawns + warms the worker on first
-   * use; respawns transparently if the worker crashed. Throws if the model isn't
-   * downloaded (the composer routes that to the acquire flow before ever calling this).
+   * use; respawns transparently if the worker crashed. Watchdogged (finding 3): a
+   * wedged worker rejects after TRANSCRIBE_TIMEOUT_MS and is killed, so the composer
+   * spinner can never hang until an app restart. Throws if the model isn't downloaded
+   * (the composer routes that to the acquire flow before ever calling this).
    */
   async transcribe(samples: Float32Array, sampleRate: number): Promise<SttTranscription> {
     if (this.disposed) throw new Error("stt service disposed")
@@ -281,12 +398,25 @@ export class SttService {
     const worker = this.worker
     if (!worker) throw new Error("stt worker unavailable")
     const id = ++this.seq
+    const transcribeMs = this.deps.transcribeTimeoutMs ?? TRANSCRIBE_TIMEOUT_MS
     return new Promise<SttTranscription>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      const timer = setTimeout(() => {
+        const p = this.pending.get(id)
+        if (!p) return
+        this.pending.delete(id)
+        p.reject(new Error(`transcription timed out after ${transcribeMs}ms — restarting the engine`))
+        // The worker is wedged, not crashed — kill it so the NEXT call respawns fresh.
+        this.failWorker(new Error("stt worker unresponsive"))
+      }, transcribeMs)
+      this.pending.set(id, { resolve, reject, timer })
       try {
         worker.postMessage({ type: "transcribe", id, sampleRate, samples })
       } catch (err) {
-        this.pending.delete(id)
+        const p = this.pending.get(id)
+        if (p) {
+          this.pending.delete(id)
+          clearTimeout(p.timer)
+        }
         reject(err instanceof Error ? err : new Error(String(err)))
       }
     })
@@ -296,13 +426,7 @@ export class SttService {
   dispose(): void {
     this.disposed = true
     this.cancelAcquire()
-    const worker = this.worker
-    this.teardownWorker(new Error("stt service disposed"))
-    try {
-      worker?.kill()
-    } catch {
-      /* best-effort */
-    }
+    this.failWorker(new Error("stt service disposed"))
     this.listeners.clear()
   }
 }

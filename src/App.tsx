@@ -45,6 +45,9 @@ import { useWorkspaces } from "./hooks/useWorkspaces"
 import { filterByWorkspace } from "./lib/workspaceFilter"
 import { filterAttentionByWorkspace } from "./lib/workspaceScope"
 import { deriveResumingRows } from "./lib/resumingList"
+// CAPP-120 (STT-1 review, MAJOR 2) — the dictation Esc-discard registry: consulted FIRST
+// by the capture-phase Escape arm, before the BO-10 busy-terminal interrupt.
+import { dispatchDictationEsc } from "./lib/dictationEsc"
 import { useSplitView } from "./hooks/useSplitView"
 import { useOverlays } from "./hooks/useOverlays"
 import { useTheme } from "./hooks/useTheme"
@@ -82,7 +85,7 @@ declare global {
       // CAPP-120 (STT-1): push-to-talk dictation (Parakeet/sherpa-onnx utility process)
       sttStatus: () => Promise<SttStatusSnapshot>
       sttTranscribe: (samples: Float32Array, sampleRate: number) => Promise<SttTranscription>
-      sttAcquire: () => Promise<SttStatusSnapshot["status"]>
+      sttAcquire: (force?: boolean) => Promise<SttStatusSnapshot["status"]>
       sttCancelAcquire: () => Promise<void>
       onSttProgress: (callback: (p: SttProgress) => void) => () => void
       // BO-12: prior turns of a conversation (by Claude Code id) to rehydrate a chat view
@@ -1165,18 +1168,31 @@ export default function App() {
         !paletteOpen && !historyOpen && !missionPromptOpen && !missionsListOpen && !scheduleFormOpen &&
         pendingKillId === null
       ) {
-        // BO-10 — Esc stops a structured terminal mid-turn (generating OR awaiting a
-        // permission): kill + resume the conversation. escInterruptRef returns false
-        // when the active terminal isn't structured+busy, so Esc passes through
-        // untouched to an xterm/PTY (where it is load-bearing) and is a no-op when idle.
-        // Guarded on the nav overlays so an open palette/history/mission overlay closes
-        // via its OWN Esc handler instead of being hijacked into an interrupt — this
-        // capture-phase handler would otherwise stopPropagation and suppress that close.
+        // CAPP-120 (STT-1 review, MAJOR 2) — an ACTIVE DICTATION RECORDING owns Esc
+        // FIRST: discard the recording (mic off, nothing transcribed, composer text
+        // untouched) WITHOUT interrupting the agent's turn. This capture-phase handler
+        // runs before the composer's own bubble-phase Esc arm, so without this
+        // precedence check a recording made while the agent was busy would hijack Esc
+        // into an interrupt AND leave the mic hot. dispatchDictationEsc() consults every
+        // mounted composer (split panes register two) and returns true only when one
+        // actually discarded a live recording — the pure ordering is escapePrecedence()
+        // in src/lib/micInteraction.ts.
+        if (dispatchDictationEsc()) {
+          e.preventDefault(); e.stopPropagation()
+        }
+        // BO-10 — otherwise Esc stops a structured terminal mid-turn (generating OR
+        // awaiting a permission): kill + resume the conversation. escInterruptRef
+        // returns false when the active terminal isn't structured+busy, so Esc passes
+        // through untouched to an xterm/PTY (where it is load-bearing) and is a no-op
+        // when idle. Guarded on the nav overlays so an open palette/history/mission
+        // overlay closes via its OWN Esc handler instead of being hijacked into an
+        // interrupt — this capture-phase handler would otherwise stopPropagation and
+        // suppress that close.
         // CAPP-93 / U5 — also guard on the KillSessionModal: Esc must cancel that modal
         // (via its own handler), NOT hijack into a terminal interrupt.
         // (helpOpen is handled by the arm above; the permission prompt is intentionally
         // NOT guarded — Esc-to-stop while awaiting a permission is the whole point.)
-        if (escInterruptRef.current()) {
+        else if (escInterruptRef.current()) {
           e.preventDefault(); e.stopPropagation()
         }
       } else if (e.altKey && !mod && !e.shiftKey && e.key >= "1" && e.key <= "9") {

@@ -7,6 +7,14 @@ import AgentUltracodeToggle from "./AgentUltracodeToggle"
 import { useDictation } from "../hooks/useDictation"
 import { spliceWithSpacing } from "../lib/insertAtCursor"
 import { formatElapsed } from "../lib/audioCapture"
+import {
+  HOLD_THRESHOLD_MS,
+  micPointerDownAction,
+  micPointerUpAction,
+  micPointerCancelAction,
+  isDictationShortcut,
+} from "../lib/micInteraction"
+import { registerDictationEscHandler } from "../lib/dictationEsc"
 import { toast } from "../lib/toast"
 import type { SttProgress } from "../../electron/stt/protocol"
 
@@ -112,6 +120,9 @@ export default function AgentComposer({
   // caret (never auto-submits); the model downloads on first enable via the inline overlay.
   const [downloadOpen, setDownloadOpen] = useState(false)
   const holdTimerRef = useRef<number | null>(null)
+  /** True between a ready-state pointerdown and its up/cancel (the press is "live"). */
+  const armedRef = useRef(false)
+  /** True once the 350ms hold elapsed on the current press (push-to-talk mode). */
   const heldRef = useRef(false)
 
   // Splice transcribed (or any) text into the textarea at the caret with smart spacing,
@@ -135,12 +146,40 @@ export default function AgentComposer({
   const dictation = useDictation({
     onInsert: insertAtCursor,
     onError: (message) => toast("error", message),
+    // Review finding 4 — the recording-cap auto-stop announces itself as an info
+    // notice (it isn't an error: the captured audio IS transcribed).
+    onNotice: (message) => toast("info", message),
   })
 
   // Auto-close the download overlay once the model is ready.
   useEffect(() => {
     if (downloadOpen && dictation.status === "ready") setDownloadOpen(false)
   }, [downloadOpen, dictation.status])
+
+  // Review finding 2 (MAJOR) — register this composer's Esc-discard with the renderer-
+  // local registry. App.tsx's CAPTURE-phase Escape arm consults dispatchDictationEsc()
+  // FIRST, so an active recording owns Esc (discard, mic off) and the busy-terminal
+  // interrupt only fires when nothing was recording. Multi-instance-safe: a split pane
+  // registers two handlers; only the recording one returns true.
+  useEffect(
+    () =>
+      registerDictationEscHandler(() => {
+        if (!dictation.recording) return false
+        dictation.cancelRecording()
+        return true
+      }),
+    [dictation.recording, dictation.cancelRecording],
+  )
+
+  // Review finding 9 — never leak the 350ms hold timer across unmount: pressing the mic
+  // then switching terminals within the threshold would otherwise fire dictation.start()
+  // on an unmounted hook (whose own unmount guard then has to clean up a ghost stream).
+  useEffect(
+    () => () => {
+      if (holdTimerRef.current != null) window.clearTimeout(holdTimerRef.current)
+    },
+    [],
+  )
 
   // CAPP-58 — auto-grow the textarea so Shift+Enter newlines GROW the box line-by-
   // line instead of overflowing+scrolling a fixed `rows={1}`. Reset to `auto` first
@@ -223,9 +262,11 @@ export default function AgentComposer({
   })
 
   // CAPP-120 — the mic affordance: a quick click toggles recording; a press-and-hold
-  // (≥350ms) is push-to-talk (record while held, stop on release). Pointer capture keeps
-  // the release on the button even if the pointer drifts off mid-hold. When the model
-  // isn't downloaded, the press opens the inline download overlay instead.
+  // (≥HOLD_THRESHOLD_MS) is push-to-talk (record while held, stop on release). Pointer
+  // capture keeps the release on the button even if the pointer drifts off mid-hold.
+  // When the model isn't downloaded, the press opens the inline download overlay instead.
+  // Review finding 10 — the DECISIONS live in src/lib/micInteraction.ts (pure, tested:
+  // hold-vs-click, pointercancel, non-primary buttons); this component only executes them.
   const clearHold = useCallback(() => {
     if (holdTimerRef.current != null) {
       window.clearTimeout(holdTimerRef.current)
@@ -235,47 +276,63 @@ export default function AgentComposer({
 
   const onMicPointerDown = useCallback(
     (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (e.button !== 0) return
+      const action = micPointerDownAction({ status: dictation.status, primaryButton: e.button === 0 })
+      if (action === "none") return
       e.preventDefault()
-      if (dictation.status !== "ready") {
+      if (action === "open-setup") {
         setDownloadOpen(true)
         return
       }
+      // "arm" — the press is live; the hold timer decides push-to-talk vs quick click.
       try {
         e.currentTarget.setPointerCapture(e.pointerId)
       } catch {
         /* capture is best-effort */
       }
+      armedRef.current = true
       heldRef.current = false
       clearHold()
       holdTimerRef.current = window.setTimeout(() => {
+        if (!armedRef.current) return // stale timer (already released/cancelled)
         heldRef.current = true
         void dictation.start()
-      }, 350)
+      }, HOLD_THRESHOLD_MS)
     },
     [dictation, clearHold],
   )
 
-  const onMicPointerUp = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (e.button !== 0) return
+  // Shared release path for pointerup AND pointercancel/lostpointercapture (finding 8):
+  // a cancel after the hold elapsed takes the SAME stop route as a release, so the mic
+  // can never be left hot. Idempotent — armedRef is cleared first, so the duplicate
+  // lostpointercapture that follows our own releasePointerCapture resolves to "none".
+  const finishMicPointer = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>, kind: "up" | "cancel") => {
       clearHold()
       try {
         e.currentTarget.releasePointerCapture(e.pointerId)
       } catch {
         /* ignore */
       }
-      if (dictation.status !== "ready") return
-      if (heldRef.current) {
-        // Push-to-talk release → stop + transcribe.
-        heldRef.current = false
-        void dictation.stop()
-      } else {
-        // Quick click → toggle.
-        dictation.toggleRecord()
-      }
+      const state = { armed: armedRef.current, held: heldRef.current }
+      armedRef.current = false
+      heldRef.current = false
+      const action =
+        kind === "up"
+          ? micPointerUpAction({ ...state, primaryButton: e.button === 0 })
+          : micPointerCancelAction(state)
+      if (action === "stop-transcribe") void dictation.stop()
+      else if (action === "toggle") dictation.toggleRecord()
     },
     [dictation, clearHold],
+  )
+
+  const onMicPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => finishMicPointer(e, "up"),
+    [finishMicPointer],
+  )
+  const onMicPointerCancel = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => finishMicPointer(e, "cancel"),
+    [finishMicPointer],
   )
 
   const onKeyDown = useCallback(
@@ -283,8 +340,9 @@ export default function AgentComposer({
       // BO-7 — while the picker is open it owns Up/Down/Enter/Tab/Esc.
       if (picker.handleKeyDown(e)) return
       // CAPP-120 — Ctrl+M (or Cmd+M) toggles dictation while the composer is focused;
-      // opens the download overlay if the model isn't ready yet.
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === "m" || e.key === "M")) {
+      // opens the download overlay if the model isn't ready yet. The match guard is the
+      // pure isDictationShortcut (review finding 10 — no Shift/Alt chords).
+      if (isDictationShortcut(e)) {
         e.preventDefault()
         if (dictation.status === "ready") dictation.toggleRecord()
         else setDownloadOpen(true)
@@ -442,6 +500,8 @@ export default function AgentComposer({
                 }`}
                 onPointerDown={onMicPointerDown}
                 onPointerUp={onMicPointerUp}
+                onPointerCancel={onMicPointerCancel}
+                onLostPointerCapture={onMicPointerCancel}
                 disabled={dictation.transcribing}
                 aria-pressed={dictation.recording}
                 aria-label={
@@ -510,15 +570,22 @@ export default function AgentComposer({
                         Downloads a ~680&nbsp;MB on-device speech model. Dictation then runs fully
                         offline — audio never leaves your machine.
                       </p>
-                      {dictation.status === "error" && dictation.progress?.message && (
-                        <p className="composer-mic-download-error">{dictation.progress.message}</p>
-                      )}
+                      {dictation.status === "error" &&
+                        (dictation.statusMessage || dictation.progress?.message) && (
+                          <p className="composer-mic-download-error">
+                            {dictation.statusMessage ?? dictation.progress?.message}
+                          </p>
+                        )}
+                      {/* Review finding 6c — the error state's statically-visible recovery is a
+                          FORCE re-acquire ("Re-download model"): deletes the (possibly corrupt)
+                          model dir + re-downloads. Also the way out of finding 5's repeated
+                          worker-init failures over bad-but-present files. */}
                       <button
                         type="button"
                         className="composer-mic-download-go"
-                        onClick={() => dictation.acquire()}
+                        onClick={() => dictation.acquire(dictation.status === "error")}
                       >
-                        {dictation.status === "error" ? "Retry download" : "Download model (~680 MB)"}
+                        {dictation.status === "error" ? "Re-download model" : "Download model (~680 MB)"}
                       </button>
                     </>
                   )}

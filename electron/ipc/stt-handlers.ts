@@ -20,6 +20,9 @@ export function registerSttHandlers(deps: {
     enabled: isEnabled(),
     modelDir: sttService.modelDir,
     attribution: sttService.attribution,
+    // Review finding 5 — the WHY behind an "error" status (acquisition failure or the
+    // repeated worker-init failure), so the overlay can show it + offer re-download.
+    message: sttService.statusMessage(),
   }))
 
   ipcMain.handle(
@@ -34,8 +37,10 @@ export function registerSttHandlers(deps: {
 
   // Kick off (or no-op) model acquisition; progress rides the stt:progress push channel.
   // Returns the resulting coarse status so the caller's UI can react immediately.
-  ipcMain.handle("stt:acquire", (): SttStatus => {
-    void sttService.acquire()
+  // Review finding 6c — `force` is the corrupt-model recovery: delete the model dir +
+  // re-download (the overlay's "Re-download model" action in the error state).
+  ipcMain.handle("stt:acquire", (_e, force?: boolean): SttStatus => {
+    void sttService.acquire({ force: force === true })
     return sttService.status()
   })
 

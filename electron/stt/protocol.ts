@@ -84,9 +84,28 @@ export const MODEL_FILES = [
   "tokens.txt",
 ] as const
 
-/** The sherpa-onnx release asset (NOT bundled — 680 MB, acquired on first enable). */
+/**
+ * The sherpa-onnx release asset (NOT bundled — acquired on first enable).
+ *
+ * NOTE (review NIT 12): `asr-models` is a MUTABLE release tag, so this URL alone would
+ * be a silent-drift hazard. It is acceptable ONLY because the download is PINNED below
+ * ({@link MODEL_ARCHIVE_SHA256} + {@link MODEL_ARCHIVE_BYTES}): a re-uploaded/replaced
+ * asset now FAILS the integrity check loudly instead of silently shipping different bytes.
+ */
 export const MODEL_ARCHIVE_URL =
   "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2"
+
+/**
+ * Review finding 6 — the integrity pin: SHA-256 (hex) of the archive, computed from the
+ * VERIFIED live download of this exact asset on this machine. The downloader hashes the
+ * stream during the download (no second read) and fails acquisition on any mismatch.
+ */
+export const MODEL_ARCHIVE_SHA256 =
+  "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad"
+
+/** Exact byte count of the archive (same provenance) — the cheap pre-hash gate: a
+ *  truncated/padded download fails before the digest is even compared. */
+export const MODEL_ARCHIVE_BYTES = 482468385
 
 /** The downloaded archive's on-disk filename. */
 export const MODEL_ARCHIVE_FILENAME = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2"
@@ -129,6 +148,10 @@ export interface SttStatusSnapshot {
   enabled: boolean
   modelDir: string
   attribution: string
+  /** Review finding 5 — present when status === "error": the acquisition failure OR the
+   *  recognizer's repeated-init-failure detail, so the overlay can show WHY + offer the
+   *  "Re-download model" recovery. */
+  message?: string | null
 }
 
 /** The transcription result shape (also the `stt:transcribe` IPC return). */

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { downsampleTo16kMono, mergeFloat32 } from "../lib/audioCapture"
+import { recordingTick, MAX_RECORDING_MS } from "../lib/micInteraction"
 import type { SttProgress, SttStatus } from "../../electron/stt/protocol"
 
 /**
@@ -10,6 +11,10 @@ import type { SttProgress, SttStatus } from "../../electron/stt/protocol"
  * IPC -> hand the text back via `onInsert`. Also tracks the model-acquisition status/progress
  * so the composer can surface a first-enable download flow. Every window/api touch is inside
  * an effect or callback (never at render), so the composer stays SSR-safe.
+ *
+ * Review hardening: the recording clock is `recordingTick` (pure, tested) and AUTO-STOPS
+ * at MAX_RECORDING_MS (finding 4 — unbounded Float32 accumulation); a stream acquired
+ * AFTER unmount is immediately stopped (finding 9's mid-start race).
  */
 
 export type MicState = "idle" | "recording" | "transcribing"
@@ -19,10 +24,13 @@ interface UseDictationOpts {
   onInsert: (text: string) => void
   /** Called with a human-readable message on mic/transcribe/acquire failure. */
   onError: (message: string) => void
+  /** Called with a non-error notice (e.g. the finding-4 recording cap). */
+  onNotice?: (message: string) => void
 }
 
-export function useDictation({ onInsert, onError }: UseDictationOpts) {
+export function useDictation({ onInsert, onError, onNotice }: UseDictationOpts) {
   const [status, setStatus] = useState<SttStatus>("not-downloaded")
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [enabled, setEnabled] = useState(true)
   const [attribution, setAttribution] = useState("")
   const [progress, setProgress] = useState<SttProgress | null>(null)
@@ -37,11 +45,18 @@ export function useDictation({ onInsert, onError }: UseDictationOpts) {
   const chunksRef = useRef<Float32Array[]>([])
   const timerRef = useRef<number | null>(null)
   const recordingRef = useRef(false)
+  /** Finding 9 — set on unmount so a getUserMedia that resolves AFTER unmount is
+   *  immediately released instead of starting capture on a dead hook. */
+  const unmountedRef = useRef(false)
+  /** The cap's auto-stop needs `stop` from inside `start`'s interval; a ref avoids the
+   *  define-order/stale-closure knot (stop is declared after start would capture it). */
+  const stopRef = useRef<() => Promise<void>>(async () => {})
 
   const refreshStatus = useCallback(async () => {
     try {
       const s = await window.api.sttStatus()
       setStatus(s.status)
+      setStatusMessage(s.message ?? null)
       setEnabled(s.enabled)
       setAttribution(s.attribution)
     } catch {
@@ -95,42 +110,6 @@ export function useDictation({ onInsert, onError }: UseDictationOpts) {
     return ctx
   }, [])
 
-  const start = useCallback(async () => {
-    if (recordingRef.current) return
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      })
-      const Ctx: typeof AudioContext =
-        window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-      const ctx = new Ctx()
-      const source = ctx.createMediaStreamSource(stream)
-      const proc = ctx.createScriptProcessor(4096, 1, 1)
-      chunksRef.current = []
-      proc.onaudioprocess = (e) => {
-        chunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)))
-      }
-      source.connect(proc)
-      proc.connect(ctx.destination)
-      streamRef.current = stream
-      ctxRef.current = ctx
-      sourceRef.current = source
-      procRef.current = proc
-      recordingRef.current = true
-      setRecording(true)
-      setElapsedSec(0)
-      const startedAt = Date.now()
-      timerRef.current = window.setInterval(
-        () => setElapsedSec(Math.floor((Date.now() - startedAt) / 1000)),
-        250,
-      )
-    } catch (err) {
-      teardownCapture()
-      setRecording(false)
-      onError(err instanceof Error ? err.message : "Microphone access was denied")
-    }
-  }, [onError, teardownCapture])
-
   const stop = useCallback(async () => {
     if (!recordingRef.current) return
     const chunks = chunksRef.current
@@ -157,6 +136,63 @@ export function useDictation({ onInsert, onError }: UseDictationOpts) {
     }
   }, [onInsert, onError, teardownCapture])
 
+  // Keep the ref pointing at the freshest stop (the interval closure calls through it).
+  useEffect(() => {
+    stopRef.current = stop
+  }, [stop])
+
+  const start = useCallback(async () => {
+    if (recordingRef.current) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      })
+      // Finding 9 — the mid-start race: if the composer unmounted while getUserMedia's
+      // permission/device dance was in flight, release the tracks immediately — never
+      // start capture on a dead hook (the mic indicator would be gone but the mic hot).
+      if (unmountedRef.current) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
+      const Ctx: typeof AudioContext =
+        window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      const ctx = new Ctx()
+      const source = ctx.createMediaStreamSource(stream)
+      const proc = ctx.createScriptProcessor(4096, 1, 1)
+      chunksRef.current = []
+      proc.onaudioprocess = (e) => {
+        chunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)))
+      }
+      source.connect(proc)
+      proc.connect(ctx.destination)
+      streamRef.current = stream
+      ctxRef.current = ctx
+      sourceRef.current = source
+      procRef.current = proc
+      recordingRef.current = true
+      setRecording(true)
+      setElapsedSec(0)
+      const startedAt = Date.now()
+      timerRef.current = window.setInterval(() => {
+        // Finding 4 — the recording cap. recordingTick is the pure, tested clock: at
+        // MAX_RECORDING_MS auto-STOP exactly like a manual stop (transcribe what was
+        // captured) + surface a notice. Unbounded capture is ~11.5 MB/min of Float32.
+        const t = recordingTick(startedAt, Date.now(), MAX_RECORDING_MS)
+        setElapsedSec(t.elapsedSec)
+        if (t.capped && recordingRef.current) {
+          onNotice?.(
+            `Recording capped at ${Math.round(MAX_RECORDING_MS / 60_000)} minutes — transcribing what was captured.`,
+          )
+          void stopRef.current()
+        }
+      }, 250)
+    } catch (err) {
+      teardownCapture()
+      setRecording(false)
+      onError(err instanceof Error ? err.message : "Microphone access was denied")
+    }
+  }, [onError, onNotice, teardownCapture])
+
   /** Quick-click semantics: toggle recording on/off. */
   const toggleRecord = useCallback(() => {
     if (recordingRef.current) void stop()
@@ -172,22 +208,29 @@ export function useDictation({ onInsert, onError }: UseDictationOpts) {
     setRecording(false)
   }, [teardownCapture])
 
-  const acquire = useCallback(async () => {
-    try {
-      const s = await window.api.sttAcquire()
-      setStatus(s)
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Could not start the model download")
-    }
-  }, [onError])
+  /** Kick off model acquisition. `force` (review finding 6c) = the corrupt-model
+   *  recovery: delete the model dir + re-download ("Re-download model"). */
+  const acquire = useCallback(
+    async (force?: boolean) => {
+      try {
+        const s = await window.api.sttAcquire(force === true)
+        setStatus(s)
+      } catch (err) {
+        onError(err instanceof Error ? err.message : "Could not start the model download")
+      }
+    },
+    [onError],
+  )
 
   const cancelAcquire = useCallback(() => {
     void window.api.sttCancelAcquire()
   }, [])
 
   // Unmount safety: never leave the mic hot / a context open if the composer tears down.
+  // unmountedRef also arms the finding-9 mid-start guard above.
   useEffect(
     () => () => {
+      unmountedRef.current = true
       if (recordingRef.current) {
         const ctx = teardownCapture()
         void ctx?.close()
@@ -198,6 +241,7 @@ export function useDictation({ onInsert, onError }: UseDictationOpts) {
 
   return {
     status,
+    statusMessage,
     enabled,
     attribution,
     progress,

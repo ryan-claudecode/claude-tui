@@ -378,14 +378,16 @@ const mainApi = {
   getAgentCatalog: (terminalId: string) => ipcRenderer.invoke("agent:catalog", terminalId),
 
   // CAPP-120 (STT-1) — push-to-talk dictation. sttStatus returns { status, enabled,
-  // modelDir, attribution }; sttTranscribe sends 16 kHz mono Float32 samples to the
-  // utility-process recognizer and resolves { text, engine, ms }; sttAcquire kicks off
+  // modelDir, attribution, message }; sttTranscribe sends 16 kHz mono Float32 samples to
+  // the utility-process recognizer and resolves { text, engine, ms }; sttAcquire kicks off
   // the first-enable model download (progress rides onSttProgress) and returns the coarse
-  // status; sttCancelAcquire aborts an in-flight download. NO MCP tool (user input affordance).
+  // status — `force` (review finding 6c) deletes the model dir first and re-downloads (the
+  // corrupt-model recovery); sttCancelAcquire aborts an in-flight download (responsive in
+  // BOTH the download and extract phases). NO MCP tool (user input affordance).
   sttStatus: () => ipcRenderer.invoke("stt:status"),
   sttTranscribe: (samples: Float32Array, sampleRate: number) =>
     ipcRenderer.invoke("stt:transcribe", samples, sampleRate),
-  sttAcquire: () => ipcRenderer.invoke("stt:acquire"),
+  sttAcquire: (force?: boolean) => ipcRenderer.invoke("stt:acquire", force === true),
   sttCancelAcquire: () => ipcRenderer.invoke("stt:cancel-acquire"),
   onSttProgress: (callback: (p: SttProgress) => void) => {
     const handler = (_e: unknown, p: SttProgress) => callback(p)
