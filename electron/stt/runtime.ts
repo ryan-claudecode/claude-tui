@@ -93,7 +93,7 @@ async function extractTarBz2(archivePath: string, destDir: string, signal?: Abor
       done(err)
     }
     signal?.addEventListener("abort", onAbort, { once: true })
-    ex.on("entry", (header, stream, next) => {
+    ex.on("entry", (header: { name: string; type?: string }, stream: NodeJS.ReadableStream & { destroy?: () => void }, next: (err?: Error) => void) => {
       // Path-traversal guard: never let an entry escape destDir.
       const outPath = resolve(root, header.name)
       if (outPath !== root && !outPath.startsWith(root + sep)) {
@@ -112,10 +112,10 @@ async function extractTarBz2(archivePath: string, destDir: string, signal?: Abor
       stream.pipe(ws)
       ws.on("finish", next)
       ws.on("error", (e) => done(e))
-      stream.on("error", (e) => done(e))
+      stream.on("error", (e: Error) => done(e))
     })
     ex.on("finish", () => done())
-    ex.on("error", (e) => done(e))
+    ex.on("error", (e: Error) => done(e))
     src.on("error", (e) => done(e))
     bz.on("error", (e) => done(e))
     src.pipe(bz).pipe(ex)
