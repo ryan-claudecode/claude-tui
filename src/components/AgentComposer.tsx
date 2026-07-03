@@ -23,12 +23,14 @@ function formatMB(bytes: number): string {
   return (bytes / 1024 / 1024).toFixed(1)
 }
 
-/** CAPP-120 — a human label for the current acquisition phase. */
+/** CAPP-120 / CAPP-124 — a human label for the current acquisition phase. When the
+ *  total is known the download label leads with the percent ("Downloading… 43% ·
+ *  290.0 / 680.0 MB") so the card is legible at a glance. */
 export function dictationProgressLabel(p: SttProgress | null): string {
   if (!p) return "Preparing…"
   if (p.phase === "downloading") {
     const got = formatMB(p.receivedBytes ?? 0)
-    if (p.totalBytes) return `Downloading… ${got} / ${formatMB(p.totalBytes)} MB`
+    if (p.totalBytes) return `Downloading… ${dictationProgressPct(p)}% · ${got} / ${formatMB(p.totalBytes)} MB`
     return `Downloading… ${got} MB`
   }
   if (p.phase === "extracting") return "Extracting…"
@@ -385,6 +387,182 @@ export default function AgentComposer({
     reader.readAsDataURL(file)
   }, [])
 
+  // CAPP-124 — the download card's progress bar. A determinate width while bytes stream
+  // (percent known); an INDETERMINATE sweep while extracting/verifying or before the
+  // first byte total is known (pct 0), so the bar never sits dead-flat at 0.
+  const dlPct = dictationProgressPct(dictation.progress)
+  const dlIndeterminate = dictation.status === "downloading" && dlPct === 0
+
+  // CAPP-124 — the mic affordance (icon-only, universal glyph) now lives in the INPUT
+  // ROW immediately beside Send; while recording it REPLACES the glyph with a pulsing
+  // dot + elapsed, so the recording state is unmissable next to the input. The card is
+  // rendered as a viewport-fixed overlay (see below) so no ancestor overflow clips it.
+  const micAffordance = dictation.enabled ? (
+    <div className="composer-mic-wrap">
+      <button
+        type="button"
+        className={`composer-mic composer-mic-${dictation.micState}${
+          dictation.status !== "ready" ? " composer-mic-setup" : ""
+        }`}
+        onPointerDown={onMicPointerDown}
+        onPointerUp={onMicPointerUp}
+        onPointerCancel={onMicPointerCancel}
+        onLostPointerCapture={onMicPointerCancel}
+        disabled={dictation.transcribing}
+        aria-pressed={dictation.recording}
+        aria-label={
+          dictation.recording
+            ? "Stop recording"
+            : dictation.transcribing
+              ? "Transcribing"
+              : dictation.status === "ready"
+                ? "Dictate — click to record, hold to push-to-talk (Ctrl+M)"
+                : "Set up voice dictation"
+        }
+        title={
+          dictation.status === "ready"
+            ? "Dictate — click to record, hold to push-to-talk (Ctrl+M)"
+            : "Set up voice dictation (downloads an on-device model)"
+        }
+      >
+        {dictation.recording ? (
+          <>
+            <span className="composer-mic-dot" aria-hidden="true" />
+            <span className="composer-mic-elapsed">{formatElapsed(dictation.elapsedSec)}</span>
+          </>
+        ) : dictation.transcribing ? (
+          <span className="composer-mic-spinner" aria-hidden="true" />
+        ) : (
+          <span className="composer-mic-icon" aria-hidden="true">
+            🎤
+          </span>
+        )}
+      </button>
+      {downloadOpen && (
+        <>
+          {/* CAPP-124 — a faint scrim: focuses attention on the card + closes on click.
+              Both scrim and card are position:fixed so they escape the composer's
+              overflow-clipped, z-index:4 stacking context (the old absolute card was
+              truncated by .terminal-container { overflow: hidden }). */}
+          <div
+            className="composer-mic-download-backdrop"
+            onClick={() => setDownloadOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="composer-mic-download" role="dialog" aria-modal="true" aria-label="Voice dictation setup">
+            <div className="composer-mic-download-head">
+              <span className="composer-mic-download-title">Voice dictation</span>
+              <button
+                type="button"
+                className="composer-mic-download-x"
+                aria-label="Close"
+                onClick={() => setDownloadOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+
+            {dictation.status === "downloading" ? (
+              // DOWNLOADING / EXTRACTING / VERIFYING — live progress + Cancel.
+              <>
+                <div className="composer-mic-progress-label">
+                  {dictationProgressLabel(dictation.progress)}
+                </div>
+                <div className={`composer-mic-progress${dlIndeterminate ? " indeterminate" : ""}`}>
+                  <div
+                    className="composer-mic-progress-bar"
+                    style={dlIndeterminate ? undefined : { width: `${dlPct}%` }}
+                  />
+                </div>
+                <div className="composer-mic-download-actions">
+                  <button
+                    type="button"
+                    className="composer-mic-download-cancel"
+                    onClick={() => dictation.cancelAcquire()}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : dictation.status === "error" ? (
+              // ERROR — the message + Retry (resume) and Re-download (force, deletes the
+              // possibly-corrupt model dir + re-fetches — the way out of a bad-files loop).
+              <>
+                <p className="composer-mic-download-error">
+                  {dictation.statusMessage ?? dictation.progress?.message ?? "The download failed."}
+                </p>
+                <p className="composer-mic-download-desc">
+                  Retry the download, or re-download from scratch if the model files look corrupt.
+                </p>
+                <div className="composer-mic-download-actions">
+                  <button
+                    type="button"
+                    className="composer-mic-download-go"
+                    onClick={() => dictation.acquire(false)}
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    className="composer-mic-download-cancel"
+                    onClick={() => dictation.acquire(true)}
+                  >
+                    Re-download
+                  </button>
+                </div>
+              </>
+            ) : dictation.status === "ready" ? (
+              // READY — a confirmation (the effect below also auto-closes the card).
+              <>
+                <p className="composer-mic-download-desc">
+                  Voice dictation is ready. Click the mic to record, or hold it to push-to-talk.
+                </p>
+                <div className="composer-mic-download-actions">
+                  <button
+                    type="button"
+                    className="composer-mic-download-go"
+                    onClick={() => setDownloadOpen(false)}
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : (
+              // NOT-DOWNLOADED — the initial CONFIRM step. Never auto-starts: the download
+              // begins only when the user clicks "Download model".
+              <>
+                <p className="composer-mic-download-desc">
+                  Download the dictation model (~680&nbsp;MB)? It then runs fully offline —
+                  audio never leaves your machine.
+                </p>
+                <div className="composer-mic-download-actions">
+                  <button
+                    type="button"
+                    className="composer-mic-download-go"
+                    onClick={() => dictation.acquire(false)}
+                  >
+                    Download model
+                  </button>
+                  <button
+                    type="button"
+                    className="composer-mic-download-cancel"
+                    onClick={() => setDownloadOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+            <p className="composer-mic-attribution">
+              {dictation.attribution ||
+                "Speech model: NVIDIA Parakeet TDT 0.6B v2 (English), licensed CC-BY-4.0."}
+            </p>
+          </div>
+        </>
+      )}
+    </div>
+  ) : null
+
   return (
     <div
       className={`agent-composer${dragOver ? " drag-over" : ""}`}
@@ -453,6 +631,9 @@ export default function AgentComposer({
             {stopping ? "Stopping…" : "Stop"}
           </button>
         )}
+        {/* CAPP-124 — the mic sits in the input row, immediately beside Send (the 2026
+            chat convention), so first-time dictation is easy to find. Icon-only. */}
+        {micAffordance}
         <button
           className="composer-send"
           onClick={send}
@@ -487,116 +668,6 @@ export default function AgentComposer({
           )}
         </div>
         <div className="composer-controls-row">
-          {/* CAPP-120 — the statically-visible mic affordance (no hover-reveal). Recording =
-              pulsing red dot + elapsed; transcribing = spinner; idle = 🎤. A press when the
-              model isn't downloaded opens the inline enable/download overlay (renderer-local,
-              NOT a PanelService panel). */}
-          {dictation.enabled && (
-            <div className="composer-mic-wrap">
-              <button
-                type="button"
-                className={`composer-mic composer-mic-${dictation.micState}${
-                  dictation.status !== "ready" ? " composer-mic-setup" : ""
-                }`}
-                onPointerDown={onMicPointerDown}
-                onPointerUp={onMicPointerUp}
-                onPointerCancel={onMicPointerCancel}
-                onLostPointerCapture={onMicPointerCancel}
-                disabled={dictation.transcribing}
-                aria-pressed={dictation.recording}
-                aria-label={
-                  dictation.recording
-                    ? "Stop recording"
-                    : dictation.transcribing
-                      ? "Transcribing"
-                      : dictation.status === "ready"
-                        ? "Dictate — click to record, hold to push-to-talk (Ctrl+M)"
-                        : "Set up voice dictation"
-                }
-                title={
-                  dictation.status === "ready"
-                    ? "Dictate — click to record, hold to push-to-talk (Ctrl+M)"
-                    : "Set up voice dictation (downloads an on-device model)"
-                }
-              >
-                {dictation.recording ? (
-                  <>
-                    <span className="composer-mic-dot" aria-hidden="true" />
-                    <span className="composer-mic-elapsed">{formatElapsed(dictation.elapsedSec)}</span>
-                  </>
-                ) : dictation.transcribing ? (
-                  <span className="composer-mic-spinner" aria-hidden="true" />
-                ) : (
-                  <span className="composer-mic-icon" aria-hidden="true">
-                    🎤
-                  </span>
-                )}
-              </button>
-              {downloadOpen && (
-                <div className="composer-mic-download" role="dialog" aria-label="Voice dictation setup">
-                  <div className="composer-mic-download-head">
-                    <span className="composer-mic-download-title">Voice dictation</span>
-                    <button
-                      type="button"
-                      className="composer-mic-download-x"
-                      aria-label="Close"
-                      onClick={() => setDownloadOpen(false)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                  {dictation.status === "downloading" ? (
-                    <>
-                      <div className="composer-mic-progress-label">
-                        {dictationProgressLabel(dictation.progress)}
-                      </div>
-                      <div className="composer-mic-progress">
-                        <div
-                          className="composer-mic-progress-bar"
-                          style={{ width: `${dictationProgressPct(dictation.progress)}%` }}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        className="composer-mic-download-cancel"
-                        onClick={() => dictation.cancelAcquire()}
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <p className="composer-mic-download-desc">
-                        Downloads a ~680&nbsp;MB on-device speech model. Dictation then runs fully
-                        offline — audio never leaves your machine.
-                      </p>
-                      {dictation.status === "error" &&
-                        (dictation.statusMessage || dictation.progress?.message) && (
-                          <p className="composer-mic-download-error">
-                            {dictation.statusMessage ?? dictation.progress?.message}
-                          </p>
-                        )}
-                      {/* Review finding 6c — the error state's statically-visible recovery is a
-                          FORCE re-acquire ("Re-download model"): deletes the (possibly corrupt)
-                          model dir + re-downloads. Also the way out of finding 5's repeated
-                          worker-init failures over bad-but-present files. */}
-                      <button
-                        type="button"
-                        className="composer-mic-download-go"
-                        onClick={() => dictation.acquire(dictation.status === "error")}
-                      >
-                        {dictation.status === "error" ? "Re-download model" : "Download model (~680 MB)"}
-                      </button>
-                    </>
-                  )}
-                  <p className="composer-mic-attribution">
-                    {dictation.attribution ||
-                      "Speech model: NVIDIA Parakeet TDT 0.6B v2 (English), licensed CC-BY-4.0."}
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
           <AgentModelPicker
             sessionId={sessionId}
             terminalId={terminalId}
