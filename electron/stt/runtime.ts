@@ -1,16 +1,29 @@
-import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync } from "node:fs"
-import { dirname, resolve, sep } from "node:path"
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
+import { dirname, join, resolve, sep } from "node:path"
 import { utilityProcess } from "electron"
 import { extract as tarExtract } from "tar-stream"
 import unbzip2 from "unbzip2-stream"
 import type { SttDeps } from "../services/stt"
 import { downloadToFile } from "./download"
+import { HOTWORDS_FILENAME, collectWorkspaceNames, encodeHotwordLines, loadTokenSet } from "./hotwords"
 import {
   MODEL_ARCHIVE_SHA256,
   MODEL_ARCHIVE_BYTES,
   type SttFromWorker,
   type SttWorkerLike,
 } from "./protocol"
+
+// Re-export so ipc.ts can share the ONE bounded-walk impl for its hotword regen.
+export { collectWorkspaceNames }
 
 /**
  * CAPP-120 (STT-1) — the REAL {@link SttDeps} implementations (electron `utilityProcess`,
@@ -122,6 +135,36 @@ async function extractTarBz2(archivePath: string, destDir: string, signal?: Abor
   })
 }
 
+/**
+ * CAPP-121 (STT-2) — materialize the hotwords file. Char-level-tokenizes the words against
+ * the model's `tokens.txt` (cached — it never changes for a given model) and writes
+ * `<sttRoot>/hotwords.txt` ONLY when the content changed (atomic temp-then-rename). Returns
+ * the path + the count of successfully-encoded lines (0 => the caller keeps greedy decoding).
+ * Errors propagate to SttService.setHotwords, which catches them and falls back to no biasing.
+ */
+function makeHotwordsWriter(modelDir: string, sttRoot: string): (words: readonly string[]) => { path: string; count: number } {
+  let tokenSet: Set<string> | null = null
+  const hotwordsPath = join(sttRoot, HOTWORDS_FILENAME)
+  return (words) => {
+    if (!tokenSet) tokenSet = loadTokenSet(join(modelDir, "tokens.txt"))
+    const lines = encodeHotwordLines(words, tokenSet)
+    const content = lines.length ? lines.join("\n") + "\n" : ""
+    let prev: string | null = null
+    try {
+      prev = readFileSync(hotwordsPath, "utf8")
+    } catch {
+      /* absent — first write */
+    }
+    if (prev !== content) {
+      mkdirSync(sttRoot, { recursive: true })
+      const tmp = hotwordsPath + ".tmp"
+      writeFileSync(tmp, content, "utf8")
+      renameSync(tmp, hotwordsPath)
+    }
+    return { path: hotwordsPath, count: lines.length }
+  }
+}
+
 /** Build the real SttDeps (minus modelDir/sttRoot, supplied by the caller). */
 export function createSttRuntimeDeps(opts: {
   modelDir: string
@@ -133,6 +176,7 @@ export function createSttRuntimeDeps(opts: {
     modelDir: opts.modelDir,
     sttRoot: opts.sttRoot,
     spawnWorker: () => createSttWorker(opts.workerPath),
+    writeHotwords: makeHotwordsWriter(opts.modelDir, opts.sttRoot),
     exists: (p) => existsSync(p),
     ensureDir: (p) => {
       mkdirSync(p, { recursive: true })

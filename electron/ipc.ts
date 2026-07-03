@@ -18,7 +18,7 @@ import { FileService } from "./services/files"
 import { UiService } from "./services/ui"
 import { MissionService } from "./services/mission"
 import { SchedulerService } from "./services/scheduler"
-import { userMessage } from "./services/streamProtocol"
+import { userMessage, MODEL_ALIASES, EFFORT_LEVELS, HEADLESS_FLAGS } from "./services/streamProtocol"
 import { SessionService } from "./services/sessions"
 import { RecallService, primerHitEligible } from "./services/recall"
 import { WorkspaceMemoryService } from "./services/workspaceMemory"
@@ -54,8 +54,10 @@ import { registerSttHandlers } from "./ipc/stt-handlers"
 import { SttService } from "./services/stt"
 import { createSttRuntimeDeps } from "./stt/runtime"
 import { MODEL_DIRNAME } from "./stt/protocol"
-import { resolveSttEnabled, resolveSchedulerMaxConcurrent } from "./config"
+import { resolveSttEnabled, resolveSttHotwords, resolveSchedulerMaxConcurrent } from "./config"
 import { syncWindowSchedulePanels } from "./services/schedulePanelSync"
+import { deriveHotwords, gatherContextProse } from "./stt/hotwords"
+import { collectWorkspaceNames } from "./stt/runtime"
 
 export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
@@ -357,6 +359,9 @@ export async function setupIpc(win: BrowserWindow) {
   // forwards each event over the `workspace:active-changed` channel. Payload is
   // the new active workspace's PUBLIC projection, or null when cleared.
   workspaceService.onActiveChanged((e) => {
+    // CAPP-121 (STT-2) — re-derive the dictation hotword vocabulary for the newly-active
+    // workspace (immediate: a switch is a deliberate, low-frequency user action).
+    regenerateHotwords()
     if (win.isDestroyed()) return
     win.webContents.send("workspace:active-changed", e.active)
   })
@@ -401,7 +406,73 @@ export async function setupIpc(win: BrowserWindow) {
     if (companionService.isOpen()) {
       companionService.sendToCompanion("workspace:memory-changed", workspaceId)
     }
+    // CAPP-121 (STT-2) — the context engine just changed, so the dictation vocabulary may
+    // have new finding/summary terms. DEBOUNCED (memory mutations arrive in bursts) + throw-safe.
+    scheduleHotwordRegen()
   })
+
+  // CAPP-121 (STT-2) — workspace-vocabulary hotword biasing for dictation. Re-derive the
+  // hotword vocabulary from the ACTIVE workspace (dictation is a user-facing input affordance —
+  // active selection is correct here, unlike agent identity binding). Four sources:
+  //   (a) file/dir NAMES from a bounded walk of the workspace folder,
+  //   (b) context-engine prose (workspace-memory instructions + findings; session summaries + findings),
+  //   (c) app constants (model aliases, effort levels, common CLI flags from streamProtocol),
+  //   (d) user config `stt.hotwords`.
+  // The pure `deriveHotwords` splits/dedups/caps; `SttService.setHotwords` materializes the file
+  // and rebuilds the recognizer LAZILY on the next transcribe. THROW-SAFE — a bad walk / read
+  // must NEVER crash the workspace/memory mutation path this hangs off.
+  const HOTWORD_CLI_FLAGS = [
+    ...HEADLESS_FLAGS,
+    "--dangerously-skip-permissions",
+    "--resume",
+    "--model",
+    "--effort",
+    "--mcp-config",
+    "--append-system-prompt-file",
+    "--permission-prompt-tool",
+    "--settings",
+  ]
+  function regenerateHotwords(): void {
+    try {
+      // Review fix 3 — the CHEAP gates first: most installs have STT disabled or the model
+      // not yet downloaded (the DEFAULT state), and regen hangs off hot seams (memory
+      // mutations, workspace switches). Never pay the workspace walk (or a doomed tokens.txt
+      // read) there. modelPresent() (4 existsSync) instead of status() because the
+      // download-ready hook (fix 2) fires from INSIDE acquire(), where `acquiring` is still
+      // true and status() would still read "downloading".
+      const cfg = loadConfig()
+      if (!resolveSttEnabled(cfg)) return
+      if (!sttService.modelPresent()) return
+      const wsId = workspaceService.getActiveId()
+      const dir = workspaceService.getActiveWorkspaceDir()
+      const fileNames = dir ? collectWorkspaceNames(dir) : []
+      // Review fix 5 — gatherContextProse reads the ACTIVE bucket, including the UNTAGGED
+      // "All" bucket (getMemory(null)) + untagged sessions when no workspace is active.
+      const prose = gatherContextProse({
+        activeWorkspaceId: wsId,
+        getMemory: (id) => workspaceMemoryService.getMemory(id),
+        listSessions: () => workSessionService.list(),
+        getSessionSections: (id) => workSessionService.getSessionContextSections(id),
+      })
+      const words = deriveHotwords({
+        extras: resolveSttHotwords(cfg),
+        terms: [...MODEL_ALIASES, ...EFFORT_LEVELS, ...HOTWORD_CLI_FLAGS],
+        fileNames,
+        prose,
+      })
+      sttService.setHotwords(words)
+    } catch (err) {
+      logWarn("stt", `hotword regen failed: ${String(err)}`)
+    }
+  }
+  let hotwordRegenTimer: ReturnType<typeof setTimeout> | null = null
+  function scheduleHotwordRegen(): void {
+    if (hotwordRegenTimer) clearTimeout(hotwordRegenTimer)
+    hotwordRegenTimer = setTimeout(() => {
+      hotwordRegenTimer = null
+      regenerateHotwords()
+    }, 1500)
+  }
 
   sessionService.setMainWindow(win)
   sessionService.setDefaults(
@@ -667,10 +738,21 @@ export async function setupIpc(win: BrowserWindow) {
   // CAPP-120 (STT-1) — push acquisition progress to the renderer's inline download flow
   // (the composer's mic overlay listens on `stt:progress`). Mirrors schedule:updated.
   sttService.onProgress((p) => {
+    // CAPP-121 review fix 2 — the model download just reached its terminal ready phase:
+    // derive the FIRST vocabulary now (fix 3's gates skipped every earlier regen while the
+    // model was absent, and MAJOR 1's retry-safety alone had no trigger to fire on).
+    // regenerateHotwords gates on modelPresent() (true here), not status() ("downloading"
+    // until acquire()'s finally runs), and catches its own errors.
+    if (p.phase === "ready") regenerateHotwords()
     if (!win.isDestroyed()) win.webContents.send("stt:progress", p)
   })
   // `isEnabled` is read FRESH (loadConfig) so a config edit is honored without a restart.
   registerSttHandlers({ sttService, isEnabled: () => resolveSttEnabled(loadConfig()) })
+  // CAPP-121 (STT-2) — prime the dictation hotword vocabulary once at launch (after workspaces
+  // are discovered + sessions loaded), so the first dictation is already workspace-biased.
+  // Review fix 3: this no-ops cheaply when STT is disabled or the model isn't downloaded
+  // (the default state) — the first real regen then happens at download-ready (fix 2).
+  regenerateHotwords()
   registerAttentionHandlers({ getAttention: () => attentionService })
   // WS-B — id-based workspace ops (get/create/rename/add-dir/remove-dir/delete/
   // set-active/get-active/launch). Legacy index-based workspace:list/activate

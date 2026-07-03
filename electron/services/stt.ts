@@ -6,6 +6,7 @@ import {
   MODEL_EXTRACTED_DIRNAME,
   MODEL_ATTRIBUTION,
   STT_ENGINE,
+  DEFAULT_HOTWORDS_SCORE,
   type SttWorkerLike,
   type SttStatus,
   type SttProgress,
@@ -74,6 +75,16 @@ export interface SttDeps {
   transcribeTimeoutMs?: number
   now?: () => number
   logWarn?: (message: string) => void
+  /**
+   * CAPP-121 (STT-2) — materialize the workspace-vocabulary hotwords file. The real impl
+   * (runtime.ts) char-level-tokenizes the words against `tokens.txt` and atomically writes
+   * `<sttRoot>/hotwords.txt`, returning its path + the count of ENCODABLE terms. Absent (or
+   * a `count: 0` return) => NO biasing: the recognizer stays on the greedy default path
+   * (the fallback when hotwords aren't supported). Kept behind the dep so SttService is pure.
+   */
+  writeHotwords?: (words: readonly string[]) => { path: string; count: number }
+  /** CAPP-121 — the hotword boost passed to the recognizer; defaults DEFAULT_HOTWORDS_SCORE. */
+  hotwordsScore?: number
 }
 
 type Pending = {
@@ -107,6 +118,20 @@ export class SttService {
   private abort: AbortController | null = null
   private lastError: string | null = null
   private disposed = false
+
+  /** CAPP-121 (STT-2) — the current workspace-vocabulary hotword state.
+   *  `hotwords` is the last vocabulary that reached a TERMINAL SUCCESSFUL state (file written,
+   *  or a deliberate empty/no-writer plain-decode) — it is the baseline for the sameWords
+   *  no-op guard. Review MAJOR 1: it is set to NULL after a FAILED write, so a later regen
+   *  with the IDENTICAL word list is NEVER swallowed by the guard — it retries the write.
+   *  (A sticky failure would leave biasing silently inert forever.) `hotwordsPath`/
+   *  `appliedHotwordCount` reflect the MATERIALIZED file (null path => no biasing). `dirty`
+   *  means a live warm worker was built with the OLD config and must be rebuilt LAZILY on the
+   *  next quiet transcribe — so a workspace switch mid-recording never churns the recognizer. */
+  private hotwords: string[] | null = []
+  private hotwordsPath: string | null = null
+  private appliedHotwordCount = 0
+  private hotwordsDirty = false
 
   private readonly listeners = new Set<(p: SttProgress) => void>()
 
@@ -160,6 +185,60 @@ export class SttService {
 
   get modelDir(): string {
     return this.deps.modelDir
+  }
+
+  /** CAPP-121 (STT-2) — the count of active workspace-vocabulary hotwords (0 when none),
+   *  surfaced in the status snapshot for the mic tooltip. */
+  get hotwordCount(): number {
+    return this.appliedHotwordCount
+  }
+
+  /**
+   * CAPP-121 (STT-2) — set the workspace-vocabulary hotwords. Called from the wiring layer
+   * on workspace activation + (debounced) workspace-memory changes, resolving from the ACTIVE
+   * workspace (dictation is a user-facing input affordance — active selection is correct here).
+   *
+   * Materializes the hotwords FILE eagerly (cheap: char-level tokenization + an only-if-changed
+   * atomic write) so the count is known immediately, but keeps the recognizer rebuild LAZY:
+   * it only marks the warm worker dirty so the NEXT transcribe respawns it with the new config.
+   * That way a workspace switch never kills a warm/in-use recognizer mid-recording. An identical
+   * vocabulary is a no-op (no file write, no dirty flip) so repeated calls don't churn.
+   */
+  setHotwords(words: readonly string[]): void {
+    if (this.disposed) return
+    const next = words.filter((w) => typeof w === "string" && w.trim().length > 0)
+    // The no-op guard compares against the last KNOWN-GOOD vocabulary only — after a failed
+    // write `this.hotwords` is null, so an identical retry always falls through (MAJOR 1).
+    if (this.hotwords !== null && sameWords(this.hotwords, next)) return
+    if (this.deps.writeHotwords && next.length > 0) {
+      try {
+        const { path, count } = this.deps.writeHotwords(next)
+        // count 0 => nothing encodable => no biasing (fallback to greedy).
+        this.hotwordsPath = count > 0 ? path : null
+        this.appliedHotwordCount = count
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        this.deps.logWarn?.(`stt setHotwords failed: ${message}`)
+        this.hotwordsPath = null
+        this.appliedHotwordCount = 0
+        // Review MAJOR 1 — do NOT commit the vocabulary baseline: null means "no known-good
+        // state", so the NEXT regen (even byte-identical) bypasses the guard and RETRIES.
+        // The first-run case (a regen before the model download → tokens.txt ENOENT) would
+        // otherwise leave biasing permanently inert. A stale live worker may still be biased
+        // by the OLD file, so mark dirty to rebuild it plain.
+        this.hotwords = null
+        this.hotwordsDirty = true
+        return
+      }
+    } else {
+      // No writer wired (tests / unsupported) or an empty vocabulary => plain decoding.
+      // This IS a terminal successful state — commit it below.
+      this.hotwordsPath = null
+      this.appliedHotwordCount = 0
+    }
+    this.hotwords = [...next]
+    // A live worker was built with the previous config — rebuild it lazily on next transcribe.
+    this.hotwordsDirty = true
   }
 
   // -------------------------------------------------------------------------
@@ -322,7 +401,12 @@ export class SttService {
         if (p) {
           this.pending.delete(msg.id)
           clearTimeout(p.timer)
-          p.resolve({ text: msg.text ?? "", engine: STT_ENGINE, ms: msg.ms ?? 0 })
+          const result: SttTranscription = { text: msg.text ?? "", engine: STT_ENGINE, ms: msg.ms ?? 0 }
+          // CAPP-121 (STT-2) — attribute the biasing that shaped THIS decode (this worker was
+          // init'd with the current hotwords config). Omitted when none, so a no-hotwords
+          // result stays `{ text, engine, ms }` (byte-unchanged).
+          if (this.appliedHotwordCount > 0) result.hotwordCount = this.appliedHotwordCount
+          p.resolve(result)
         }
       } else if (msg.type === "error") {
         if (typeof msg.id === "number") {
@@ -346,7 +430,14 @@ export class SttService {
       countInitFailure(this.lastWorkerError ?? "stt worker exited during startup")
       this.teardownWorker(new Error("stt worker exited"))
     })
-    worker.postMessage({ type: "init", modelDir: this.deps.modelDir })
+    // CAPP-121 (STT-2) — carry the active hotwords config into the recognizer build. A null
+    // path => the init omits both fields => the byte-unchanged greedy default (CAPP-120).
+    worker.postMessage({
+      type: "init",
+      modelDir: this.deps.modelDir,
+      hotwordsFile: this.hotwordsPath ?? undefined,
+      hotwordsScore: this.hotwordsPath ? (this.deps.hotwordsScore ?? DEFAULT_HOTWORDS_SCORE) : undefined,
+    })
     return readyPromise
   }
 
@@ -394,6 +485,17 @@ export class SttService {
     if (this.disposed) throw new Error("stt service disposed")
     if (!this.modelPresent()) throw new Error("STT model is not downloaded")
     if (!samples || samples.length === 0) throw new Error("no audio captured")
+    // CAPP-121 (STT-2) — the LAZY hotword rebuild: if the vocabulary changed since this warm
+    // worker was built, drop it here (between utterances, never mid-recording) so ensureWorker
+    // respawns with the new config. No live worker => nothing to drop; ensureWorker just builds
+    // fresh with the current config. Review NIT 4 — if another decode is IN FLIGHT (split-view
+    // composers share this one service; the IPC handler has no single-flight), DEFER the
+    // rebuild: keep the dirty flag set and never failWorker over a live decode — the next
+    // quiet transcribe performs it.
+    if (this.hotwordsDirty && this.pending.size === 0) {
+      this.hotwordsDirty = false
+      if (this.worker) this.failWorker(new Error("hotwords changed — rebuilding recognizer"))
+    }
     await this.ensureWorker()
     const worker = this.worker
     if (!worker) throw new Error("stt worker unavailable")
@@ -441,4 +543,11 @@ class DOMExceptionLike extends Error {
     super(message)
     this.name = "AbortError"
   }
+}
+
+/** CAPP-121 — cheap order-sensitive equality so an unchanged vocabulary is a true no-op. */
+function sameWords(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
 }

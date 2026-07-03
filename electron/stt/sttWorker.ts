@@ -14,7 +14,7 @@
  * encoder/decoder/joiner, featureDim 80 @ 16 kHz, numThreads 4.
  */
 import { join } from "node:path"
-import type { SttToWorker, SttFromWorker } from "./protocol"
+import { HOTWORDS_DECODING, type SttToWorker, type SttFromWorker } from "./protocol"
 
 // `process.parentPort` is the utility-process side of the parent<->child channel
 // (typed by electron.d.ts's augmentation of NodeJS.Process).
@@ -29,12 +29,14 @@ let sherpa: any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let recognizer: any = null
 
-function init(modelDir: string): void {
+function init(modelDir: string, hotwordsFile?: string, hotwordsScore?: number): void {
   const t0 = Date.now()
   // Lazy require so a missing/failed native addon surfaces as a reported error rather
   // than a module-eval crash before any handler is wired.
   if (!sherpa) sherpa = require("sherpa-onnx-node")
-  recognizer = new sherpa.OfflineRecognizer({
+  // The base config is EXACTLY the CAPP-120 live-validated probe config.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const config: any = {
     featConfig: { sampleRate: 16000, featureDim: 80 },
     modelConfig: {
       transducer: {
@@ -46,7 +48,17 @@ function init(modelDir: string): void {
       numThreads: 4,
       modelType: "nemo_transducer",
     },
-  })
+  }
+  // CAPP-121 (STT-2) — contextual biasing. ONLY when a (non-empty, char-level-tokenized)
+  // hotwords file is supplied do we switch to modified_beam_search + the hotwords fields.
+  // With no file, the config is byte-identical to CAPP-120's greedy default. The live spike
+  // proved this offline int8 nemo_transducer accepts these fields and still transcribes.
+  if (hotwordsFile) {
+    config.decodingMethod = HOTWORDS_DECODING
+    config.hotwordsFile = hotwordsFile
+    if (typeof hotwordsScore === "number") config.hotwordsScore = hotwordsScore
+  }
+  recognizer = new sherpa.OfflineRecognizer(config)
   post({ type: "ready", loadMs: Date.now() - t0 })
 }
 
@@ -66,7 +78,7 @@ parentPort.on("message", (e: { data: unknown }) => {
   const msg = e.data as SttToWorker
   try {
     if (msg.type === "init") {
-      init(msg.modelDir)
+      init(msg.modelDir, msg.hotwordsFile, msg.hotwordsScore)
     } else if (msg.type === "transcribe") {
       // Coerce in case structured clone handed us a plain array/ArrayBuffer view.
       const samples =

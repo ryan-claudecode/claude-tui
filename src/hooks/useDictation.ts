@@ -33,6 +33,8 @@ export function useDictation({ onInsert, onError, onNotice }: UseDictationOpts) 
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [enabled, setEnabled] = useState(true)
   const [attribution, setAttribution] = useState("")
+  /** CAPP-121 (STT-2) — count of active workspace-vocabulary hotwords, for the mic tooltip. */
+  const [hotwordCount, setHotwordCount] = useState(0)
   const [progress, setProgress] = useState<SttProgress | null>(null)
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
@@ -59,6 +61,7 @@ export function useDictation({ onInsert, onError, onNotice }: UseDictationOpts) 
       setStatusMessage(s.message ?? null)
       setEnabled(s.enabled)
       setAttribution(s.attribution)
+      setHotwordCount(s.hotwordCount ?? 0)
     } catch {
       /* leave prior state; the mic just won't be actionable */
     }
@@ -127,6 +130,8 @@ export function useDictation({ onInsert, onError, onNotice }: UseDictationOpts) 
     setTranscribing(true)
     try {
       const res = await window.api.sttTranscribe(samples, 16000)
+      // CAPP-121 (STT-2) — refresh the tooltip's term count from the freshest decode.
+      if (typeof res?.hotwordCount === "number") setHotwordCount(res.hotwordCount)
       const text = (res?.text ?? "").trim()
       if (text) onInsert(text)
     } catch (err) {
@@ -244,6 +249,7 @@ export function useDictation({ onInsert, onError, onNotice }: UseDictationOpts) 
     statusMessage,
     enabled,
     attribution,
+    hotwordCount,
     progress,
     recording,
     transcribing,

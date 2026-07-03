@@ -23,6 +23,8 @@ export function registerSttHandlers(deps: {
     // Review finding 5 — the WHY behind an "error" status (acquisition failure or the
     // repeated worker-init failure), so the overlay can show it + offer re-download.
     message: sttService.statusMessage(),
+    // CAPP-121 (STT-2) — the count of active workspace-vocabulary hotwords for the mic tooltip.
+    hotwordCount: sttService.hotwordCount,
   }))
 
   ipcMain.handle(
