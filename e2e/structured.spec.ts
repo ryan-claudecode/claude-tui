@@ -1321,18 +1321,21 @@ test("CAPP-94 / U6: the workspace-memory editor opens from the switcher, renders
   await win.waitForSelector("#root", { timeout: 30_000 })
   await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
 
-  // CAPP-122 — the memory entry point is now a compact icon button (🧠) in the
-  // consolidated workspace control row. It is ALWAYS VISIBLE in the switcher (no
-  // hover-reveal), even in "All" mode (the untagged bucket has its own memory).
+  // CAPP-123 — the memory entry point is a compact TEXT button ("Memory") in the
+  // consolidated workspace control row (words over icons — the CAPP-122 icon-only row
+  // was a regression). It is ALWAYS VISIBLE in the switcher (no hover-reveal), even in
+  // "All" mode (the untagged bucket has its own memory).
   const memBtn = win.locator(".wsctl-memory")
   await expect(memBtn).toBeVisible({ timeout: 15_000 })
+  await expect(memBtn).toContainText("Memory")
   await expect(memBtn).toHaveAttribute("aria-label", /workspace memory/i)
 
-  // CAPP-122 no-hover guard: the control row's icon buttons are statically visible at
+  // CAPP-123 no-hover guard: the control row's text buttons are statically visible at
   // FULL opacity AT REST (no prior hover). toBeVisible() ignores opacity, so read the
   // computed opacity directly — this catches an opacity:0 + :hover-reveal regression.
   const ctxBtnRest = win.locator(".wsctl-context")
   await expect(ctxBtnRest).toBeVisible({ timeout: 15_000 })
+  await expect(ctxBtnRest).toContainText("Context")
   for (const btn of [memBtn, ctxBtnRest]) {
     const restOpacity = await btn.evaluate((el) => getComputedStyle(el).opacity)
     expect(restOpacity).toBe("1")
@@ -1577,11 +1580,13 @@ test("CAPP-98 / I1: the always-visible 'Context' switcher button opens the READ-
   await win.waitForSelector("#root", { timeout: 30_000 })
   await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
 
-  // CAPP-122 — the context entry point is now a compact icon button (📄) in the
-  // consolidated workspace control row. It is ALWAYS VISIBLE in the switcher (no
-  // hover-reveal), even in "All" mode — distinct from the adjacent 🧠 memory button.
+  // CAPP-123 — the context entry point is a compact TEXT button ("Context") in the
+  // consolidated workspace control row (words over icons). It is ALWAYS VISIBLE in the
+  // switcher (no hover-reveal), even in "All" mode — distinct from the adjacent
+  // "Memory" button.
   const ctxBtn = win.locator(".wsctl-context")
   await expect(ctxBtn).toBeVisible({ timeout: 15_000 })
+  await expect(ctxBtn).toContainText("Context")
   await expect(ctxBtn).toHaveAttribute("aria-label", /context inspector/i)
 
   // CAPP-109 / S2 — the READ-ONLY inspector now opens IN the main-window ModalHost.

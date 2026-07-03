@@ -40,13 +40,15 @@ interface Props {
  * Enter activates, Esc closes (and returns focus to the pill). Click-outside
  * dismisses. Reduced-motion is honored via CSS.
  *
- * BELOW THE PILL — a single COMPACT control row (CAPP-122): small, muted-at-rest
- * icon buttons (CAPP-119 treatment — NO hover-reveal, hover only deepens), each a
- * distinct focusable <button> with a title + aria-label:
- *  - 🧠 memory + 📄 context in BOTH modes (the untagged "All" bucket has its own
+ * BELOW THE PILL — a single COMPACT control row (CAPP-123, replacing CAPP-122's
+ * icon-only row): small, muted-at-rest TEXT buttons (words over icons — no hover
+ * needed to know what each does), wrapping to two lines on a narrow sidebar. Each is
+ * a distinct focusable <button> whose visible label carries the meaning (aria-label +
+ * title are SUPPLEMENTS, never the sole identification):
+ *  - "Memory" + "Context" in BOTH modes (the untagged "All" bucket has its own
  *    durable memory + launch context — the untagged entry point).
- *  - ✏ rename + 🗑 delete only for a SPECIFIC active workspace (rename toggles the
- *    inline input below; delete keeps the existing window.confirm).
+ *  - "Rename" + "Delete" only for a SPECIFIC active workspace (rename toggles the
+ *    inline input below; delete keeps the danger tint + the existing window.confirm).
  *
  * FOR A SPECIFIC ACTIVE WORKSPACE, below that row (ALWAYS VISIBLE, NO hover-reveal):
  *  - the inline rename input (shown while renaming; Enter commits, Esc cancels).
@@ -288,16 +290,17 @@ export default function WorkspaceSwitcher({
       )}
       </div>
 
-      {/* CAPP-122 — ONE compact control row under the selector pill (replaces the old
-          stacked "Workspace memory" / "Context" full-width buttons + the separate
-          name/rename/delete row). Small, muted-at-rest icon buttons matching the
-          CAPP-119 expand-icon treatment (--text-3 contrast, transparent bg/border at
-          rest, hover DEEPENS — never a hover-REVEAL). Each is a distinct focusable
-          <button> with a title tooltip + aria-label.
-            - 🧠 memory + 📄 context render in BOTH modes (the untagged "All" bucket has
+      {/* CAPP-123 — ONE compact control row under the selector pill. Replaces the
+          CAPP-122 icon-only row (🧠/📄/✏/🗑) — which had no hover state to identify it and
+          relied on title tooltips — with small, muted-at-rest TEXT buttons (words over
+          icons). Still far denser than the pre-CAPP-122 full-width stacked buttons: one
+          wrapping row of snug pills, muted at rest, hover DEEPENS (never a hover-REVEAL).
+          Each is a distinct focusable <button> whose VISIBLE LABEL carries the meaning;
+          aria-label + title are supplements.
+            - "Memory" + "Context" render in BOTH modes (the untagged "All" bucket has
               its own durable memory + launch context — this is the untagged entry point,
               preserved; the handlers capture the workspaceId at click time).
-            - ✏ rename + 🗑 delete render only for a SPECIFIC active workspace. */}
+            - "Rename" + "Delete" render only for a SPECIFIC active workspace. */}
       <div className="workspace-controls">
         <button
           type="button"
@@ -310,7 +313,7 @@ export default function WorkspaceSwitcher({
           aria-label="Open workspace memory"
           onClick={onOpenWorkspaceMemory}
         >
-          <span aria-hidden="true">🧠</span>
+          Memory
         </button>
         <button
           type="button"
@@ -323,7 +326,7 @@ export default function WorkspaceSwitcher({
           aria-label="Open context inspector"
           onClick={onOpenContextInspector}
         >
-          <span aria-hidden="true">📄</span>
+          Context
         </button>
         {!isAllActive && (
           <>
@@ -332,11 +335,11 @@ export default function WorkspaceSwitcher({
               className={`workspace-ctl-btn wsctl-rename${editing ? " is-active" : ""}`}
               title="Rename workspace"
               aria-label={`Rename workspace ${active!.name}`}
-              // ✏ enters inline-rename mode; Esc or clicking away (onBlur=commitRename)
+              // Enters inline-rename mode; Esc or clicking away (onBlur=commitRename)
               // exits. Open-only by design, NOT a close toggle: the input blurs before
-              // this click fires, so `editing` is already false here — clicking ✏ while
-              // editing just re-opens the (already-committed) name. The !editing guard
-              // is defensive.
+              // this click fires, so `editing` is already false here — clicking Rename
+              // while editing just re-opens the (already-committed) name. The !editing
+              // guard is defensive.
               onClick={() => {
                 if (!editing) {
                   setEditValue(active!.name)
@@ -344,7 +347,7 @@ export default function WorkspaceSwitcher({
                 }
               }}
             >
-              <span aria-hidden="true">✏</span>
+              Rename
             </button>
             <button
               type="button"
@@ -361,7 +364,7 @@ export default function WorkspaceSwitcher({
                 }
               }}
             >
-              <span aria-hidden="true">🗑</span>
+              Delete
             </button>
           </>
         )}
