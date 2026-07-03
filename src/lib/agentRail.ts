@@ -36,13 +36,23 @@ export interface RailCost {
 
 /**
  * Sum the per-turn {@link ResultCost} across an active terminal's transcript blocks
- * into one session-cumulative figure for the rail's COST footer. Each turn-complete
- * `result` block carries its own cost (parsed in agentTranscript.ts); this folds them.
+ * into one spawn-cumulative figure for the rail's COST footer. Each turn-complete
+ * `result` block carries THIS TURN's own cost + tokens; this folds them.
+ *
+ * CAPP-125 — the block's `costUsd` is the PER-TURN DELTA, not the raw
+ * `result.total_cost_usd` (which is CUMULATIVE per process — live-proven in
+ * resultCostSemantics.fixtures.ts). The cumulative→delta conversion happens upstream at
+ * the fold ({@link toPerTurnCost} in useAgentCost / reduceTranscript), so summing here is
+ * correct. Summing the RAW cumulatives instead triangular-overcounts (Σ of the running
+ * totals showed ~$105 for a ~$26 spawn — the CAPP-125 bug). `totalTokens` was always
+ * per-turn (built from the top-level `usage` object), so it was already summed correctly.
  *
  * Deliberate v1 limitation (design doc Q5 / risk 4): this is a RENDERER-side sum over
- * the in-memory folded blocks, so it resets on a transcript rehydrate (BO-12) and
+ * the in-memory folded blocks, so it counts only the CURRENT spawn — it resets on a
+ * respawn/interrupt (the terminal mints a fresh id, useAgentCost prunes the old) and
  * misses turns scrolled out of the cache. That's accepted for a glance number — a
- * durable per-session total (a SessionService field) is a later option.
+ * durable per-session total (a SessionService field) is a later option. The footer is
+ * labeled "this spawn" so the window it measures is honest.
  *
  * Pure + tolerant: a block with no `result`/`cost`, or a cost with all-undefined
  * fields, simply contributes nothing. `costUsd`/`totalTokens` stay `undefined` (not
