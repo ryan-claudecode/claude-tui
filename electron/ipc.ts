@@ -55,7 +55,7 @@ import { SttService } from "./services/stt"
 import { createSttRuntimeDeps } from "./stt/runtime"
 import { MODEL_DIRNAME } from "./stt/protocol"
 import { resolveSttEnabled, resolveSttHotwords } from "./config"
-import { deriveHotwords } from "./stt/hotwords"
+import { deriveHotwords, gatherContextProse } from "./stt/hotwords"
 import { collectWorkspaceNames } from "./stt/runtime"
 
 export const sessionService = new TerminalService()
@@ -423,24 +423,26 @@ export async function setupIpc(win: BrowserWindow) {
   ]
   function regenerateHotwords(): void {
     try {
+      // Review fix 3 — the CHEAP gates first: most installs have STT disabled or the model
+      // not yet downloaded (the DEFAULT state), and regen hangs off hot seams (memory
+      // mutations, workspace switches). Never pay the workspace walk (or a doomed tokens.txt
+      // read) there. modelPresent() (4 existsSync) instead of status() because the
+      // download-ready hook (fix 2) fires from INSIDE acquire(), where `acquiring` is still
+      // true and status() would still read "downloading".
       const cfg = loadConfig()
+      if (!resolveSttEnabled(cfg)) return
+      if (!sttService.modelPresent()) return
       const wsId = workspaceService.getActiveId()
       const dir = workspaceService.getActiveWorkspaceDir()
       const fileNames = dir ? collectWorkspaceNames(dir) : []
-      const prose: string[] = []
-      if (wsId != null) {
-        const mem = workspaceMemoryService.getMemory(wsId)
-        if (mem.instructions) prose.push(mem.instructions)
-        for (const f of mem.findings) if (f.text) prose.push(f.text)
-      }
-      for (const s of workSessionService.list()) {
-        // Scope to the active workspace (untagged sessions contribute only when untagged is active).
-        if ((s.workspaceId ?? undefined) !== (wsId ?? undefined)) continue
-        const sec = workSessionService.getSessionContextSections(s.id)
-        if (!sec) continue
-        if (sec.summary) prose.push(sec.summary)
-        for (const n of sec.active) if (n.text) prose.push(n.text)
-      }
+      // Review fix 5 — gatherContextProse reads the ACTIVE bucket, including the UNTAGGED
+      // "All" bucket (getMemory(null)) + untagged sessions when no workspace is active.
+      const prose = gatherContextProse({
+        activeWorkspaceId: wsId,
+        getMemory: (id) => workspaceMemoryService.getMemory(id),
+        listSessions: () => workSessionService.list(),
+        getSessionSections: (id) => workSessionService.getSessionContextSections(id),
+      })
       const words = deriveHotwords({
         extras: resolveSttHotwords(cfg),
         terms: [...MODEL_ALIASES, ...EFFORT_LEVELS, ...HOTWORD_CLI_FLAGS],
@@ -722,13 +724,20 @@ export async function setupIpc(win: BrowserWindow) {
   // CAPP-120 (STT-1) — push acquisition progress to the renderer's inline download flow
   // (the composer's mic overlay listens on `stt:progress`). Mirrors schedule:updated.
   sttService.onProgress((p) => {
+    // CAPP-121 review fix 2 — the model download just reached its terminal ready phase:
+    // derive the FIRST vocabulary now (fix 3's gates skipped every earlier regen while the
+    // model was absent, and MAJOR 1's retry-safety alone had no trigger to fire on).
+    // regenerateHotwords gates on modelPresent() (true here), not status() ("downloading"
+    // until acquire()'s finally runs), and catches its own errors.
+    if (p.phase === "ready") regenerateHotwords()
     if (!win.isDestroyed()) win.webContents.send("stt:progress", p)
   })
   // `isEnabled` is read FRESH (loadConfig) so a config edit is honored without a restart.
   registerSttHandlers({ sttService, isEnabled: () => resolveSttEnabled(loadConfig()) })
   // CAPP-121 (STT-2) — prime the dictation hotword vocabulary once at launch (after workspaces
   // are discovered + sessions loaded), so the first dictation is already workspace-biased.
-  // Cheap (a bounded walk + a store read); setHotwords keeps the recognizer build lazy.
+  // Review fix 3: this no-ops cheaply when STT is disabled or the model isn't downloaded
+  // (the default state) — the first real regen then happens at download-ready (fix 2).
   regenerateHotwords()
   registerAttentionHandlers({ getAttention: () => attentionService })
   // WS-B — id-based workspace ops (get/create/rename/add-dir/remove-dir/delete/

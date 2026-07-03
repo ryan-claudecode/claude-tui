@@ -612,4 +612,110 @@ describe("SttService — hotword biasing (CAPP-121)", () => {
     const r = await svc.transcribe(new Float32Array([0.1]), 16000)
     expect(r).toEqual({ text: "hello world", engine: MODEL_DIRNAME, ms: 7 })
   })
+
+  it("review MAJOR 1: a FAILED write is NOT sticky — the identical vocabulary retries and applies", async () => {
+    const workers: FakeWorker[] = []
+    const spawn = vi.fn(() => {
+      const w = new FakeWorker()
+      workers.push(w)
+      return w
+    })
+    let fail = true
+    const writeHotwords = vi.fn((w: readonly string[]) => {
+      if (fail) throw new Error("ENOENT: tokens.txt (model not downloaded yet)")
+      return { path: HW_PATH, count: w.length }
+    })
+    const logWarn = vi.fn()
+    const svc = new SttService(baseDeps({ exists: present, spawnWorker: spawn, writeHotwords, logWarn }))
+
+    // The guaranteed first-run shape: a regen fires before the model exists -> write fails.
+    svc.setHotwords(["alpha", "beta"])
+    expect(svc.hotwordCount).toBe(0)
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("ENOENT"))
+
+    // Later (post-download) the SAME vocabulary is derived again — it must RETRY the write,
+    // not be swallowed by the sameWords no-op guard.
+    fail = false
+    svc.setHotwords(["alpha", "beta"])
+    expect(writeHotwords).toHaveBeenCalledTimes(2)
+    expect(svc.hotwordCount).toBe(2)
+
+    // And the next transcribe builds the recognizer WITH the hotwords file.
+    const r = await svc.transcribe(new Float32Array([0.1]), 16000)
+    expect((workers[0].sent[0] as InitMsg).hotwordsFile).toBe(HW_PATH)
+    expect(r.hotwordCount).toBe(2)
+  })
+
+  it("review NIT 4: a dirty rebuild is DEFERRED while another decode is in flight", async () => {
+    const workers: FakeWorker[] = []
+    const spawn = vi.fn(() => {
+      const w = new FakeWorker()
+      w.transcribeMode = "silent" // decodes resolve only when we fire results manually
+      workers.push(w)
+      return w
+    })
+    const writeHotwords = vi.fn((w: readonly string[]) => ({ path: HW_PATH, count: w.length }))
+    const svc = new SttService(baseDeps({ exists: present, spawnWorker: spawn, writeHotwords }))
+
+    const p1 = svc.transcribe(new Float32Array([0.1]), 16000) // in flight (id 1)
+    await Promise.resolve() // let ensureWorker/init settle
+    svc.setHotwords(["alpha"]) // vocabulary changes while a decode is LIVE
+    const p2 = svc.transcribe(new Float32Array([0.2]), 16000) // overlapping (id 2)
+    await Promise.resolve()
+    // The rebuild is deferred: same worker, nothing killed, no in-flight rejection.
+    expect(spawn).toHaveBeenCalledTimes(1)
+    expect(workers[0].killed).toBe(false)
+
+    // Both decodes complete on the ORIGINAL worker.
+    workers[0].msgCb?.({ type: "result", id: 1, text: "one", ms: 1 })
+    workers[0].msgCb?.({ type: "result", id: 2, text: "two", ms: 1 })
+    await expect(p1).resolves.toMatchObject({ text: "one" })
+    await expect(p2).resolves.toMatchObject({ text: "two" })
+
+    // The NEXT quiet transcribe performs the deferred rebuild with the new hotwords.
+    const p3 = svc.transcribe(new Float32Array([0.3]), 16000)
+    expect(spawn).toHaveBeenCalledTimes(2)
+    expect(workers[0].killed).toBe(true)
+    expect(workers[1].sent[0]).toMatchObject({ type: "init", hotwordsFile: HW_PATH })
+    await Promise.resolve() // let p3's post-await continuation post the transcribe (id 3)
+    workers[1].msgCb?.({ type: "result", id: 3, text: "three", ms: 1 })
+    await expect(p3).resolves.toMatchObject({ text: "three", hotwordCount: 1 })
+  })
+
+  it("review MINOR 2: acquire() reaching its terminal ready phase fires the onProgress seam the hotword regen hooks", async () => {
+    // Full fresh-acquisition run (the vfs shape from the acquisition suite): the wiring layer
+    // (ipc.ts) subscribes onProgress and calls regenerateHotwords on phase === "ready" — this
+    // pins that the seam FIRES at download completion, when the model is finally present.
+    const vfs = makeVfs()
+    const download = vi.fn(async () => {
+      vfs.set.add(join(ROOT, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2"))
+    })
+    const extract = vi.fn(async () => {
+      for (const p of extractedFilePaths) vfs.set.add(p)
+    })
+    const svc = new SttService(
+      baseDeps({ exists: vfs.exists, ensureDir: vfs.ensureDir, remove: vfs.remove, rename: vfs.rename, download, extract }),
+    )
+    const presentAtFire: boolean[] = []
+    const statusAtFire: string[] = []
+    const regen = vi.fn(() => {
+      presentAtFire.push(svc.modelPresent())
+      statusAtFire.push(svc.status())
+    })
+    svc.onProgress((p) => {
+      if (p.phase === "ready") regen() // the exact ipc.ts hook shape
+    })
+    await svc.acquire()
+    expect(regen).toHaveBeenCalledTimes(1)
+    // AT FIRE TIME the model is already present — so ipc's regen gate (modelPresent()) passes.
+    expect(presentAtFire).toEqual([true])
+    // …while status() still reads "downloading" (acquiring flips false only in the finally),
+    // which is exactly why the gate must NOT be status() === "ready".
+    expect(statusAtFire).toEqual(["downloading"])
+
+    // The already-present early-return path also emits ready -> regen fires again (harmless,
+    // the regen itself is idempotent via the sameWords guard).
+    await svc.acquire()
+    expect(regen).toHaveBeenCalledTimes(2)
+  })
 })

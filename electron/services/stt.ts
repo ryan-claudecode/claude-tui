@@ -120,11 +120,15 @@ export class SttService {
   private disposed = false
 
   /** CAPP-121 (STT-2) — the current workspace-vocabulary hotword state.
-   *  `hotwords` is the raw entry list last handed to {@link setHotwords}; `hotwordsPath`/
+   *  `hotwords` is the last vocabulary that reached a TERMINAL SUCCESSFUL state (file written,
+   *  or a deliberate empty/no-writer plain-decode) — it is the baseline for the sameWords
+   *  no-op guard. Review MAJOR 1: it is set to NULL after a FAILED write, so a later regen
+   *  with the IDENTICAL word list is NEVER swallowed by the guard — it retries the write.
+   *  (A sticky failure would leave biasing silently inert forever.) `hotwordsPath`/
    *  `appliedHotwordCount` reflect the MATERIALIZED file (null path => no biasing). `dirty`
    *  means a live warm worker was built with the OLD config and must be rebuilt LAZILY on the
-   *  next transcribe — so a workspace switch mid-recording never churns the recognizer. */
-  private hotwords: string[] = []
+   *  next quiet transcribe — so a workspace switch mid-recording never churns the recognizer. */
+  private hotwords: string[] | null = []
   private hotwordsPath: string | null = null
   private appliedHotwordCount = 0
   private hotwordsDirty = false
@@ -203,8 +207,9 @@ export class SttService {
   setHotwords(words: readonly string[]): void {
     if (this.disposed) return
     const next = words.filter((w) => typeof w === "string" && w.trim().length > 0)
-    if (sameWords(this.hotwords, next)) return
-    this.hotwords = [...next]
+    // The no-op guard compares against the last KNOWN-GOOD vocabulary only — after a failed
+    // write `this.hotwords` is null, so an identical retry always falls through (MAJOR 1).
+    if (this.hotwords !== null && sameWords(this.hotwords, next)) return
     if (this.deps.writeHotwords && next.length > 0) {
       try {
         const { path, count } = this.deps.writeHotwords(next)
@@ -216,12 +221,22 @@ export class SttService {
         this.deps.logWarn?.(`stt setHotwords failed: ${message}`)
         this.hotwordsPath = null
         this.appliedHotwordCount = 0
+        // Review MAJOR 1 — do NOT commit the vocabulary baseline: null means "no known-good
+        // state", so the NEXT regen (even byte-identical) bypasses the guard and RETRIES.
+        // The first-run case (a regen before the model download → tokens.txt ENOENT) would
+        // otherwise leave biasing permanently inert. A stale live worker may still be biased
+        // by the OLD file, so mark dirty to rebuild it plain.
+        this.hotwords = null
+        this.hotwordsDirty = true
+        return
       }
     } else {
       // No writer wired (tests / unsupported) or an empty vocabulary => plain decoding.
+      // This IS a terminal successful state — commit it below.
       this.hotwordsPath = null
       this.appliedHotwordCount = 0
     }
+    this.hotwords = [...next]
     // A live worker was built with the previous config — rebuild it lazily on next transcribe.
     this.hotwordsDirty = true
   }
@@ -473,8 +488,11 @@ export class SttService {
     // CAPP-121 (STT-2) — the LAZY hotword rebuild: if the vocabulary changed since this warm
     // worker was built, drop it here (between utterances, never mid-recording) so ensureWorker
     // respawns with the new config. No live worker => nothing to drop; ensureWorker just builds
-    // fresh with the current config.
-    if (this.hotwordsDirty) {
+    // fresh with the current config. Review NIT 4 — if another decode is IN FLIGHT (split-view
+    // composers share this one service; the IPC handler has no single-flight), DEFER the
+    // rebuild: keep the dirty flag set and never failWorker over a live decode — the next
+    // quiet transcribe performs it.
+    if (this.hotwordsDirty && this.pending.size === 0) {
       this.hotwordsDirty = false
       if (this.worker) this.failWorker(new Error("hotwords changed — rebuilding recognizer"))
     }

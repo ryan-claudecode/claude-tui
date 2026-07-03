@@ -7,6 +7,7 @@ import {
   phraseFromSource,
   extractSignificantWords,
   deriveHotwords,
+  gatherContextProse,
   spellWord,
   spellPhrase,
   encodeHotwordLines,
@@ -121,6 +122,45 @@ describe("deriveHotwords — folding, dedup, cap, priority", () => {
 
   it("empty inputs -> empty vocabulary", () => {
     expect(deriveHotwords({})).toEqual([])
+  })
+})
+
+describe("gatherContextProse — context-engine prose (review NIT 5)", () => {
+  const memories: Record<string, { instructions: string; findings: { text: string }[] }> = {
+    "ws-1": { instructions: "ws1 standing rules", findings: [{ text: "WsOneFinding" }] },
+    untagged: { instructions: "global standing rules", findings: [{ text: "GlobalFinding" }] },
+  }
+  const base = {
+    // getMemory(null) => the untagged "All" bucket, like WorkspaceMemoryService.
+    getMemory: (id: string | null) => memories[id ?? "untagged"],
+    listSessions: () => [
+      { id: "s1", workspaceId: "ws-1" },
+      { id: "s2" }, // an UNTAGGED session
+    ],
+    getSessionSections: (id: string) =>
+      id === "s1"
+        ? { summary: "s1 summary", active: [{ text: "S1Finding" }] }
+        : { summary: "s2 summary", active: [{ text: "S2Finding" }] },
+  }
+
+  it("an active workspace reads ITS bucket + ITS sessions only", () => {
+    const prose = gatherContextProse({ ...base, activeWorkspaceId: "ws-1" })
+    expect(prose).toEqual(["ws1 standing rules", "WsOneFinding", "s1 summary", "S1Finding"])
+  })
+
+  it("NO active workspace reads the UNTAGGED 'All' bucket + untagged sessions", () => {
+    const prose = gatherContextProse({ ...base, activeWorkspaceId: null })
+    expect(prose).toEqual(["global standing rules", "GlobalFinding", "s2 summary", "S2Finding"])
+  })
+
+  it("empty instructions / missing sections contribute nothing (no empty strings)", () => {
+    const prose = gatherContextProse({
+      activeWorkspaceId: null,
+      getMemory: () => ({ instructions: "", findings: [] }),
+      listSessions: () => [{ id: "s9" }],
+      getSessionSections: () => undefined,
+    })
+    expect(prose).toEqual([])
   })
 })
 

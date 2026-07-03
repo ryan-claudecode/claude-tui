@@ -166,6 +166,47 @@ export function deriveHotwords(inputs: HotwordInputs, opts?: { max?: number }): 
   return out
 }
 
+/** The context-engine surfaces {@link gatherContextProse} reads — injected (the way
+ *  contextInject reads the stores) so the assembly stays pure + hermetically testable. */
+export interface ContextProseDeps {
+  /** The ACTIVE workspace id, or null when none — null reads the untagged "All" bucket. */
+  activeWorkspaceId: string | null
+  /** Workspace-memory bucket lookup. MUST accept null (the untagged bucket), like
+   *  `WorkspaceMemoryService.getMemory`. */
+  getMemory: (workspaceId: string | null) => {
+    instructions: string
+    findings: ReadonlyArray<{ text: string }>
+  }
+  listSessions: () => ReadonlyArray<{ id: string; workspaceId?: string }>
+  getSessionSections: (
+    sessionId: string,
+  ) => { summary: string; active: ReadonlyArray<{ text: string }> } | undefined
+}
+
+/**
+ * Gather the context-engine PROSE feeding the active workspace's dictation vocabulary:
+ * the workspace-memory bucket (standing instructions + finding texts) plus every matching
+ * live session's summary + active findings. Review NIT 5 — a null active workspace reads
+ * the UNTAGGED "All" bucket (getMemory(null)) and the untagged sessions, so the global
+ * scope contributes vocabulary exactly like a real workspace does.
+ */
+export function gatherContextProse(deps: ContextProseDeps): string[] {
+  const prose: string[] = []
+  const wsId = deps.activeWorkspaceId
+  const mem = deps.getMemory(wsId)
+  if (mem.instructions) prose.push(mem.instructions)
+  for (const f of mem.findings) if (f.text) prose.push(f.text)
+  for (const s of deps.listSessions()) {
+    // Scope to the active workspace; an untagged session matches the null/untagged scope.
+    if ((s.workspaceId ?? null) !== wsId) continue
+    const sec = deps.getSessionSections(s.id)
+    if (!sec) continue
+    if (sec.summary) prose.push(sec.summary)
+    for (const n of sec.active) if (n.text) prose.push(n.text)
+  }
+  return prose
+}
+
 // ---------------------------------------------------------------------------
 // PURE CORE — char-level BPE tokenization (see the SPIKE VERDICT above)
 // ---------------------------------------------------------------------------
