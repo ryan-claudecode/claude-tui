@@ -89,9 +89,10 @@ describe("AgentComposer — CAPP-120 dictation mic", () => {
 describe("AgentComposer — dictation progress helpers", () => {
   it("labels each acquisition phase", () => {
     expect(dictationProgressLabel(null)).toMatch(/Preparing/)
-    expect(dictationProgressLabel({ phase: "downloading", receivedBytes: 340_000_000, totalBytes: 680_000_000 })).toMatch(
-      /Downloading.*324.*648.*MB/,
-    )
+    // CAPP-124 — when the total is known the download label leads with the percent.
+    const dl = dictationProgressLabel({ phase: "downloading", receivedBytes: 340_000_000, totalBytes: 680_000_000 })
+    expect(dl).toMatch(/Downloading.*324.*648.*MB/)
+    expect(dl).toMatch(/50%/)
     expect(dictationProgressLabel({ phase: "downloading", receivedBytes: 1_000_000 })).toMatch(/Downloading/)
     expect(dictationProgressLabel({ phase: "extracting" })).toBe("Extracting…")
     expect(dictationProgressLabel({ phase: "verifying" })).toBe("Verifying…")

@@ -1719,3 +1719,71 @@ test("CAPP-111 / S4: each block has a STATICALLY-VISIBLE top-right expand button
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
+
+test("CAPP-124: the mic sits in the INPUT ROW beside Send, and its download card renders FULLY on-screen (not clipped)", async () => {
+  // Two owner-reported fixes: (1) the 🎤 moved from the footer controls row into the input
+  // row immediately beside Send (2026 chat convention), and (2) the enable/download card was
+  // rebuilt as a VIEWPORT-FIXED overlay — the old position:absolute card lived inside
+  // .agent-composer (a z-index:4 stacking context) → .terminal-container { overflow: hidden }
+  // and got truncated ("clipped behind the sidebar"). Assert the mic's new location AND that
+  // the opened card's bounding box is fully inside the viewport (the clip-bug regression guard).
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-mic-"))
+  await seedStructuredConfig(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+  await win.locator(".sidebar-action", { hasText: "+ New session" }).click()
+
+  const composer = win.locator(".agent-composer")
+  await expect(composer.locator("textarea")).toBeVisible({ timeout: 15_000 })
+
+  // (1) The mic is in the INPUT ROW (.composer-row) beside Send — NOT the footer controls row.
+  const micInRow = composer.locator(".composer-row .composer-mic")
+  await expect(micInRow).toBeVisible({ timeout: 15_000 })
+  await expect(composer.locator(".composer-controls-row .composer-mic")).toHaveCount(0)
+  // Icon-only mic (universal glyph, conventional position) with a supplemental aria-label.
+  await expect(micInRow).toContainText("🎤")
+  await expect(micInRow).toHaveAttribute("aria-label", /dictate|set up voice dictation/i)
+
+  // (2) Clicking it (status not-downloaded) opens the enable/download CONFIRM card + its scrim.
+  await micInRow.click()
+  const card = win.locator(".composer-mic-download")
+  await expect(card).toBeVisible({ timeout: 10_000 })
+  await expect(win.locator(".composer-mic-download-backdrop")).toBeVisible()
+
+  // The initial CONFIRM step never auto-starts: an explicit "Download model" + "Cancel".
+  await expect(card).toContainText(/download the dictation model/i)
+  await expect(card.locator(".composer-mic-download-go")).toContainText(/download model/i)
+  await expect(card.locator(".composer-mic-download-cancel")).toContainText(/cancel/i)
+
+  // THE regression guard — the card's bounding box is FULLY inside the viewport (the clip
+  // bug truncated it against .terminal-container's overflow:hidden). Uses a 1px tolerance
+  // for sub-pixel rounding on the clamped edges.
+  const box = await card.boundingBox()
+  const vp = await win.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }))
+  expect(box).not.toBeNull()
+  if (box) {
+    expect(box.x).toBeGreaterThanOrEqual(-1)
+    expect(box.y).toBeGreaterThanOrEqual(-1)
+    expect(box.x + box.width).toBeLessThanOrEqual(vp.w + 1)
+    expect(box.y + box.height).toBeLessThanOrEqual(vp.h + 1)
+    // It has real area on-screen (not collapsed to a clipped sliver).
+    expect(box.width).toBeGreaterThan(200)
+    expect(box.height).toBeGreaterThan(80)
+  }
+
+  // Cancel closes the card (non-destructive — no download was started).
+  await card.locator(".composer-mic-download-cancel").click()
+  await expect(card).toHaveCount(0, { timeout: 10_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
