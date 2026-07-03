@@ -22,6 +22,7 @@ import type { AttentionService } from "../services/attention"
 import type { WorkspaceMemoryService } from "../services/workspaceMemory"
 import type { ContextInspectorService } from "../services/contextInspector"
 import type { ExportService } from "../services/export"
+import type { ActionButtonService } from "../services/actionButtons"
 import { registerSessionTools } from "./tools/sessions"
 import { registerWorkSessionTools } from "./tools/worksessions"
 import { registerMissionTools } from "./tools/missions"
@@ -31,6 +32,7 @@ import { registerGitTools } from "./tools/git"
 import { registerAppTools } from "./tools/app"
 import { registerWorkspaceTools } from "./tools/workspaces"
 import { registerScheduleTools } from "./tools/schedules"
+import { registerActionButtonTools } from "./tools/actionButtons"
 import { registerUiTools } from "./tools/ui"
 
 export type { TerminalIdentity } from "./tools/shared"
@@ -67,6 +69,7 @@ export function registerTools(
   contextInspector: ContextInspectorService,
   exportService: ExportService,
   scheduler: SchedulerService,
+  actionButtons: ActionButtonService,
   identity: TerminalIdentity = {},
 ) {
   registerSessionTools(server, sessions, broadcast, attention, workSessions, workspaces, identity)
@@ -77,6 +80,7 @@ export function registerTools(
   registerGitTools(server, git, sessions)
   registerWorkspaceTools(server, workspaces, workSessions, workspaceMemory, contextInspector, exportService, identity)
   registerScheduleTools(server, scheduler, workspaces, workSessions, identity)
+  registerActionButtonTools(server, actionButtons, workSessions, identity)
   registerAppTools(
     server,
     sessions,
