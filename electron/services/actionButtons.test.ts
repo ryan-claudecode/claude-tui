@@ -233,6 +233,7 @@ describe("dispatch-target resolution (live terminal vs fresh spawn)", () => {
       isAlive: () => true,
       spawnTerminal: (sid) => { spawned.push(sid); return "fresh" },
       sendPrompt: (terminalId, prompt) => { sent.push({ terminalId, prompt }); return true },
+      killTerminal: () => {},
     }
     const res = dispatchActionButton(deps, "b1", "s1")
     expect(res.ok).toBe(true)
@@ -250,6 +251,7 @@ describe("dispatch-target resolution (live terminal vs fresh spawn)", () => {
       isAlive: () => false, // the existing terminal is dead
       spawnTerminal: () => "fresh",
       sendPrompt: (terminalId, prompt) => { sent.push({ terminalId, prompt }); return true },
+      killTerminal: () => {},
     }
     const res = dispatchActionButton(deps, "b1", "s1")
     expect(res.ok).toBe(true)
@@ -264,10 +266,60 @@ describe("dispatch-target resolution (live terminal vs fresh spawn)", () => {
       isAlive: () => false,
       spawnTerminal: () => "fresh",
       sendPrompt: () => true,
+      killTerminal: () => {},
     }
     expect(dispatchActionButton({ ...base, findButton: () => undefined }, "b1", "s1").ok).toBe(false)
     expect(dispatchActionButton({ ...base, getSession: () => undefined }, "b1", "s1").ok).toBe(false)
     expect(dispatchActionButton({ ...base, spawnTerminal: () => undefined }, "b1", "s1").ok).toBe(false)
     expect(dispatchActionButton({ ...base, sendPrompt: () => false }, "b1", "s1").ok).toBe(false)
+  })
+
+  it("REAPS a just-spawned terminal when the prompt can't land (the xterm-engine leak)", () => {
+    // No live structured terminal → spawn happens; sendPrompt fails (e.g. the legacy
+    // xterm engine spawned an interactive PTY sendAgentMessage can't feed) → the
+    // spawned terminal MUST be killed, never left running.
+    const killed: string[] = []
+    const deps: DispatchDeps = {
+      findButton: () => ({ id: "b1", label: "L", prompt: "P", scope: "session", ownerId: "s1", createdBy: "agent", createdAt: 0 }),
+      getSession: () => ({ name: "s", terminals: [] }),
+      isAlive: () => false,
+      spawnTerminal: () => "fresh",
+      sendPrompt: () => false,
+      killTerminal: (id) => killed.push(id),
+    }
+    const res = dispatchActionButton(deps, "b1", "s1")
+    expect(res.ok).toBe(false)
+    expect(res.spawned).toBe(true)
+    expect(killed).toEqual(["fresh"])
+  })
+
+  it("NEVER kills a pre-existing terminal on a failed send (reuse path)", () => {
+    const killed: string[] = []
+    const deps: DispatchDeps = {
+      findButton: () => ({ id: "b1", label: "L", prompt: "P", scope: "session", ownerId: "s1", createdBy: "agent", createdAt: 0 }),
+      getSession: () => ({ name: "s", terminals: [{ id: "live", engine: "structured", lastState: "idle" }] }),
+      isAlive: () => true, // a live structured terminal exists → reused, not spawned
+      spawnTerminal: () => "fresh",
+      sendPrompt: () => false,
+      killTerminal: (id) => killed.push(id),
+    }
+    const res = dispatchActionButton(deps, "b1", "s1")
+    expect(res.ok).toBe(false)
+    expect(res.spawned).toBe(false)
+    expect(killed).toHaveLength(0) // the user's terminal is untouched
+  })
+
+  it("a throwing killTerminal doesn't mask the error result (best-effort reap)", () => {
+    const deps: DispatchDeps = {
+      findButton: () => ({ id: "b1", label: "L", prompt: "P", scope: "session", ownerId: "s1", createdBy: "agent", createdAt: 0 }),
+      getSession: () => ({ name: "s", terminals: [] }),
+      isAlive: () => false,
+      spawnTerminal: () => "fresh",
+      sendPrompt: () => false,
+      killTerminal: () => { throw new Error("already gone") },
+    }
+    const res = dispatchActionButton(deps, "b1", "s1")
+    expect(res.ok).toBe(false)
+    expect(res.spawned).toBe(true)
   })
 })

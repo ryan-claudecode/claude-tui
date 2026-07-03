@@ -8,7 +8,12 @@ import {
   type RailKnows,
   type RuledOutLine,
 } from "../lib/agentRail"
-import { resolveClick, type ActionButtonView } from "../lib/actionButtonRow"
+import {
+  resolveClick,
+  buttonsKeyOf,
+  shouldDisarm,
+  type ActionButtonView,
+} from "../lib/actionButtonRow"
 
 interface Props {
   /** Effective open/collapsed (from useAgentRail → effectiveRailOpen). Open = full
@@ -57,6 +62,12 @@ interface Props {
    *  session's buttons ∪ its workspace's buttons, via deriveVisibleButtons in App.tsx).
    *  Absent/empty → the group doesn't render. */
   actionButtons?: readonly ActionButtonView[]
+  /** CAPP-104 — the ACTIVE session id (the dispatch TARGET). Part of the armed-confirm
+   *  disarm trigger: a workspace-scoped button's visible list is IDENTICAL across two
+   *  sessions in one workspace, so without this an armed confirm would survive a session
+   *  switch and the second click would retarget the destructive prompt at the NEW
+   *  session (mirrors the elapsed-timer effect's `terminalId` dep). */
+  sessionId?: string | null
   /** Dispatch a button's stored prompt to its owning session's live agent terminal
    *  (spawning a fresh one if none is alive). */
   onDispatchButton?: (button: ActionButtonView) => void
@@ -98,6 +109,7 @@ export default function AgentRail({
   memoryUpdated,
   onReprime,
   actionButtons,
+  sessionId,
   onDispatchButton,
   onRemoveButton,
 }: Props) {
@@ -106,14 +118,26 @@ export default function AgentRail({
   const costLabel = formatCost(cost)
 
   // CAPP-104 (AB-1) — the two-step inline-confirm state, KEYED BY BUTTON ID so an armed
-  // confirm can never leak across rows (the CAPP-115 lesson). Cleared whenever the
-  // visible set changes so a removed/re-scoped button can't leave a stale arm behind.
+  // confirm can never leak across rows (the CAPP-115 lesson). The RESET decision is the
+  // pure, exhaustively-tested `shouldDisarm` (this effect is a thin shell over it):
+  // disarm on a visible-list change (removed/re-scoped button) AND on an ACTIVE-SESSION
+  // switch — the dispatch target changed, and for workspace-scoped buttons the list is
+  // identical across two sessions in one workspace, so the list half alone would let a
+  // second click retarget the destructive prompt at the new session.
   const [armedButtonId, setArmedButtonId] = useState<string | null>(null)
   const buttons = actionButtons ?? []
-  const buttonsKey = buttons.map((b) => b.id).join(",")
+  const buttonsKey = buttonsKeyOf(buttons)
+  const armCtxRef = useRef<{ key: string; session: string | null | undefined }>({
+    key: buttonsKey,
+    session: sessionId,
+  })
   useEffect(() => {
-    setArmedButtonId(null)
-  }, [buttonsKey])
+    const prev = armCtxRef.current
+    armCtxRef.current = { key: buttonsKey, session: sessionId }
+    if (shouldDisarm(prev.key, buttonsKey, prev.session, sessionId)) {
+      setArmedButtonId(null)
+    }
+  }, [buttonsKey, sessionId])
 
   const handleButtonClick = (button: ActionButtonView) => {
     const outcome = resolveClick(button, armedButtonId)

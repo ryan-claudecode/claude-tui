@@ -49,6 +49,12 @@ export function registerActionButtonHandlers(deps: {
         spawnTerminal: (sessionId) => workSessionService.addTerminalToSession(sessionId)?.terminalId,
         sendPrompt: (terminalId, prompt) =>
           terminalService.sendAgentMessage(terminalId, userMessage(prompt)),
+        // The failed-delivery reaper — only ever invoked on a terminal THIS dispatch
+        // spawned (the resolver guards on `spawned`; e.g. the xterm legacy engine,
+        // where sendAgentMessage always returns false). The scheduler's kill seam.
+        killTerminal: (terminalId) => {
+          terminalService.kill(terminalId)
+        },
       },
       buttonId,
       targetSessionId,

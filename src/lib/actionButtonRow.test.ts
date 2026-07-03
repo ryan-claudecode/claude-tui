@@ -2,14 +2,18 @@ import { describe, it, expect } from "vitest"
 import {
   deriveVisibleButtons,
   resolveClick,
+  buttonsKeyOf,
+  shouldDisarm,
   UNTAGGED_OWNER_ID,
   type ActionButtonView,
 } from "./actionButtonRow"
 
 /**
  * CAPP-104 (AB-1) — pure rail view-model. Covers the visible-subset derivation
- * (session ∪ workspace, untagged mapping, no-session empty) and the two-step
- * inline-confirm state machine (keyed by id — an armed confirm never leaks across rows).
+ * (session ∪ workspace, untagged mapping, no-session empty), the two-step
+ * inline-confirm state machine (keyed by id — an armed confirm never leaks across rows),
+ * and the armed-RESET decision (`shouldDisarm` — the component's effect is a thin shell
+ * over it, so this is where the reset mechanism is exhaustively pinned).
  */
 
 const b = (over: Partial<ActionButtonView>): ActionButtonView => ({
@@ -61,5 +65,47 @@ describe("resolveClick — two-step confirm state machine", () => {
     // Button A is armed; clicking confirm button B arms B and does NOT dispatch A.
     const out = resolveClick({ id: "B", confirm: true }, "A")
     expect(out).toEqual({ armedId: "B", dispatch: false })
+  })
+})
+
+describe("shouldDisarm — the armed-reset decision (exhaustive)", () => {
+  // The list halves, expressed through buttonsKeyOf so the test pins the SAME
+  // signature the component feeds in.
+  const keyAB = buttonsKeyOf([b({ id: "A" }), b({ id: "B", confirm: true })])
+  const keyA = buttonsKeyOf([b({ id: "A" })])
+  const keyAC = buttonsKeyOf([b({ id: "A" }), b({ id: "C" })])
+
+  it("armed → visible list changed (button added/replaced) DISARMS", () => {
+    expect(shouldDisarm(keyAB, keyAC, "s1", "s1")).toBe(true)
+  })
+
+  it("armed → the armed button was REMOVED from the list DISARMS", () => {
+    // keyAB → keyA: button B (the armed one) is gone.
+    expect(shouldDisarm(keyAB, keyA, "s1", "s1")).toBe(true)
+  })
+
+  it("armed → ACTIVE-SESSION switch DISARMS even with an IDENTICAL list", () => {
+    // The workspace-button retarget hazard: two sessions in one workspace share the
+    // exact same visible list, so the list half alone would let the armed confirm
+    // survive the switch and fire at the new session.
+    expect(shouldDisarm(keyAB, keyAB, "s1", "s2")).toBe(true)
+  })
+
+  it("armed → same list AND same session STAYS ARMED", () => {
+    expect(shouldDisarm(keyAB, keyAB, "s1", "s1")).toBe(false)
+  })
+
+  it("armed → session cleared (s1 → none) DISARMS", () => {
+    expect(shouldDisarm(keyAB, keyAB, "s1", null)).toBe(true)
+    expect(shouldDisarm(keyAB, keyAB, "s1", undefined)).toBe(true)
+  })
+
+  it("null ↔ undefined session flicker is NOT a switch (normalized)", () => {
+    expect(shouldDisarm(keyAB, keyAB, null, undefined)).toBe(false)
+    expect(shouldDisarm(keyAB, keyAB, undefined, null)).toBe(false)
+  })
+
+  it("both halves changed at once DISARMS (no cancellation)", () => {
+    expect(shouldDisarm(keyAB, keyA, "s1", "s2")).toBe(true)
   })
 })

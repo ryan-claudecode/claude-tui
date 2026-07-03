@@ -92,6 +92,11 @@ export interface DispatchDeps {
   spawnTerminal: (sessionId: string) => string | undefined
   /** Deliver the prompt to a terminal via the stdin sink; returns whether it landed. */
   sendPrompt: (terminalId: string, prompt: string) => boolean
+  /** Kill ONLY a terminal this dispatch just spawned (the failed-delivery reaper —
+   *  matches the scheduler's defense: a spawned terminal whose prompt can't land
+   *  would sit there forever, and on the xterm legacy engine EVERY click would leak
+   *  another live PTY). NEVER called for a pre-existing terminal. */
+  killTerminal: (terminalId: string) => void
 }
 
 export interface DispatchResult {
@@ -127,6 +132,16 @@ export function dispatchActionButton(
     if (!target) return { ok: false, error: "Couldn't open a terminal for the session." }
   }
   if (!deps.sendPrompt(target, button.prompt)) {
+    // A failed delivery into a terminal WE just spawned leaves a zombie that will
+    // never do anything — reap it (the scheduler's fire() defense). A PRE-EXISTING
+    // terminal is the user's; never kill it over a failed send.
+    if (spawned) {
+      try {
+        deps.killTerminal(target)
+      } catch {
+        /* best-effort */
+      }
+    }
     return { ok: false, error: "The terminal couldn't accept the prompt.", spawned }
   }
   return { ok: true, sessionName: session.name, terminalId: target, spawned }

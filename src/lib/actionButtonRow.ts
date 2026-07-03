@@ -67,3 +67,31 @@ export function resolveClick(
   if (armedId === button.id) return { armedId: null, dispatch: true }
   return { armedId: button.id, dispatch: false }
 }
+
+/** A stable signature of the visible button list — the disarm trigger's list half. */
+export function buttonsKeyOf(buttons: readonly { id: string }[]): string {
+  return buttons.map((b) => b.id).join(",")
+}
+
+/**
+ * The armed-confirm RESET decision (pure, exhaustively tested — the component is a thin
+ * effect over it). An armed confirm must be dropped whenever its CONTEXT changes:
+ *
+ *  • the visible button list changed (a button was added/removed/re-scoped — the armed
+ *    row may be gone or re-ordered), OR
+ *  • the ACTIVE SESSION switched (the dispatch TARGET changed: for a workspace-scoped
+ *    button the list is identical across two sessions in one workspace, so without this
+ *    half the second click would fire the destructive prompt at the NEW session —
+ *    retargeting past the confirm guard).
+ *
+ * `null` and `undefined` session ids are normalized (both mean "no session") so a
+ * null↔undefined flicker never counts as a switch.
+ */
+export function shouldDisarm(
+  prevButtonsKey: string,
+  nextButtonsKey: string,
+  prevSessionId: string | null | undefined,
+  nextSessionId: string | null | undefined,
+): boolean {
+  return prevButtonsKey !== nextButtonsKey || (prevSessionId ?? null) !== (nextSessionId ?? null)
+}

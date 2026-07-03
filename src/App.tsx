@@ -1521,6 +1521,7 @@ export default function App() {
         memoryUpdated={activeTerminalForRail?.pendingMemoryDelta === true}
         onReprime={activeSessionId && activeTerminalId ? handleReprime : undefined}
         actionButtons={railActionButtons}
+        sessionId={activeSessionId}
         onDispatchButton={handleDispatchActionButton}
         onRemoveButton={removeActionButton}
       />
