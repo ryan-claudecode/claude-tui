@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react"
 import type { StreamEvent } from "../../electron/services/streamProtocol"
-import { extractCost, type ResultBlock } from "../lib/agentTranscript"
+import {
+  extractCost,
+  lastCumulativeCostUsd,
+  toPerTurnCost,
+  type ResultBlock,
+} from "../lib/agentTranscript"
 
 /**
  * Agent Rail (v1) — a lightweight, per-terminal accumulator of turn-complete `result`
@@ -27,16 +32,22 @@ export function useAgentCost(terminalId: string | null): ResultBlock[] {
     const offStream = window.api.onStreamEvent((payload) => {
       const event = payload.event as StreamEvent
       if (event.kind !== "result") return
-      const block: ResultBlock = {
-        kind: "result",
-        id: `cost-${payload.terminalId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        isError: event.isError,
-        subtype: event.subtype,
-        cost: extractCost(event.raw),
-      }
       setByTerminal((prev) => {
+        const existing = prev.get(payload.terminalId) ?? []
+        // CAPP-125 — `total_cost_usd` is cumulative per process, so fold this turn's
+        // PER-TURN delta off the terminal's prior result blocks (each carries its raw
+        // cumulative). sumCost then sums per-turn deltas → the true spawn total, not a
+        // triangular overcount of the running cumulatives.
+        const cost = toPerTurnCost(extractCost(event.raw), lastCumulativeCostUsd(existing))
+        const block: ResultBlock = {
+          kind: "result",
+          id: `cost-${payload.terminalId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          isError: event.isError,
+          subtype: event.subtype,
+          cost,
+        }
         const next = new Map(prev)
-        next.set(payload.terminalId, [...(prev.get(payload.terminalId) ?? []), block])
+        next.set(payload.terminalId, [...existing, block])
         return next
       })
     })

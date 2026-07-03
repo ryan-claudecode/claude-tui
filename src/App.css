@@ -4104,6 +4104,15 @@ body {
   color: var(--text-3);
 }
 
+/* CAPP-125 — the honest "· this spawn" qualifier on the COST label: the number covers
+   only the current spawn (resets on respawn/interrupt), so say so, quietly. */
+.agent-rail-cost-scope {
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  color: var(--text-4, var(--text-3));
+  text-transform: none;
+}
+
 /* NOW — one live line: a dot + the action, plus the running elapsed while busy. */
 .agent-rail-now-line {
   display: flex;

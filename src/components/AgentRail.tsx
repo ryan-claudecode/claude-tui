@@ -333,13 +333,19 @@ export default function AgentRail({
         )}
       </div>
 
-      {/* COST — session-cumulative spend for the active terminal, summed renderer-side
-          from the per-turn ResultCost. Pinned to the footer; present only when there
-          is turn data. Accepted v1 limitation: resets on transcript rehydrate / misses
-          scrolled-out turns (design doc Q5) — a glance number, not an audit. */}
+      {/* COST — spend for the active terminal's CURRENT SPAWN, summed renderer-side from
+          the per-turn ResultCost (CAPP-125: per-turn deltas off the cumulative
+          total_cost_usd, so no triangular overcount). Pinned to the footer; present only
+          when there is turn data. Labeled "this spawn": it resets on a respawn/interrupt
+          and misses scrolled-out turns (design doc Q5) — a glance number, not an audit. */}
       <div className="agent-rail-footer">
-        <div className="agent-rail-section-label">COST</div>
-        <div className="agent-rail-cost" title="Session-cumulative cost for this terminal">
+        <div className="agent-rail-section-label">
+          COST <span className="agent-rail-cost-scope">· this spawn</span>
+        </div>
+        <div
+          className="agent-rail-cost"
+          title="Spend for this terminal's current spawn (per-turn, summed). Resets on respawn/interrupt."
+        >
           {costLabel ?? "—"}
         </div>
       </div>
