@@ -29,6 +29,10 @@ const companionApi = {
     ipcRenderer.invoke("schedule:update", id, { enabled }),
   scheduleDelete: (id: string) => ipcRenderer.invoke("schedule:delete", id),
   requestScheduleEdit: (id: string) => ipcRenderer.invoke("schedule:request-edit", id),
+  // CAPP-115 review — close a panel by PANEL id via PanelService.hide (the same
+  // `panel:hide` invoke the main window uses). PanelService routes panel:hide back to
+  // every surface the panel lives on, so the companion's own onPanelHide drops it.
+  hidePanel: (panelId: string) => ipcRenderer.invoke("panel:hide", panelId),
   // WW-2b — worktree review approve/reject. `invoke` (not the fire-and-forget
   // `send` the mission controls use) so the review panel can reflect the result
   // (merged → close; conflict → show the preserved-branch conflict state).

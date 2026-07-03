@@ -150,6 +150,9 @@ export default function PanelContent({ panel, api }: PanelContentProps) {
           onSetEnabled={api?.scheduleSetEnabled}
           onDelete={api?.scheduleDelete}
           onEdit={api?.scheduleEdit}
+          // A confirmed delete closes THIS panel (by its PANEL id, not the schedule
+          // id) — never a zombie panel over a dead schedule's stale snapshot.
+          onClosePanel={api ? () => api.hidePanel(panel.id) : undefined}
         />
       )
     case "worktree-review":

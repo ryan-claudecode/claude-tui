@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import type { Recurrence } from "../../../electron/services/scheduleMath"
 import { recurrenceSummary, nextRunText, runStatusTone } from "../../lib/scheduleRow"
+import { scheduleAction, type ScheduleActionEvent } from "../../lib/scheduleActions"
 
 /**
  * CAPP-115 (SCHED-2) — the `schedule` detail panel. Rendered by the shared
@@ -42,6 +43,9 @@ export interface SchedulePanelProps {
   onSetEnabled?: (id: string, enabled: boolean) => void
   onDelete?: (id: string) => void
   onEdit?: (id: string) => void
+  /** Close THIS panel (a confirmed delete closes it — never leave a zombie panel
+   *  with a dead schedule's stale data). Wired by PanelContent over api.hidePanel. */
+  onClosePanel?: () => void
 }
 
 /** Prettier per-status labels for a run-history row (the raw enum otherwise). */
@@ -88,6 +92,7 @@ export default function SchedulePanel({
   onSetEnabled,
   onDelete,
   onEdit,
+  onClosePanel,
 }: SchedulePanelProps) {
   // Re-derive the countdown every 30s (the design cadence). SSR renders the initial
   // value (effects don't run under renderToStaticMarkup) — fine for a static render.
@@ -97,8 +102,30 @@ export default function SchedulePanel({
     return () => clearInterval(t)
   }, [])
 
-  // Two-step inline confirm for Delete (no native window.confirm; testable).
+  // Two-step inline confirm for Delete (no native window.confirm). The DECISIONS live
+  // in the pure `scheduleAction` machine (src/lib/scheduleActions.ts, exhaustively
+  // tested); this component only applies the outcome.
   const [confirmDelete, setConfirmDelete] = useState(false)
+
+  // CAPP-115 review (MAJOR 1) — defensive reset: if this instance is ever re-targeted
+  // at a DIFFERENT schedule (the hosts key PanelContent by panel id, so this should
+  // not happen — belt + braces), the armed confirm must NOT carry over to the new
+  // target. Mirrors the machine's `panel-target-changed` transition.
+  useEffect(() => {
+    setConfirmDelete(false)
+  }, [id])
+
+  const dispatch = (event: ScheduleActionEvent) => {
+    const out = scheduleAction({ confirmArmed: confirmDelete, enabled }, event)
+    setConfirmDelete(out.confirmArmed)
+    const call = out.call
+    if (call?.kind === "edit") onEdit?.(id)
+    else if (call?.kind === "setEnabled") onSetEnabled?.(id, call.enabled)
+    else if (call?.kind === "runNow") onRunNow?.(id)
+    else if (call?.kind === "delete") onDelete?.(id)
+    // A confirmed delete also closes this panel — never a zombie over dead data.
+    if (out.closePanel) onClosePanel?.()
+  }
 
   const view = { enabled, nextRunAt }
 
@@ -131,17 +158,17 @@ export default function SchedulePanel({
       {prompt && <div className="schedule-panel-prompt">{prompt}</div>}
 
       <div className="schedule-panel-actions">
-        <button type="button" className="schedule-panel-btn" onClick={() => onEdit?.(id)}>
+        <button type="button" className="schedule-panel-btn" onClick={() => dispatch({ type: "edit" })}>
           Edit
         </button>
         <button
           type="button"
           className="schedule-panel-btn"
-          onClick={() => onSetEnabled?.(id, !enabled)}
+          onClick={() => dispatch({ type: "toggle-enabled" })}
         >
           {enabled ? "Disable" : "Enable"}
         </button>
-        <button type="button" className="schedule-panel-btn" onClick={() => onRunNow?.(id)}>
+        <button type="button" className="schedule-panel-btn" onClick={() => dispatch({ type: "run-now" })}>
           Run now
         </button>
         <span className="schedule-panel-actions-spacer" />
@@ -150,14 +177,14 @@ export default function SchedulePanel({
             <button
               type="button"
               className="schedule-panel-btn schedule-panel-btn-danger"
-              onClick={() => onDelete?.(id)}
+              onClick={() => dispatch({ type: "delete-confirm" })}
             >
               Confirm delete
             </button>
             <button
               type="button"
               className="schedule-panel-btn"
-              onClick={() => setConfirmDelete(false)}
+              onClick={() => dispatch({ type: "delete-cancel" })}
             >
               Cancel
             </button>
@@ -166,7 +193,7 @@ export default function SchedulePanel({
           <button
             type="button"
             className="schedule-panel-btn schedule-panel-btn-danger"
-            onClick={() => setConfirmDelete(true)}
+            onClick={() => dispatch({ type: "delete-press" })}
           >
             Delete
           </button>

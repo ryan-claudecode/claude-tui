@@ -221,6 +221,12 @@ describe("describeNext", () => {
     expect(describeNext({ enabled: true, nextRunAt: mon(6, 8, 0).toISOString() }, late)).toBe("tomorrow 08:00")
   })
   it("reports '{Weekday} HH:mm' for a fire 2–6 days out", () => {
+    // The LOWER edge (2 calendar days out) — the seam against "tomorrow": Jan 7 is a
+    // Wednesday; the day AFTER tomorrow must name the weekday, not say "tomorrow".
+    expect(describeNext({ enabled: true, nextRunAt: mon(7, 9, 30).toISOString() }, now)).toBe("Wed 09:30")
+    // Calendar-day (not 24h-chunk) boundary: late Mon → early Wed is barely >25h away
+    // but crosses TWO midnights → the weekday branch, not "tomorrow".
+    expect(describeNext({ enabled: true, nextRunAt: mon(7, 0, 30).toISOString() }, mon(5, 23, 0))).toBe("Wed 00:30")
     // now = Mon Jan 5; Jan 8 is a Thursday, 3 calendar days out → unambiguous weekday.
     expect(describeNext({ enabled: true, nextRunAt: mon(8, 9, 30).toISOString() }, now)).toBe("Thu 09:30")
     // The upper edge (6 days out): Jan 11 is a Sunday.

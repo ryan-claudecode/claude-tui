@@ -55,6 +55,7 @@ import { SttService } from "./services/stt"
 import { createSttRuntimeDeps } from "./stt/runtime"
 import { MODEL_DIRNAME } from "./stt/protocol"
 import { resolveSttEnabled, resolveSchedulerMaxConcurrent } from "./config"
+import { syncWindowSchedulePanels } from "./services/schedulePanelSync"
 
 export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
@@ -337,6 +338,16 @@ export async function setupIpc(win: BrowserWindow) {
     if (win.isDestroyed()) return
     if (e.type === "updated") win.webContents.send("schedule:updated", e.schedule)
     else win.webContents.send("schedule:removed", e.id)
+    // CAPP-115 review (MINOR 4 / MAJOR 2) — keep POPPED-OUT (`surface:"window"`)
+    // schedule detail panels live: updated → panelService.update (routes panel:update
+    // to the companion, the CAPP-110 M4 mission pattern); removed → panelService.hide
+    // (a deleted schedule must never leave a zombie panel there — the renderer-side
+    // stale-close only reaches the MAIN mirror). Guarded by isOpen() so a background
+    // tick can never resurrect a closed companion (dismissWindowPanels already dropped
+    // these on close — belt + braces, exactly like the mission block above).
+    if (companionService.isOpen()) {
+      syncWindowSchedulePanels(e, panelService.list(), panelService)
+    }
   })
 
   // WS-B — push active-workspace changes to the main renderer (selection is now

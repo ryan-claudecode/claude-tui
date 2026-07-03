@@ -1,4 +1,4 @@
-import { ipcMain, type BrowserWindow } from "electron"
+import { ipcMain, app, type BrowserWindow } from "electron"
 import type { SchedulerService, ScheduleInput, ScheduleUpdate } from "../services/scheduler"
 
 /**
@@ -22,6 +22,17 @@ export function registerScheduleHandlers(deps: { schedulerService: SchedulerServ
   ipcMain.handle("schedule:delete", (_e, id: string) => schedulerService.delete(id))
   ipcMain.handle("schedule:run-now", (_e, id: string) => schedulerService.runNow(id))
   ipcMain.handle("schedule:request-edit", (_e, id: string) => {
-    if (!win.isDestroyed()) win.webContents.send("schedule:edit", id)
+    if (win.isDestroyed()) return
+    // CAPP-115 review (MINOR 3) — the ScheduleForm overlay lives in the MAIN window,
+    // but the request can come from a POPPED-OUT companion in the foreground. Raise
+    // the main window first (the ipc.ts attention-click pattern: on Windows,
+    // BrowserWindow.focus() alone cannot steal foreground from another window —
+    // restore + show + moveTop + app.focus({steal:true}) is required), THEN send the
+    // edit event so the pre-filled overlay is actually visible and focusable.
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.moveTop()
+    app.focus({ steal: true })
+    win.webContents.send("schedule:edit", id)
   })
 }

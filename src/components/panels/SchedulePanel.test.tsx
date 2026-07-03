@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect } from "vitest"
 import { renderToStaticMarkup } from "react-dom/server"
 import SchedulePanel from "./SchedulePanel"
 
@@ -76,15 +76,15 @@ describe("SchedulePanel — run history per-status tinting", () => {
     expect(html).toContain(">30m<")
   })
 
-  it("wires the button callbacks to the schedule id", () => {
-    // A shallow render can't click, but we can assert the handlers are wired by
-    // rendering with spies present (no throw) — the click paths are exercised via the
-    // shared PanelContent switch test. Here we assert the panel renders with handlers.
-    const onEdit = vi.fn()
-    const onRunNow = vi.fn()
-    const html = renderToStaticMarkup(
-      <SchedulePanel {...baseProps} runHistory={[]} onEdit={onEdit} onRunNow={onRunNow} />,
-    )
+  it("renders without ANY callbacks — degrades gracefully (api-less harness render)", () => {
+    // The click DECISIONS are exhaustively covered in src/lib/scheduleActions.test.ts
+    // (the panel is a thin shell over that pure machine — SSR can't click). What THIS
+    // render proves: with no api-derived callbacks at all, the panel still renders its
+    // full static surface and never throws (mirrors RecallPanel's negative control).
+    const html = renderToStaticMarkup(<SchedulePanel {...baseProps} runHistory={[]} />)
     expect(html).toContain("schedule-panel-actions")
+    expect(html).toContain(">Edit<")
+    expect(html).toContain(">Run now<")
+    expect(html).toContain(">Delete<")
   })
 })

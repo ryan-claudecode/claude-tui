@@ -25,6 +25,7 @@ function mockApi(overrides: Partial<PanelApi> = {}): PanelApi {
     scheduleSetEnabled: vi.fn(),
     scheduleDelete: vi.fn(),
     scheduleEdit: vi.fn(),
+    hidePanel: vi.fn(),
     approveWorktreeTask: vi.fn(async () => null),
     rejectWorktreeTask: vi.fn(async () => null),
     recall: vi.fn(async () => []),

@@ -604,6 +604,7 @@ export default function App() {
   // CAPP-114 (SCHED-1) — the SCHEDULED surface (seed + push, no polling).
   const {
     schedules: allSchedules,
+    seeded: schedulesSeeded,
     create: createSchedule,
     update: updateSchedule,
     toggle: toggleSchedule,
@@ -706,7 +707,7 @@ export default function App() {
     openOverview,
     openTimeline,
     createMission,
-  } = usePanels(refreshOverviewsRef, activeSession, missionsListOpen, allMissions, allSchedules)
+  } = usePanels(refreshOverviewsRef, activeSession, missionsListOpen, allMissions, allSchedules, schedulesSeeded)
 
   // CAPP-109 / S2 — the ModalHost renders panels IN the main window (modal-by-default).
   // `modalActiveId` is the renderer-side tab selection; null = the form-exclusive default

@@ -62,6 +62,12 @@ export interface PanelApi {
   /** Open the pre-filled ScheduleForm for this schedule (routes to the main window). */
   scheduleEdit: (id: string) => void
 
+  // ── close a panel by its PANEL id (routes through PanelService.hide, which clears
+  //    BOTH surfaces + resolves a pending form as cancelled). Used by panels that must
+  //    close themselves (the schedule panel after a confirmed delete — the zombie-panel
+  //    guard). WRAPPED per-window like the schedule members above. ──────────────────
+  hidePanel: (panelId: string) => void
+
   // ── #23 worktree-review approve / reject (the result-bearing round-trip). The
   //    PanelContent switch swallows IPC failures to `null` so the panel shows its
   //    inline error rather than rejecting the click handler. ─────────────────────
@@ -168,4 +174,5 @@ export type PanelApiAccessors = Omit<
   | "scheduleSetEnabled"
   | "scheduleDelete"
   | "scheduleEdit"
+  | "hidePanel"
 >
