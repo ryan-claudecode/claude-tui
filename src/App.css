@@ -6409,6 +6409,109 @@ body {
 .schedule-last.tone-error .schedule-last-dot { background: var(--attn-2); }
 .schedule-last.tone-skipped .schedule-last-dot { background: var(--text-4); }
 
+/* --- CAPP-115 (SCHED-2): the schedule detail panel --- */
+.schedule-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--s-4);
+  gap: var(--s-3);
+}
+.schedule-panel-head { display: flex; align-items: center; gap: var(--s-3); }
+.schedule-panel-name { font-size: 15px; font-weight: 650; color: var(--text-0); }
+.schedule-panel-chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-4);
+  color: var(--text-3);
+}
+.schedule-panel-chip.chip-enabled { background: var(--accent-soft); color: var(--accent); }
+.schedule-panel-chip.chip-paused  { background: var(--bg-4); color: var(--text-4); }
+
+.schedule-panel-meta { display: flex; flex-direction: column; gap: 3px; }
+.schedule-panel-recur { font-size: 12px; color: var(--text-2); }
+.schedule-panel-next { font-size: 12px; color: var(--text-3); }
+.schedule-panel-next-val { color: var(--text-1); font-weight: 600; }
+.schedule-panel-next-abs { color: var(--text-4); font-variant-numeric: tabular-nums; }
+.schedule-panel-opts { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: 2px; }
+.schedule-panel-opt {
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--bg-4);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.schedule-panel-prompt {
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r);
+  padding: var(--s-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.schedule-panel-actions { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.schedule-panel-actions-spacer { flex: 1; }
+.schedule-panel-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm, 4px);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-4);
+  color: var(--text-1);
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.schedule-panel-btn:hover { border-color: var(--accent); color: var(--accent); }
+.schedule-panel-btn-danger:hover { border-color: var(--red); color: var(--red); }
+
+.schedule-panel-history { display: flex; flex-direction: column; gap: 4px; }
+.schedule-panel-history-head {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-top: var(--s-2);
+}
+.schedule-panel-history-empty { font-size: 12px; color: var(--text-4); font-style: italic; }
+
+.sched-run {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 8px;
+  border-radius: var(--r-sm, 4px);
+  border-left: 2px solid var(--text-4);
+  background: var(--bg-3);
+}
+.sched-run.tone-ok { border-left-color: var(--attn-3); }
+.sched-run.tone-error { border-left-color: var(--attn-2); }
+.sched-run.tone-skipped { border-left-color: var(--text-4); }
+.sched-run-line1 { display: flex; align-items: baseline; gap: var(--s-2); }
+.sched-run-status {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-2);
+}
+.sched-run.tone-ok .sched-run-status { color: var(--attn-3); }
+.sched-run.tone-error .sched-run-status { color: var(--attn-2); }
+.sched-run-when { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.sched-run-dur { font-size: 11px; color: var(--text-4); margin-left: auto; font-variant-numeric: tabular-nums; }
+.sched-run-note { font-size: 11px; color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+
 /* --- create/edit overlay (clones the mission-prompt overlay) --- */
 .schedule-form-overlay {
   position: fixed;

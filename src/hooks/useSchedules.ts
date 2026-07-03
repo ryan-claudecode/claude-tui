@@ -44,10 +44,18 @@ function errMsg(err: unknown): string {
  */
 export function useSchedules() {
   const [schedules, setSchedules] = useState<ScheduleSummary[]>([])
+  // CAPP-115 review — whether the initial listSchedules() seed has RESOLVED. Gates
+  // the stale-panel removal in usePanels: before the seed, an empty list is
+  // indistinguishable from "every schedule was deleted", and acting on it would
+  // close panels with no evidence. Stays false on a failed seed (the safe default).
+  const [seeded, setSeeded] = useState(false)
 
   useEffect(() => {
     Promise.resolve(window.api.listSchedules())
-      .then((list) => setSchedules(list as ScheduleSummary[]))
+      .then((list) => {
+        setSchedules(list as ScheduleSummary[])
+        setSeeded(true)
+      })
       .catch((err) => toast("error", `Couldn't load schedules: ${errMsg(err)}`))
 
     window.api.onScheduleUpdated((s: ScheduleSummary) => {
@@ -102,5 +110,5 @@ export function useSchedules() {
     )
   }, [])
 
-  return { schedules, create, update, toggle, runNow, remove }
+  return { schedules, seeded, create, update, toggle, runNow, remove }
 }

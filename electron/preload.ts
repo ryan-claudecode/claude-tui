@@ -314,6 +314,11 @@ const mainApi = {
     ipcRenderer.on("schedule:updated", (_e, schedule) => callback(schedule)),
   onScheduleRemoved: (callback: (id: string) => void) =>
     ipcRenderer.on("schedule:removed", (_e, id) => callback(id)),
+  // CAPP-115 (SCHED-2) — the detail panel's "Edit" round-trip: request → main process
+  // forwards `schedule:edit` back to this window → App opens the pre-filled ScheduleForm.
+  requestScheduleEdit: (id: string) => ipcRenderer.invoke("schedule:request-edit", id),
+  onScheduleEdit: (callback: (id: string) => void) =>
+    ipcRenderer.on("schedule:edit", (_e, id) => callback(id)),
 
   // WW-2b — worktree review: approve merges the worker's branch, reject discards
   // it (back to pending). Both return the resulting task state ({ status,

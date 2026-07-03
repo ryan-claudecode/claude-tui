@@ -17,6 +17,7 @@ import {
   claudeDefaultEffort,
   resolveModelsDefault,
   resolveXhighModels,
+  resolveSchedulerMaxConcurrent,
   addModelExtra,
   type ThemeMode,
 } from "./config"
@@ -372,6 +373,28 @@ describe("resolveInjectMaxBytes (CAPP-96 auto-load byte cap)", () => {
     expect(resolveInjectMaxBytes({ context: { injectMaxBytes: Infinity } })).toBe(DEFAULT_INJECT_MAX_BYTES)
     expect(resolveInjectMaxBytes({ context: { injectMaxBytes: "8192" } as never })).toBe(DEFAULT_INJECT_MAX_BYTES)
     expect(resolveInjectMaxBytes({ context: { injectMaxBytes: null } as never })).toBe(DEFAULT_INJECT_MAX_BYTES)
+  })
+})
+
+describe("resolveSchedulerMaxConcurrent (CAPP-115 scheduler cap override)", () => {
+  it("returns undefined for absent/partial config (service keeps its default)", () => {
+    expect(resolveSchedulerMaxConcurrent(undefined)).toBeUndefined()
+    expect(resolveSchedulerMaxConcurrent(null)).toBeUndefined()
+    expect(resolveSchedulerMaxConcurrent({})).toBeUndefined()
+    expect(resolveSchedulerMaxConcurrent({ scheduler: {} })).toBeUndefined()
+  })
+
+  it("honors a positive number and floors a fractional one", () => {
+    expect(resolveSchedulerMaxConcurrent({ scheduler: { maxConcurrent: 4 } })).toBe(4)
+    expect(resolveSchedulerMaxConcurrent({ scheduler: { maxConcurrent: 3.7 } })).toBe(3)
+  })
+
+  it("rejects non-positive / non-finite / wrong-type values → undefined", () => {
+    expect(resolveSchedulerMaxConcurrent({ scheduler: { maxConcurrent: 0 } })).toBeUndefined()
+    expect(resolveSchedulerMaxConcurrent({ scheduler: { maxConcurrent: -2 } })).toBeUndefined()
+    expect(resolveSchedulerMaxConcurrent({ scheduler: { maxConcurrent: Number.NaN } })).toBeUndefined()
+    expect(resolveSchedulerMaxConcurrent({ scheduler: { maxConcurrent: Infinity } })).toBeUndefined()
+    expect(resolveSchedulerMaxConcurrent({ scheduler: { maxConcurrent: "2" } as never })).toBeUndefined()
   })
 })
 

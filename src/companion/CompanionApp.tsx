@@ -28,6 +28,12 @@ declare global {
       sendToSession: (text: string) => void
       missionStop: (id: string) => void
       missionPause: (id: string) => void
+      // CAPP-115 (SCHED-2) — schedule detail-panel controls from a popped-out companion.
+      scheduleRunNow: (id: string) => Promise<boolean>
+      scheduleSetEnabled: (id: string, enabled: boolean) => Promise<any>
+      scheduleDelete: (id: string) => Promise<boolean>
+      requestScheduleEdit: (id: string) => Promise<void>
+      hidePanel: (panelId: string) => Promise<boolean>
       approveWorktreeTask: (missionId: string, taskId: string) => Promise<ReviewActionResult | null>
       rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) => Promise<ReviewActionResult | null>
       // CAPP-86 — read-only cross-session recall + click-to-open SessionOverview.
@@ -176,6 +182,15 @@ export default function CompanionApp() {
       sendToSession: (text) => { c.sendToSession(text); return true },
       missionStop: (id) => c.missionStop(id),
       missionPause: (id) => c.missionPause(id),
+      // CAPP-115 — schedule detail-panel controls from a popped-out companion. Edit
+      // routes through requestScheduleEdit → the MAIN window's ScheduleForm overlay.
+      scheduleRunNow: (id) => { void c.scheduleRunNow(id) },
+      scheduleSetEnabled: (id, enabled) => { void c.scheduleSetEnabled(id, enabled) },
+      scheduleDelete: (id) => { void c.scheduleDelete(id) },
+      scheduleEdit: (id) => { void c.requestScheduleEdit(id) },
+      // PanelService.hide routes panel:hide back to THIS window too (onPanelHide
+      // drops it locally and closes the window when empty) — no local-only close.
+      hidePanel: (panelId) => { void c.hidePanel(panelId) },
       approveWorktreeTask: (m, t) => c.approveWorktreeTask(m, t),
       rejectWorktreeTask: (m, t, reason) => c.rejectWorktreeTask(m, t, reason),
       recall: (query, scope, sessionId) => c.recall(query, scope, sessionId),
@@ -251,7 +266,10 @@ export default function CompanionApp() {
         </div>
       </div>
       <div className="companion-body">
-        {panel && <PanelContent panel={panel} api={api} />}
+        {/* CAPP-115 review — keyed by panel id so switching tabs REMOUNTS the panel
+            (component-local state must never leak across panels sharing a type; see
+            the matching key in ModalHost). */}
+        {panel && <PanelContent key={panel.id} panel={panel} api={api} />}
       </div>
     </div>
   )

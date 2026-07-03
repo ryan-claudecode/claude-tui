@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type MutableRefObject } from "react"
 import type { Autonomy } from "../components/MissionPrompt"
 import type { WorkSession } from "./useSessions"
+import { refreshSchedulePanels, staleSchedulePanelIds } from "../lib/schedulePanels"
 
 // PanelState — panels now render in the companion window, but the main window
 // still tracks panel state for the M5 overview-refresh.
@@ -37,10 +38,20 @@ export function usePanels(
   activeSession: WorkSession | null,
   _missionsListOpen: boolean,
   liveMissions?: Array<{ id: string; [key: string]: any }>,
+  liveSchedules?: Array<{ id: string; [key: string]: any }>,
+  /** CAPP-115 review — whether the schedules list has been SEEDED (listSchedules
+   *  resolved). Gates the stale-schedule-panel removal: an un-seeded empty list must
+   *  never be read as "everything was deleted". */
+  schedulesSeeded?: boolean,
 ) {
   const [panels, setPanels] = useState<PanelState[]>([])
   const [recentlyChanged, setRecentlyChanged] = useState(false)
   const pulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // A render-synced mirror of `panels` so effects keyed on OTHER deps (the schedule
+  // stale-check below) can read the current list without adding `panels` to their
+  // deps (which would re-run the map on every panels change and risk update loops).
+  const panelsRef = useRef<PanelState[]>(panels)
+  panelsRef.current = panels
 
   // Briefly set the recentlyChanged flag to drive a pulse on the presence indicator.
   const triggerPulse = useCallback(() => {
@@ -99,6 +110,30 @@ export function usePanels(
       }),
     )
   }, [liveMissions])
+
+  // CAPP-115 (SCHED-2): keep an open `schedule` detail panel fresh from the live
+  // schedules list. useSchedules owns the `schedule:updated` listener; we react to the
+  // derived state here (same pattern as the mission live-refresh above), matching on
+  // props.id (the schedule id) because panels carry auto-generated panel-N ids.
+  //
+  // CAPP-115 review (MAJOR 2): ALSO close any schedule panel whose schedule no longer
+  // exists (deleted from the sidebar / by an agent / another window) — a deleted
+  // schedule must never leave a zombie panel with stale data and dead buttons. The
+  // hide goes through the NORMAL window.api.hidePanel path (PanelService.hide → the
+  // panel:hide push drops it from this mirror). Gated on `schedulesSeeded` so the
+  // pre-seed empty list can't mass-close panels; NOT gated on a non-empty list — the
+  // last-schedule-deleted case is exactly an empty seeded list.
+  useEffect(() => {
+    if (!liveSchedules) return
+    if (liveSchedules.length > 0) {
+      setPanels((prev) => refreshSchedulePanels(prev, liveSchedules))
+    }
+    if (schedulesSeeded) {
+      for (const panelId of staleSchedulePanelIds(panelsRef.current, liveSchedules)) {
+        Promise.resolve(window.api.hidePanel(panelId)).catch(() => {})
+      }
+    }
+  }, [liveSchedules, schedulesSeeded])
 
   // M5: keep any open Session Overview panel live. When a terminal's state or the
   // container changes, re-fetch the overview for each open overview panel and
@@ -174,6 +209,13 @@ export function usePanels(
     await window.api.showPanel("mission", m, "right")
   }, [])
 
+  // CAPP-115 (SCHED-2): open (or refresh) a schedule's detail panel. The full
+  // ScheduleSummary snapshot rides as the panel props; the live-refresh effect above
+  // keeps it current off `schedule:updated`.
+  const openSchedule = useCallback(async (s: { id: string; [key: string]: any }) => {
+    await window.api.showPanel("schedule", s, "right")
+  }, [])
+
   const openOverview = useCallback(async (sessionId: string) => {
     const ov = await window.api.getSessionOverview(sessionId)
     if (!ov) return
@@ -213,6 +255,7 @@ export function usePanels(
     recentlyChanged,
     setPanels,
     openMission,
+    openSchedule,
     openOverview,
     openTimeline,
     createMission,

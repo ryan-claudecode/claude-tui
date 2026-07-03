@@ -53,6 +53,21 @@ export interface PanelApi {
   missionStop: (id: string) => void
   missionPause: (id: string) => void
 
+  // ── #24 schedule detail panel (CAPP-115): run-now / enable-disable / delete /
+  //    edit. WRAPPED per-window like missionStop/Pause (each builder wires them over
+  //    its own bridge), so they're EXCLUDED from the accessor-parity subset below. ──
+  scheduleRunNow: (id: string) => void
+  scheduleSetEnabled: (id: string, enabled: boolean) => void
+  scheduleDelete: (id: string) => void
+  /** Open the pre-filled ScheduleForm for this schedule (routes to the main window). */
+  scheduleEdit: (id: string) => void
+
+  // ── close a panel by its PANEL id (routes through PanelService.hide, which clears
+  //    BOTH surfaces + resolves a pending form as cancelled). Used by panels that must
+  //    close themselves (the schedule panel after a confirmed delete — the zombie-panel
+  //    guard). WRAPPED per-window like the schedule members above. ──────────────────
+  hidePanel: (panelId: string) => void
+
   // ── #23 worktree-review approve / reject (the result-bearing round-trip). The
   //    PanelContent switch swallows IPC failures to `null` so the panel shows its
   //    inline error rather than rejecting the click handler. ─────────────────────
@@ -152,5 +167,12 @@ export interface PanelApi {
  */
 export type PanelApiAccessors = Omit<
   PanelApi,
-  "sendToSession" | "missionStop" | "missionPause"
+  | "sendToSession"
+  | "missionStop"
+  | "missionPause"
+  | "scheduleRunNow"
+  | "scheduleSetEnabled"
+  | "scheduleDelete"
+  | "scheduleEdit"
+  | "hidePanel"
 >

@@ -154,6 +154,8 @@ export function isDue(schedule: SchedulableView, now: Date): boolean {
   return next.getTime() <= now.getTime()
 }
 
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
 function fmtHM(d: Date): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
 }
@@ -162,10 +164,19 @@ function isSameLocalDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
+/** Whole local-calendar-day difference `from`→`to` (midnight-anchored, so it counts
+ *  day boundaries crossed rather than 24h chunks — robust across DST + partial days). */
+function localDayDiff(from: Date, to: Date): number {
+  const a = new Date(from.getFullYear(), from.getMonth(), from.getDate()).getTime()
+  const b = new Date(to.getFullYear(), to.getMonth(), to.getDate()).getTime()
+  return Math.round((b - a) / (DAY_MIN * 60_000))
+}
+
 /**
- * A short human countdown for the sidebar row: "paused" (disabled), "done"
- * (exhausted one-shot), "due now", "<1m", "in 14m", "at 14:30" (later today),
- * "tomorrow 08:00", or "in 3d". Local time.
+ * A short human countdown for the sidebar row / detail panel: "paused" (disabled),
+ * "done" (exhausted one-shot), "due now", "<1m", "in 14m", "at 14:30" (later today),
+ * "tomorrow 08:00", "Mon 09:30" (2–6 days out — an unambiguous weekday), or "in 10d"
+ * (a week or more out). Local time.
  */
 export function describeNext(schedule: SchedulableView, now: Date): string {
   if (!schedule.enabled) return "paused"
@@ -180,5 +191,9 @@ export function describeNext(schedule: SchedulableView, now: Date): string {
   if (mins < 60) return `in ${mins}m`
   if (isSameLocalDay(next, now)) return `at ${fmtHM(next)}`
   if (isSameLocalDay(next, addDays(now, 1))) return `tomorrow ${fmtHM(next)}`
-  return `in ${Math.round(mins / DAY_MIN)}d`
+  // 2–6 calendar days out: name the weekday + time ("Mon 09:30"). Capped at 6 so a
+  // bare weekday name can't collide with the SAME weekday a week later (ambiguous).
+  const days = localDayDiff(now, next)
+  if (days >= 2 && days <= 6) return `${DAY_NAMES[next.getDay()]} ${fmtHM(next)}`
+  return `in ${days}d`
 }

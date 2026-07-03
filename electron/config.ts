@@ -168,6 +168,20 @@ export interface SttConfig {
   enabled?: boolean
 }
 
+/**
+ * CAPP-115 (SCHED-2) — scheduler options. Additive/optional — no schema version bump
+ * (mirrors the RenderingConfig/ModelsConfig precedent).
+ *
+ * `maxConcurrent` overrides the machine-wide cap on concurrent scheduler-initiated
+ * runs (default `MAX_CONCURRENT_SCHEDULED = 2` in scheduler.ts). Tolerant-parsed by
+ * {@link resolveSchedulerMaxConcurrent}: a non-positive / non-finite / non-number
+ * value is ignored (the service keeps its default) so a laptop can never be
+ * accidentally stampeded — or stalled — by a malformed config.
+ */
+export interface SchedulerConfig {
+  maxConcurrent?: number
+}
+
 export interface TuiConfig {
   workspaceScanPaths: string[]
   defaultCommand?: string
@@ -180,6 +194,7 @@ export interface TuiConfig {
   context?: ContextConfig
   models?: ModelsConfig
   stt?: SttConfig
+  scheduler?: SchedulerConfig
 }
 
 /**
@@ -271,6 +286,18 @@ export function resolvePrimerRecall(config?: { context?: ContextConfig } | null)
  */
 export function resolveSttEnabled(config?: { stt?: SttConfig } | null): boolean {
   return config?.stt?.enabled !== false
+}
+
+/**
+ * CAPP-115 (SCHED-2) — resolve the config `scheduler.maxConcurrent` override for the
+ * machine-wide concurrent-run cap. Returns the floored value when it's a FINITE,
+ * POSITIVE number, else undefined (the caller then leaves the service's built-in
+ * default in place). A non-positive / non-numeric override is ignored (mirrors
+ * {@link resolveInjectMaxBytes}). Pure + deterministic.
+ */
+export function resolveSchedulerMaxConcurrent(config?: { scheduler?: SchedulerConfig } | null): number | undefined {
+  const v = config?.scheduler?.maxConcurrent
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined
 }
 
 /** CAPP-96 — the default auto-load payload cap (8 KB) per the design doc §B.3. */
@@ -475,5 +502,9 @@ export function loadConfig(): TuiConfig {
     // CAPP-120 (STT-1) — surface `stt` so the wiring layer (stt:status handler) sees the
     // on-disk enable/off-switch, not just the type. Absent → resolveSttEnabled defaults ON.
     stt: data.stt,
+    // CAPP-115 (SCHED-2) — surface `scheduler` so the wiring layer (ipc.ts →
+    // schedulerService.setMaxConcurrent) sees the on-disk cap override, not just the type.
+    // Absent → resolveSchedulerMaxConcurrent returns undefined → the service keeps its default.
+    scheduler: data.scheduler,
   }
 }

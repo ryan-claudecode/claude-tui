@@ -60,6 +60,26 @@ export function buildMainPanelApi(): PanelApi {
     missionPause: (id: string) => {
       void a.pauseMission(id)
     },
+    // CAPP-115 — schedule detail-panel controls over window.api. `scheduleEdit` routes
+    // through requestScheduleEdit → main process → the main window's `schedule:edit`
+    // listener (App.tsx) opens the pre-filled ScheduleForm.
+    scheduleRunNow: (id: string) => {
+      void a.runScheduleNow(id)
+    },
+    scheduleSetEnabled: (id: string, enabled: boolean) => {
+      void a.updateSchedule(id, { enabled })
+    },
+    scheduleDelete: (id: string) => {
+      void a.deleteSchedule(id)
+    },
+    scheduleEdit: (id: string) => {
+      void a.requestScheduleEdit(id)
+    },
+    // Close a panel by PANEL id (PanelService.hide — clears both surfaces). Used by
+    // the schedule panel's confirmed-delete self-close (the zombie-panel guard).
+    hidePanel: (panelId: string) => {
+      void a.hidePanel(panelId)
+    },
     approveWorktreeTask: (m, t) => a.approveWorktreeTask(m, t),
     rejectWorktreeTask: (m, t, reason) => a.rejectWorktreeTask(m, t, reason),
     recall: (query, scope, sessionId) => a.recall(query, scope, sessionId),
@@ -185,7 +205,13 @@ export default function ModalHost({
           </button>
         </div>
         <div className="modal-host-body">
-          <PanelContent panel={active} api={api} />
+          {/* CAPP-115 review — keyed by panel id so switching tabs REMOUNTS the panel
+              component. Without the key, two panels of the same type share one React
+              instance and component-local state leaks across them (the armed Delete
+              confirm on schedule A rendering pre-armed on schedule B — a wrong-target
+              destructive action). Panel state is seeded from props per panel, so a
+              remount per id is the correct ownership model. */}
+          <PanelContent key={active.id} panel={active} api={api} />
         </div>
       </div>
     </div>
