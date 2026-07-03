@@ -166,6 +166,13 @@ export interface ModelsConfig {
  */
 export interface SttConfig {
   enabled?: boolean
+  /**
+   * CAPP-121 (STT-2) — user-authored extra hotwords, folded (at HIGHEST priority) into the
+   * derived workspace vocabulary that biases dictation. Free-form words/phrases (e.g. a
+   * product name the recognizer keeps mangling). Empty/absent => vocabulary is derived purely
+   * from the workspace files + context engine + app constants.
+   */
+  hotwords?: string[]
 }
 
 export interface TuiConfig {
@@ -271,6 +278,18 @@ export function resolvePrimerRecall(config?: { context?: ContextConfig } | null)
  */
 export function resolveSttEnabled(config?: { stt?: SttConfig } | null): boolean {
   return config?.stt?.enabled !== false
+}
+
+/**
+ * CAPP-121 (STT-2) — resolve the user-authored extra hotwords (`stt.hotwords`). Returns a
+ * cleaned string[] (non-empty, trimmed) or [] for an absent/malformed value — never throws.
+ * These are the highest-priority source folded into the derived dictation vocabulary.
+ */
+export function resolveSttHotwords(config?: { stt?: SttConfig } | null): string[] {
+  const h = config?.stt?.hotwords
+  return Array.isArray(h)
+    ? h.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim())
+    : []
 }
 
 /** CAPP-96 — the default auto-load payload cap (8 KB) per the design doc §B.3. */

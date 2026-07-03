@@ -421,7 +421,11 @@ export default function AgentComposer({
         }
         title={
           dictation.status === "ready"
-            ? "Dictate — click to record, hold to push-to-talk (Ctrl+M)"
+            ? // CAPP-121 (STT-2) — the workspace-vocabulary term count is a tooltip SUPPLEMENT
+              // ("Parakeet · 214 workspace terms"), never the primary affordance.
+              `Dictate — click to record, hold to push-to-talk (Ctrl+M)${
+                dictation.hotwordCount > 0 ? ` · Parakeet, ${dictation.hotwordCount} workspace terms` : ""
+              }`
             : "Set up voice dictation (downloads an on-device model)"
         }
       >

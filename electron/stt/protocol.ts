@@ -20,6 +20,14 @@
 export interface SttInitMsg {
   type: "init"
   modelDir: string
+  /**
+   * CAPP-121 (STT-2) — optional workspace-vocabulary biasing. When present, the worker
+   * builds the recognizer with `decodingMethod: HOTWORDS_DECODING` + these fields (a
+   * char-level-tokenized hotwords file, materialized by `SttService.setHotwords`). Absent
+   * => the byte-unchanged greedy default. See `electron/stt/hotwords.ts` for the encoding.
+   */
+  hotwordsFile?: string
+  hotwordsScore?: number
 }
 
 /** Parent -> worker: transcribe one utterance. `samples` are 16 kHz mono Float32. */
@@ -75,6 +83,22 @@ export interface SttWorkerLike {
 
 /** The `engine` tag returned from every transcription (for logging / telemetry). */
 export const STT_ENGINE = "parakeet-tdt-0.6b-v2-int8" as const
+
+/**
+ * CAPP-121 (STT-2) — the decoding method that enables contextual biasing. sherpa-onnx only
+ * honors a hotwords file under `modified_beam_search` (live-verified against this offline
+ * int8 nemo_transducer). The worker uses it ONLY when a hotwords file is supplied; otherwise
+ * it stays on the default greedy path (byte-unchanged from CAPP-120).
+ */
+export const HOTWORDS_DECODING = "modified_beam_search" as const
+
+/**
+ * CAPP-121 — the default hotword boost. Deliberately MODEST: the live spike showed a
+ * realistic domain vocabulary at ~1.5 biased listed terms WITHOUT corrupting clean
+ * non-vocabulary speech (higher scores over-trigger / hallucinate). Overridable via
+ * `SttDeps.hotwordsScore`.
+ */
+export const DEFAULT_HOTWORDS_SCORE = 1.5
 
 /** The 4 files the recognizer needs — the post-extract verification set. */
 export const MODEL_FILES = [
@@ -152,6 +176,9 @@ export interface SttStatusSnapshot {
    *  recognizer's repeated-init-failure detail, so the overlay can show WHY + offer the
    *  "Re-download model" recovery. */
   message?: string | null
+  /** CAPP-121 (STT-2) — the count of active workspace-vocabulary hotwords, surfaced in the
+   *  mic tooltip ("Parakeet · 214 workspace terms"). 0 when no vocabulary is active. */
+  hotwordCount?: number
 }
 
 /** The transcription result shape (also the `stt:transcribe` IPC return). */
@@ -159,4 +186,10 @@ export interface SttTranscription {
   text: string
   engine: string
   ms: number
+  /**
+   * CAPP-121 (STT-2) — how many workspace-vocabulary hotwords biased THIS decode (the count
+   * of successfully-encoded terms). Omitted when biasing wasn't applied (no vocabulary, or
+   * the fallback plain-decode path), so a no-hotwords result stays `{ text, engine, ms }`.
+   */
+  hotwordCount?: number
 }

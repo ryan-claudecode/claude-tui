@@ -5,6 +5,7 @@ import {
   MODEL_FILES,
   MODEL_EXTRACTED_DIRNAME,
   MODEL_DIRNAME,
+  DEFAULT_HOTWORDS_SCORE,
   type SttFromWorker,
   type SttToWorker,
   type SttWorkerLike,
@@ -505,5 +506,110 @@ describe("SttService — extract-phase cancel + cleanup (finding 7)", () => {
     expect(svc.status()).toBe("error")
     expect(svc.statusMessage()).toMatch(/bad archive/)
     expect(removed).toContain(EXTRACTED_DIR)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CAPP-121 (STT-2) — workspace-vocabulary hotword biasing
+// ---------------------------------------------------------------------------
+
+describe("SttService — hotword biasing (CAPP-121)", () => {
+  const present = (p: string) => modelFilePaths.includes(p)
+  const HW_PATH = join(ROOT, "hotwords.txt")
+  type InitMsg = Extract<SttToWorker, { type: "init" }>
+
+  it("setHotwords writes the file eagerly + rebuilds the recognizer LAZILY (next transcribe)", async () => {
+    const workers: FakeWorker[] = []
+    const spawn = vi.fn(() => {
+      const w = new FakeWorker()
+      workers.push(w)
+      return w
+    })
+    const writeHotwords = vi.fn((words: readonly string[]) => ({ path: HW_PATH, count: words.length }))
+    const svc = new SttService(baseDeps({ exists: present, spawnWorker: spawn, writeHotwords }))
+
+    // First transcribe with NO vocabulary -> greedy init (no hotwordsFile), no hotwordCount tag.
+    const r1 = await svc.transcribe(new Float32Array([0.1]), 16000)
+    expect(r1).toEqual({ text: "hello world", engine: MODEL_DIRNAME, ms: 7 })
+    expect((workers[0].sent[0] as InitMsg).hotwordsFile).toBeUndefined()
+
+    // Set a vocabulary: file materialized immediately, count known, BUT the warm worker is kept.
+    svc.setHotwords(["alpha", "beta"])
+    expect(writeHotwords).toHaveBeenCalledWith(["alpha", "beta"])
+    expect(svc.hotwordCount).toBe(2)
+    expect(spawn).toHaveBeenCalledTimes(1) // lazy — no churn yet
+
+    // Next transcribe recycles the worker and rebuilds with the hotwords file + score.
+    const r2 = await svc.transcribe(new Float32Array([0.2]), 16000)
+    expect(spawn).toHaveBeenCalledTimes(2)
+    expect(workers[0].killed).toBe(true)
+    expect(workers[1].sent[0]).toMatchObject({
+      type: "init",
+      modelDir: MODEL_DIR,
+      hotwordsFile: HW_PATH,
+      hotwordsScore: DEFAULT_HOTWORDS_SCORE,
+    })
+    expect(r2.hotwordCount).toBe(2)
+  })
+
+  it("an identical vocabulary is a no-op (no re-write, no worker churn)", async () => {
+    const spawn = vi.fn(() => new FakeWorker())
+    const writeHotwords = vi.fn((w: readonly string[]) => ({ path: HW_PATH, count: w.length }))
+    const svc = new SttService(baseDeps({ exists: present, spawnWorker: spawn, writeHotwords }))
+
+    svc.setHotwords(["alpha"])
+    await svc.transcribe(new Float32Array([0.1]), 16000)
+    expect(spawn).toHaveBeenCalledTimes(1)
+
+    writeHotwords.mockClear()
+    svc.setHotwords(["alpha"]) // identical -> no-op
+    expect(writeHotwords).not.toHaveBeenCalled()
+    await svc.transcribe(new Float32Array([0.2]), 16000)
+    expect(spawn).toHaveBeenCalledTimes(1) // no rebuild
+  })
+
+  it("fallback: no writeHotwords dep -> plain greedy decoding, hotwordCount 0", async () => {
+    const workers: FakeWorker[] = []
+    const spawn = vi.fn(() => {
+      const w = new FakeWorker()
+      workers.push(w)
+      return w
+    })
+    const svc = new SttService(baseDeps({ exists: present, spawnWorker: spawn })) // no writeHotwords
+    svc.setHotwords(["alpha", "beta"])
+    expect(svc.hotwordCount).toBe(0)
+    const r = await svc.transcribe(new Float32Array([0.1]), 16000)
+    expect(r).toEqual({ text: "hello world", engine: MODEL_DIRNAME, ms: 7 })
+    expect((workers[0].sent[0] as InitMsg).hotwordsFile).toBeUndefined()
+  })
+
+  it("fallback: writeHotwords encodes 0 terms (unsupported/unencodable) -> greedy, no tag", async () => {
+    const workers: FakeWorker[] = []
+    const spawn = vi.fn(() => {
+      const w = new FakeWorker()
+      workers.push(w)
+      return w
+    })
+    const writeHotwords = vi.fn(() => ({ path: HW_PATH, count: 0 }))
+    const svc = new SttService(baseDeps({ exists: present, spawnWorker: spawn, writeHotwords }))
+    svc.setHotwords(["🙂"]) // nothing encodable
+    expect(svc.hotwordCount).toBe(0)
+    const r = await svc.transcribe(new Float32Array([0.1]), 16000)
+    expect((workers[0].sent[0] as InitMsg).hotwordsFile).toBeUndefined()
+    expect(r.hotwordCount).toBeUndefined()
+  })
+
+  it("fallback: a writeHotwords throw is caught + logged -> greedy", async () => {
+    const spawn = vi.fn(() => new FakeWorker())
+    const logWarn = vi.fn()
+    const writeHotwords = vi.fn(() => {
+      throw new Error("disk full")
+    })
+    const svc = new SttService(baseDeps({ exists: present, spawnWorker: spawn, writeHotwords, logWarn }))
+    svc.setHotwords(["alpha"])
+    expect(svc.hotwordCount).toBe(0)
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("disk full"))
+    const r = await svc.transcribe(new Float32Array([0.1]), 16000)
+    expect(r).toEqual({ text: "hello world", engine: MODEL_DIRNAME, ms: 7 })
   })
 })

@@ -18,7 +18,7 @@ import { FileService } from "./services/files"
 import { UiService } from "./services/ui"
 import { MissionService } from "./services/mission"
 import { SchedulerService } from "./services/scheduler"
-import { userMessage } from "./services/streamProtocol"
+import { userMessage, MODEL_ALIASES, EFFORT_LEVELS, HEADLESS_FLAGS } from "./services/streamProtocol"
 import { SessionService } from "./services/sessions"
 import { RecallService, primerHitEligible } from "./services/recall"
 import { WorkspaceMemoryService } from "./services/workspaceMemory"
@@ -54,7 +54,9 @@ import { registerSttHandlers } from "./ipc/stt-handlers"
 import { SttService } from "./services/stt"
 import { createSttRuntimeDeps } from "./stt/runtime"
 import { MODEL_DIRNAME } from "./stt/protocol"
-import { resolveSttEnabled } from "./config"
+import { resolveSttEnabled, resolveSttHotwords } from "./config"
+import { deriveHotwords } from "./stt/hotwords"
+import { collectWorkspaceNames } from "./stt/runtime"
 
 export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
@@ -346,6 +348,9 @@ export async function setupIpc(win: BrowserWindow) {
   // forwards each event over the `workspace:active-changed` channel. Payload is
   // the new active workspace's PUBLIC projection, or null when cleared.
   workspaceService.onActiveChanged((e) => {
+    // CAPP-121 (STT-2) — re-derive the dictation hotword vocabulary for the newly-active
+    // workspace (immediate: a switch is a deliberate, low-frequency user action).
+    regenerateHotwords()
     if (win.isDestroyed()) return
     win.webContents.send("workspace:active-changed", e.active)
   })
@@ -390,7 +395,71 @@ export async function setupIpc(win: BrowserWindow) {
     if (companionService.isOpen()) {
       companionService.sendToCompanion("workspace:memory-changed", workspaceId)
     }
+    // CAPP-121 (STT-2) — the context engine just changed, so the dictation vocabulary may
+    // have new finding/summary terms. DEBOUNCED (memory mutations arrive in bursts) + throw-safe.
+    scheduleHotwordRegen()
   })
+
+  // CAPP-121 (STT-2) — workspace-vocabulary hotword biasing for dictation. Re-derive the
+  // hotword vocabulary from the ACTIVE workspace (dictation is a user-facing input affordance —
+  // active selection is correct here, unlike agent identity binding). Four sources:
+  //   (a) file/dir NAMES from a bounded walk of the workspace folder,
+  //   (b) context-engine prose (workspace-memory instructions + findings; session summaries + findings),
+  //   (c) app constants (model aliases, effort levels, common CLI flags from streamProtocol),
+  //   (d) user config `stt.hotwords`.
+  // The pure `deriveHotwords` splits/dedups/caps; `SttService.setHotwords` materializes the file
+  // and rebuilds the recognizer LAZILY on the next transcribe. THROW-SAFE — a bad walk / read
+  // must NEVER crash the workspace/memory mutation path this hangs off.
+  const HOTWORD_CLI_FLAGS = [
+    ...HEADLESS_FLAGS,
+    "--dangerously-skip-permissions",
+    "--resume",
+    "--model",
+    "--effort",
+    "--mcp-config",
+    "--append-system-prompt-file",
+    "--permission-prompt-tool",
+    "--settings",
+  ]
+  function regenerateHotwords(): void {
+    try {
+      const cfg = loadConfig()
+      const wsId = workspaceService.getActiveId()
+      const dir = workspaceService.getActiveWorkspaceDir()
+      const fileNames = dir ? collectWorkspaceNames(dir) : []
+      const prose: string[] = []
+      if (wsId != null) {
+        const mem = workspaceMemoryService.getMemory(wsId)
+        if (mem.instructions) prose.push(mem.instructions)
+        for (const f of mem.findings) if (f.text) prose.push(f.text)
+      }
+      for (const s of workSessionService.list()) {
+        // Scope to the active workspace (untagged sessions contribute only when untagged is active).
+        if ((s.workspaceId ?? undefined) !== (wsId ?? undefined)) continue
+        const sec = workSessionService.getSessionContextSections(s.id)
+        if (!sec) continue
+        if (sec.summary) prose.push(sec.summary)
+        for (const n of sec.active) if (n.text) prose.push(n.text)
+      }
+      const words = deriveHotwords({
+        extras: resolveSttHotwords(cfg),
+        terms: [...MODEL_ALIASES, ...EFFORT_LEVELS, ...HOTWORD_CLI_FLAGS],
+        fileNames,
+        prose,
+      })
+      sttService.setHotwords(words)
+    } catch (err) {
+      logWarn("stt", `hotword regen failed: ${String(err)}`)
+    }
+  }
+  let hotwordRegenTimer: ReturnType<typeof setTimeout> | null = null
+  function scheduleHotwordRegen(): void {
+    if (hotwordRegenTimer) clearTimeout(hotwordRegenTimer)
+    hotwordRegenTimer = setTimeout(() => {
+      hotwordRegenTimer = null
+      regenerateHotwords()
+    }, 1500)
+  }
 
   sessionService.setMainWindow(win)
   sessionService.setDefaults(
@@ -657,6 +726,10 @@ export async function setupIpc(win: BrowserWindow) {
   })
   // `isEnabled` is read FRESH (loadConfig) so a config edit is honored without a restart.
   registerSttHandlers({ sttService, isEnabled: () => resolveSttEnabled(loadConfig()) })
+  // CAPP-121 (STT-2) — prime the dictation hotword vocabulary once at launch (after workspaces
+  // are discovered + sessions loaded), so the first dictation is already workspace-biased.
+  // Cheap (a bounded walk + a store read); setHotwords keeps the recognizer build lazy.
+  regenerateHotwords()
   registerAttentionHandlers({ getAttention: () => attentionService })
   // WS-B — id-based workspace ops (get/create/rename/add-dir/remove-dir/delete/
   // set-active/get-active/launch). Legacy index-based workspace:list/activate
