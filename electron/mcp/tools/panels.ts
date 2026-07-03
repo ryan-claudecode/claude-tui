@@ -5,6 +5,10 @@ import type { PanelService } from "../../services/panels"
 import type { NotesService } from "../../services/notes"
 import type { FileService } from "../../services/files"
 import { resolveCwd, type TerminalIdentity } from "./shared"
+// CAPP-107 (review MINOR 1) — the QuestionForm↔ask_user payload contract lives in ONE
+// shared pure module (renderer-safe, no node imports) so the submit keys can never
+// drift between the renderer's builder and this parser. See src/lib/questionSubmit.ts.
+import { normalizeQuestionOptions, parseQuestionAnswer } from "../../../src/lib/questionSubmit"
 
 export function registerPanelTools(
   server: McpServer,
@@ -49,6 +53,67 @@ export function registerPanelTools(
         terminalId: identity.terminalId,
       })
       return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }
+    },
+  )
+
+  // CAPP-107 — ask_user: a first-class interactive question for in-app agents.
+  // The native AskUserQuestion tool DOESN'T EXIST on the app's headless `claude -p`
+  // stream-json transport, so an agent's interactive question would silently degrade
+  // to prose. This tool rides the SAME pending-promise show_form machinery (BLOCKS
+  // until answered → ModalHost → tier-1 attention) but composes a dedicated
+  // `kind:"question"` form the FormPanel renders as a clean question card.
+  server.tool(
+    "ask_user",
+    "Ask the user a question and BLOCK until they answer, then return their choice(s). Use this whenever you need a decision or clarification from the user mid-task — the native AskUserQuestion tool is NOT available in this environment. Renders a first-class question card in the app and raises the user's attention. Provide 2-8 `options` for click-to-select answers, set `multi_select` to allow several, and/or `allow_free_text` for an 'Other…' field (omit `options` entirely for a free-text-only question). Returns { answer, selected, free_text } — the selected option label(s) and any free text, verbatim — or { cancelled: true } if the user dismisses it.",
+    {
+      question: z.string().describe("The question to put to the user"),
+      options: z
+        .array(z.string())
+        .min(2)
+        .max(8)
+        .optional()
+        .describe(
+          "2-8 predefined answer choices shown as click-to-select cards; omit for a free-text-only question",
+        ),
+      multi_select: z
+        .boolean()
+        .optional()
+        .describe("Allow the user to pick more than one option (checkboxes)"),
+      allow_free_text: z
+        .boolean()
+        .optional()
+        .describe("Also offer an 'Other…' free-text field alongside the options"),
+      context: z
+        .string()
+        .optional()
+        .describe("One line on WHY you're asking, shown as a muted subline under the question"),
+    },
+    async ({ question, options, multi_select, allow_free_text, context }) => {
+      // NIT 2 — de-duplicate the options (order-preserving). Fewer than 2 unique
+      // choices is not a real choice: fall back to the no-options shape (free
+      // text implied on), same as omitting `options` entirely.
+      const uniqueOptions = normalizeQuestionOptions(options)
+      const hasOptions = uniqueOptions !== undefined
+      const props = {
+        kind: "question",
+        question,
+        context,
+        options: uniqueOptions,
+        multiSelect: !!multi_select,
+        allowFreeText: !!allow_free_text || !hasOptions,
+      }
+      // Same blocking pending-promise contract as show_form; attributed to the
+      // caller's bound identity so the tier-1 attention entry names who's blocked.
+      const data = await panels.showForm(props, undefined, {
+        sessionId: identity.sessionId,
+        terminalId: identity.terminalId,
+      })
+      // MINOR 1 — parse through the SHARED contract module (the same one whose
+      // buildQuestionSubmit the QuestionForm submits with): returns the selected
+      // label(s) + free text verbatim, or { cancelled: true }.
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(parseQuestionAnswer(data)) }],
+      }
     },
   )
 

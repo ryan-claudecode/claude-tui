@@ -3018,6 +3018,9 @@ body {
   font-weight: 650;
   color: var(--text-0);
   letter-spacing: -0.2px;
+  /* CAPP-107 (review NIT 3) — long unbreakable tokens must wrap, not force
+     horizontal scroll in the modal. */
+  overflow-wrap: anywhere;
 }
 
 .form-field { margin-bottom: var(--s-4); }
@@ -3133,6 +3136,117 @@ body {
 }
 
 .form-submit:active { transform: translateY(0); }
+
+.form-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
+  transform: none;
+  box-shadow: var(--shadow-1);
+}
+
+/* ============================================================
+   CAPP-107 — ask_user question variant
+   ============================================================ */
+.question-form { padding: var(--s-4); }
+
+.question-title {
+  font-size: 16px;
+  line-height: 1.35;
+  margin-bottom: var(--s-2);
+  overflow-wrap: anywhere; /* NIT 3 — wrap long unbreakable tokens */
+}
+
+.question-context {
+  margin: 0 0 var(--s-4);
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-bottom: var(--s-4);
+}
+
+.question-option {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  background: var(--bg-0);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  color: var(--text-1);
+  font-size: 13.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease),
+    box-shadow var(--fast) var(--ease);
+}
+
+.question-option:hover { border-color: var(--accent); }
+
+.question-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft) inset;
+}
+
+.question-marker {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-strong);
+  background: var(--bg-0);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+
+.question-marker.radio { border-radius: 50%; }
+.question-marker.check { border-radius: 4px; }
+
+.question-option.selected .question-marker {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--bg-0);
+}
+
+.question-option-label {
+  flex: 1;
+  /* NIT 3 — a long unbreakable option label must wrap inside the card, not
+     stretch the modal into horizontal scroll. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.question-freetext { margin-bottom: var(--s-4); }
+.question-freetext-input { min-height: 64px; }
+
+.question-actions { align-items: center; }
+
+.question-cancel {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 16px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease),
+    background var(--fast) var(--ease);
+}
+
+.question-cancel:hover {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+  background: var(--bg-2);
+}
 
 /* ============================================================
    Image panel
