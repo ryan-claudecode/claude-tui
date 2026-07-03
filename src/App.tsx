@@ -41,6 +41,8 @@ import { useSessions } from "./hooks/useSessions"
 import { useAttention } from "./hooks/useAttention"
 import { useMissions } from "./hooks/useMissions"
 import { useSchedules, type ScheduleSummary, type ScheduleFormInput } from "./hooks/useSchedules"
+import { useActionButtons } from "./hooks/useActionButtons"
+import { deriveVisibleButtons, type ActionButtonView } from "./lib/actionButtonRow"
 import { useWorkspaces } from "./hooks/useWorkspaces"
 import { filterByWorkspace } from "./lib/workspaceFilter"
 import { filterAttentionByWorkspace } from "./lib/workspaceScope"
@@ -265,6 +267,16 @@ declare global {
       onScheduleRemoved?: (callback: (id: string) => void) => void
       requestScheduleEdit: (id: string) => Promise<void>
       onScheduleEdit?: (callback: (id: string) => void) => void
+      // CAPP-104 (AB-1) — agent-generated rail action buttons
+      listActionButtons: () => Promise<ActionButtonView[]>
+      removeActionButton: (scope: string, ownerId: string, id: string) => Promise<boolean>
+      dispatchActionButton: (
+        id: string,
+        targetSessionId: string,
+      ) => Promise<{ ok: boolean; error?: string; sessionName?: string; spawned?: boolean }>
+      onActionButtonsUpdated: (
+        callback: (payload: { scope: "session" | "workspace"; ownerId: string; buttons: ActionButtonView[] }) => void,
+      ) => void
       // WW-2b — worktree review
       approveWorktreeTask: (missionId: string, taskId: string) => Promise<{ status?: string; reviewReason?: string } | null>
       rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) => Promise<{ status?: string; reviewReason?: string } | null>
@@ -613,6 +625,13 @@ export default function App() {
   } = useSchedules()
   const [scheduleFormOpen, setScheduleFormOpen] = useState(false)
   const [editingSchedule, setEditingSchedule] = useState<ScheduleSummary | null>(null)
+
+  // CAPP-104 (AB-1) — agent-generated rail action buttons (seed + push, no polling).
+  const {
+    buttons: allActionButtons,
+    remove: removeActionButton,
+    dispatch: dispatchActionButton,
+  } = useActionButtons()
   // CAPP-115 (SCHED-2) — the detail panel's "Edit" button routes here via IPC
   // (schedule:request-edit → schedule:edit). A fresh-schedules ref lets the mount-time
   // listener resolve the id to the current ScheduleSummary without re-registering.
@@ -760,6 +779,21 @@ export default function App() {
     workspaceId: activeWorkspaceId ?? undefined,
     refreshKey: knowsRefreshKey,
   })
+
+  // CAPP-104 (AB-1) — the rail's visible button subset: the ACTIVE session's buttons ∪
+  // that session's workspace's buttons (NOT the active workspace selection — a button
+  // shown here dispatches to the active session, so it's scoped by the session's own
+  // workspace). Empty when there's no active session (no dispatch target).
+  const railActionButtons = useMemo(
+    () => deriveVisibleButtons(allActionButtons, activeSessionId, activeSession?.workspaceId),
+    [allActionButtons, activeSessionId, activeSession],
+  )
+  const handleDispatchActionButton = useCallback(
+    (button: ActionButtonView) => {
+      if (activeSessionId) dispatchActionButton(button, activeSessionId)
+    },
+    [activeSessionId, dispatchActionButton],
+  )
 
   // KNOWS "Open context →" — reuse the EXISTING openOverview path (the ⊕ sidebar
   // button → SessionOverview companion panel) for the active session.
@@ -1486,6 +1520,10 @@ export default function App() {
         onOpenRecall={handleOpenRailRecall}
         memoryUpdated={activeTerminalForRail?.pendingMemoryDelta === true}
         onReprime={activeSessionId && activeTerminalId ? handleReprime : undefined}
+        actionButtons={railActionButtons}
+        sessionId={activeSessionId}
+        onDispatchButton={handleDispatchActionButton}
+        onRemoveButton={removeActionButton}
       />
     </div>
   )

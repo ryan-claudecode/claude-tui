@@ -18,6 +18,7 @@ import { FileService } from "./services/files"
 import { UiService } from "./services/ui"
 import { MissionService } from "./services/mission"
 import { SchedulerService } from "./services/scheduler"
+import { ActionButtonService } from "./services/actionButtons"
 import { userMessage, MODEL_ALIASES, EFFORT_LEVELS, HEADLESS_FLAGS } from "./services/streamProtocol"
 import { SessionService } from "./services/sessions"
 import { RecallService, primerHitEligible } from "./services/recall"
@@ -46,6 +47,7 @@ import { registerWorkSessionHandlers } from "./ipc/worksession-handlers"
 import { registerPanelHandlers } from "./ipc/panel-handlers"
 import { registerMissionHandlers } from "./ipc/mission-handlers"
 import { registerScheduleHandlers } from "./ipc/schedule-handlers"
+import { registerActionButtonHandlers } from "./ipc/action-button-handlers"
 import { registerAppHandlers } from "./ipc/app-handlers"
 import { registerAttentionHandlers } from "./ipc/attention-handlers"
 import { registerWorkspaceHandlers } from "./ipc/workspace-handlers"
@@ -242,6 +244,11 @@ export const schedulerService = new SchedulerService({
   raiseAttention: ({ sessionId, terminalId, reason }) => attentionService?.request(sessionId, terminalId, reason),
 })
 
+// CAPP-104 (AB-1) — agent-generated rail action buttons. Durable one-file-per-owner
+// store (session-<id> / workspace-<id>); the push + session-kill cleanup are wired in
+// setupIpc. Constructed here (module scope) so the MCP layer + tests can reach it.
+export const actionButtonService = new ActionButtonService()
+
 // CAPP-120 (STT-1) — the push-to-talk dictation engine (Parakeet TDT via sherpa-onnx,
 // hosted in an Electron UTILITY PROCESS so ORT never blocks the main thread). The service
 // is PURE; every effect (utilityProcess.fork, the streaming download, the .tar.bz2 extract,
@@ -350,6 +357,13 @@ export async function setupIpc(win: BrowserWindow) {
     if (companionService.isOpen()) {
       syncWindowSchedulePanels(e, panelService.list(), panelService)
     }
+  })
+
+  // CAPP-104 (AB-1) — push action-button changes to the main renderer (useActionButtons
+  // consumes these instead of polling). Each event carries ONE owner's full button set
+  // (empty when a session was killed). The rail lives in the MAIN window only.
+  actionButtonService.onChanged((e) => {
+    if (!win.isDestroyed()) win.webContents.send("actionbuttons:updated", e)
   })
 
   // WS-B — push active-workspace changes to the main renderer (selection is now
@@ -605,6 +619,11 @@ export async function setupIpc(win: BrowserWindow) {
     webContents: {
       send: (channel: string, ...args: unknown[]) => {
         if (channel === "worksession:updated" || channel === "worksession:removed") {
+          // CAPP-104 (AB-1) — a killed session's session-scoped buttons die with it.
+          // deleteForSession emits actionbuttons:updated (empty) so the rail drops them.
+          if (channel === "worksession:removed" && typeof args[0] === "string") {
+            actionButtonService.deleteForSession(args[0])
+          }
           recallService.invalidate()
           // CAPP-95 / D1 — a durable session-store mutation also schedules a
           // debounced local-history snapshot (sessions/ is half the curated subset).
@@ -682,6 +701,7 @@ export async function setupIpc(win: BrowserWindow) {
       contextInspectorService,
       exportService,
       schedulerService,
+      actionButtonService,
     )
     sessionService.setMcpConfigPath(configPath)
     sessionService.setMcpServerUrl(`http://127.0.0.1:${port}/sse`)
@@ -735,6 +755,11 @@ export async function setupIpc(win: BrowserWindow) {
   })
   registerMissionHandlers({ missionService })
   registerScheduleHandlers({ schedulerService, win })
+  registerActionButtonHandlers({
+    actionButtonService,
+    workSessionService,
+    terminalService: sessionService,
+  })
   // CAPP-120 (STT-1) — push acquisition progress to the renderer's inline download flow
   // (the composer's mic overlay listens on `stt:progress`). Mirrors schedule:updated.
   sttService.onProgress((p) => {

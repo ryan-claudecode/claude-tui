@@ -110,6 +110,7 @@ describe.runIf(LIVE)("BO-11 LIVE — Stop truly stops (real claude -p), gated by
       stub(), // contextInspectorService (CAPP-98)
       stub(), // exportService (CAPP-99)
       stub(), // schedulerService (CAPP-114)
+      stub(), // actionButtonService (CAPP-104)
     )
     svc.setMcpConfigPath(started.configPath)
     svc.setMcpServerUrl(`http://127.0.0.1:${started.port}/sse`)

@@ -8,6 +8,12 @@ import {
   type RailKnows,
   type RuledOutLine,
 } from "../lib/agentRail"
+import {
+  resolveClick,
+  buttonsKeyOf,
+  shouldDisarm,
+  type ActionButtonView,
+} from "../lib/actionButtonRow"
 
 interface Props {
   /** Effective open/collapsed (from useAgentRail → effectiveRailOpen). Open = full
@@ -52,6 +58,21 @@ interface Props {
    *  get_session_context delta (it does NOT itself inject the finding). Absent → no live
    *  terminal to re-prime (the affordance renders disabled). */
   onReprime?: () => void
+  /** CAPP-104 (AB-1) — the BUTTONS group: the ALREADY-DERIVED visible subset (the active
+   *  session's buttons ∪ its workspace's buttons, via deriveVisibleButtons in App.tsx).
+   *  Absent/empty → the group doesn't render. */
+  actionButtons?: readonly ActionButtonView[]
+  /** CAPP-104 — the ACTIVE session id (the dispatch TARGET). Part of the armed-confirm
+   *  disarm trigger: a workspace-scoped button's visible list is IDENTICAL across two
+   *  sessions in one workspace, so without this an armed confirm would survive a session
+   *  switch and the second click would retarget the destructive prompt at the NEW
+   *  session (mirrors the elapsed-timer effect's `terminalId` dep). */
+  sessionId?: string | null
+  /** Dispatch a button's stored prompt to its owning session's live agent terminal
+   *  (spawning a fresh one if none is alive). */
+  onDispatchButton?: (button: ActionButtonView) => void
+  /** Remove a button (the row ✕). App.tsx routes to the actionbuttons:remove IPC. */
+  onRemoveButton?: (button: ActionButtonView) => void
 }
 
 /**
@@ -87,10 +108,48 @@ export default function AgentRail({
   onOpenRecall,
   memoryUpdated,
   onReprime,
+  actionButtons,
+  sessionId,
+  onDispatchButton,
+  onRemoveButton,
 }: Props) {
   const now = deriveNow({ hasTerminal, busy, activity })
   const cost = sumCost(blocks)
   const costLabel = formatCost(cost)
+
+  // CAPP-104 (AB-1) — the two-step inline-confirm state, KEYED BY BUTTON ID so an armed
+  // confirm can never leak across rows (the CAPP-115 lesson). The RESET decision is the
+  // pure, exhaustively-tested `shouldDisarm` (this effect is a thin shell over it):
+  // disarm on a visible-list change (removed/re-scoped button) AND on an ACTIVE-SESSION
+  // switch — the dispatch target changed, and for workspace-scoped buttons the list is
+  // identical across two sessions in one workspace, so the list half alone would let a
+  // second click retarget the destructive prompt at the new session.
+  const [armedButtonId, setArmedButtonId] = useState<string | null>(null)
+  const buttons = actionButtons ?? []
+  const buttonsKey = buttonsKeyOf(buttons)
+  const armCtxRef = useRef<{ key: string; session: string | null | undefined }>({
+    key: buttonsKey,
+    session: sessionId,
+  })
+  useEffect(() => {
+    const prev = armCtxRef.current
+    armCtxRef.current = { key: buttonsKey, session: sessionId }
+    if (shouldDisarm(prev.key, buttonsKey, prev.session, sessionId)) {
+      setArmedButtonId(null)
+    }
+  }, [buttonsKey, sessionId])
+
+  const handleButtonClick = (button: ActionButtonView) => {
+    const outcome = resolveClick(button, armedButtonId)
+    setArmedButtonId(outcome.armedId)
+    if (outcome.dispatch) onDispatchButton?.(button)
+  }
+  const handleButtonRemove = (button: ActionButtonView) => {
+    // Remove is ALWAYS confirmed (design): a small conventional ✕ + a window.confirm.
+    if (!window.confirm(`Remove the "${button.label}" button?`)) return
+    setArmedButtonId((cur) => (cur === button.id ? null : cur))
+    onRemoveButton?.(button)
+  }
 
   // Live elapsed clock for the NOW line — runs ONLY while busy. Re-anchors on the
   // busy rising edge AND on an active-terminal switch (the `terminalId` dep): without
@@ -139,9 +198,13 @@ export default function AgentRail({
   const showKnows = open && !!knows?.hasContent
   // CAPP-101 (P1) — the propagation nudge renders only when this terminal is marked.
   const showReprime = open && memoryUpdated === true
+  // CAPP-104 (AB-1) — the BUTTONS group renders only when the active session/workspace
+  // has at least one visible button.
+  const showButtons = open && buttons.length > 0
   // The resting "All quiet" copy shows only when EVERY surface is empty — NOW idle,
-  // no cost yet, KNOWS has nothing, AND there's no pending re-prime nudge.
-  const empty = now.state === "idle" && costLabel == null && !showKnows && !showReprime
+  // no cost yet, KNOWS has nothing, no pending re-prime nudge, AND no buttons.
+  const empty =
+    now.state === "idle" && costLabel == null && !showKnows && !showReprime && !showButtons
 
   return (
     <aside className="agent-rail" aria-label="Agent Rail">
@@ -307,6 +370,46 @@ export default function AgentRail({
                 />
               </div>
             )}
+          </section>
+        )}
+
+        {/* BUTTONS (CAPP-104 / AB-1) — agent-generated rail action buttons. The union of
+            the ACTIVE session's buttons + its workspace's buttons (derived in App.tsx).
+            Each row is a STATICALLY-VISIBLE text button (the label — words over icons) + a
+            small conventional ✕ (remove, always window.confirm-guarded). A confirm:true
+            button interposes a two-step inline confirm ON THE BUTTON, keyed by id so an
+            armed confirm never leaks across rows. Clicking dispatches the stored prompt to
+            the session's live agent terminal. NEVER a tier-1 gate — buttons are
+            affordances. Slots between KNOWS and COST. No hover-reveal. */}
+        {showButtons && (
+          <section className="agent-rail-section agent-rail-buttons" aria-label="Action buttons">
+            <div className="agent-rail-section-label">BUTTONS</div>
+            <div className="agent-rail-buttons-list">
+              {buttons.map((button) => {
+                const armed = armedButtonId === button.id
+                return (
+                  <div className="agent-rail-button-row" key={button.id}>
+                    <button
+                      type="button"
+                      className={`agent-rail-button ${armed ? "armed" : ""}`}
+                      onClick={() => handleButtonClick(button)}
+                      title={armed ? "Click again to confirm" : button.prompt}
+                    >
+                      {armed ? "Confirm?" : button.label}
+                    </button>
+                    <button
+                      type="button"
+                      className="agent-rail-button-remove"
+                      onClick={() => handleButtonRemove(button)}
+                      title={`Remove "${button.label}"`}
+                      aria-label={`Remove ${button.label}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
           </section>
         )}
 
