@@ -61,8 +61,27 @@ export interface FormOrigin {
  * make the pending/resolved moments observable without changing form behavior.
  */
 export type PanelEvent =
-  | { type: "form-pending"; panelId: string; origin: FormOrigin }
+  | { type: "form-pending"; panelId: string; origin: FormOrigin; reason?: string }
   | { type: "form-resolved"; panelId: string }
+
+/**
+ * CAPP-107 — the attention-queue reason for a pending form. A first-class question
+ * (the `ask_user` tool sets `props.kind === "question"`) quotes its (truncated)
+ * question so the NEEDS YOU row reads "Question: <text>" instead of the generic
+ * "Form waiting for you". Any other form returns `undefined` → AttentionService
+ * keeps its default reason. Pure + exported so it can be unit-tested directly.
+ */
+export function formPendingReason(props: Record<string, any>): string | undefined {
+  if (
+    props?.kind === "question" &&
+    typeof props.question === "string" &&
+    props.question.trim()
+  ) {
+    const q = props.question.replace(/\s+/g, " ").trim()
+    return `Question: ${q.length > 80 ? q.slice(0, 79) + "…" : q}`
+  }
+  return undefined
+}
 
 export class PanelService {
   private panels = new Map<string, PanelState>()
@@ -215,7 +234,12 @@ export class PanelService {
     origin: FormOrigin = {},
   ): Promise<Record<string, any>> {
     const panel = this.show("form", props, position)
-    this.emitEvent({ type: "form-pending", panelId: panel.id, origin })
+    this.emitEvent({
+      type: "form-pending",
+      panelId: panel.id,
+      origin,
+      reason: formPendingReason(props),
+    })
     return new Promise((resolve) => {
       this.pendingForms.set(panel.id, resolve)
     })

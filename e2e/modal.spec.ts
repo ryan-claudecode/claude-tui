@@ -132,3 +132,44 @@ test("show_panel behind a form → form stays ACTIVE, the panel gets a TAB (stra
   // The form resolves + unmounts; the markdown panel remains (now the active body).
   await expect(win.locator(".modal-host-body")).toContainText("Later panel", { timeout: 10_000 })
 })
+
+test("CAPP-107 ask_user question card renders in the modal and submits a choice", async () => {
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-e2e-question-"))
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CI: "1" },
+  })
+  const win = await app.firstWindow()
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  // The ask_user tool composes a kind:"question" form; drive that same shape through
+  // panel:show so the QuestionForm variant renders in the ModalHost (the renderer path
+  // is identical — the blocking pending-promise is MCP-only, covered by unit tests).
+  await expect(async () => {
+    await win.evaluate(async () => {
+      await (window as any).api.showPanel("form", {
+        kind: "question",
+        question: "Deploy to prod now?",
+        context: "prod is live",
+        options: ["Yes", "No"],
+      })
+    })
+    await expect(win.locator(".modal-host-overlay")).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+
+  // The question card, its context subline, and both options are visible at rest.
+  await expect(win.locator(".question-title")).toContainText("Deploy to prod now?")
+  await expect(win.locator(".question-context")).toContainText("prod is live")
+  const options = win.locator(".question-option")
+  await expect(options).toHaveCount(2)
+  // Submit is disabled until a choice is made (no empty answers), Cancel is visible.
+  await expect(win.locator(".question-form .form-submit")).toBeDisabled()
+  await expect(win.locator(".question-cancel")).toBeVisible()
+
+  // Pick "Yes" then submit → the modal unmounts (the form-submit round-trip).
+  await options.filter({ hasText: "Yes" }).click()
+  await expect(win.locator(".question-form .form-submit")).toBeEnabled()
+  await win.locator(".question-form .form-submit").click()
+  await expect(win.locator(".modal-host-overlay")).toBeHidden({ timeout: 10_000 })
+})

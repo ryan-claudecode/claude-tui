@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest"
-import { PanelService } from "./panels"
+import { PanelService, formPendingReason, type PanelEvent } from "./panels"
 
 /**
  * CAPP-109 / S2 — routing + form-lifecycle integration tests for PanelService.
@@ -153,6 +153,49 @@ describe("PanelService — show_form lifecycle through the modal (CAPP-109 / S2)
     await expect(formPromise).resolves.toEqual({ answer: 42 })
     // The markdown panel is untouched (still tracked).
     expect(env.svc.list().map((p) => p.id)).toEqual([markdown.id])
+  })
+})
+
+describe("formPendingReason — CAPP-107 question reason for the attention queue", () => {
+  it("quotes a question form's (truncated) question", () => {
+    expect(formPendingReason({ kind: "question", question: "Deploy to prod now?" })).toBe(
+      "Question: Deploy to prod now?",
+    )
+    const long = "x".repeat(200)
+    const reason = formPendingReason({ kind: "question", question: long })!
+    expect(reason.startsWith("Question: ")).toBe(true)
+    expect(reason.endsWith("…")).toBe(true)
+    // "Question: " (10) + 79 chars + "…" (1) = 90.
+    expect(reason.length).toBe(90)
+  })
+
+  it("collapses whitespace in the quoted question", () => {
+    expect(formPendingReason({ kind: "question", question: "  a\n\n  b  " })).toBe("Question: a b")
+  })
+
+  it("returns undefined for a plain form or a blank/missing question", () => {
+    expect(formPendingReason({ title: "Confirm?" })).toBeUndefined()
+    expect(formPendingReason({ kind: "question" })).toBeUndefined()
+    expect(formPendingReason({ kind: "question", question: "   " })).toBeUndefined()
+  })
+})
+
+describe("PanelService.showForm — emits the CAPP-107 reason on form-pending", () => {
+  it("carries the question reason for a kind:'question' form; undefined for a plain form", () => {
+    const svc = new PanelService()
+    svc.setMainBridge({ send: () => {} })
+    const events: PanelEvent[] = []
+    svc.onEvent((e) => events.push(e))
+
+    svc.showForm({ kind: "question", question: "Ship it?" })
+    svc.showForm({ title: "Plain" })
+
+    const pending = events.filter((e) => e.type === "form-pending") as Array<
+      Extract<PanelEvent, { type: "form-pending" }>
+    >
+    expect(pending).toHaveLength(2)
+    expect(pending[0].reason).toBe("Question: Ship it?")
+    expect(pending[1].reason).toBeUndefined()
   })
 })
 

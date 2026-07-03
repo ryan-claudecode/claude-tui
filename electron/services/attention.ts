@@ -223,7 +223,9 @@ export class AttentionService {
         kind: "blocked",
         sessionId,
         terminalId,
-        reason: "Form waiting for you",
+        // CAPP-107 — a first-class question (ask_user) supplies a quoted reason via the
+        // form-pending event; a plain show_form leaves it undefined → the generic default.
+        reason: e.reason ?? "Form waiting for you",
         since: this.now(),
       }
       this.upsert(entry)

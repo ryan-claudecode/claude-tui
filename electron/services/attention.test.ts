@@ -144,6 +144,22 @@ describe("AttentionService — blocked (tier 1)", () => {
     expect(h.svc.list()).toHaveLength(0)
   })
 
+  it("uses the default reason for a plain form and the CAPP-107 question reason when supplied", () => {
+    const h = makeHarness()
+    h.panels.emit({ type: "form-pending", panelId: "p-plain", origin: { terminalId: "t1" } })
+    expect(h.svc.list()[0].reason).toBe("Form waiting for you")
+
+    // A first-class question (ask_user) rides the reason on the form-pending event.
+    h.panels.emit({
+      type: "form-pending",
+      panelId: "p-q",
+      origin: { terminalId: "t2" },
+      reason: "Question: Ship it?",
+    })
+    const q = h.svc.list().find((e) => e.terminalId === "t2")!
+    expect(q.reason).toBe("Question: Ship it?")
+  })
+
   it("does NOT clear a blocked entry on focus/seen — only the form resolve clears it", () => {
     const h = makeHarness()
     h.panels.emit({ type: "form-pending", panelId: "panel-1", origin: { terminalId: "t1" } })

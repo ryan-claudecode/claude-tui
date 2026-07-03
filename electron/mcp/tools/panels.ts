@@ -52,6 +52,82 @@ export function registerPanelTools(
     },
   )
 
+  // CAPP-107 — ask_user: a first-class interactive question for in-app agents.
+  // The native AskUserQuestion tool DOESN'T EXIST on the app's headless `claude -p`
+  // stream-json transport, so an agent's interactive question would silently degrade
+  // to prose. This tool rides the SAME pending-promise show_form machinery (BLOCKS
+  // until answered → ModalHost → tier-1 attention) but composes a dedicated
+  // `kind:"question"` form the FormPanel renders as a clean question card.
+  server.tool(
+    "ask_user",
+    "Ask the user a question and BLOCK until they answer, then return their choice(s). Use this whenever you need a decision or clarification from the user mid-task — the native AskUserQuestion tool is NOT available in this environment. Renders a first-class question card in the app and raises the user's attention. Provide 2-8 `options` for click-to-select answers, set `multi_select` to allow several, and/or `allow_free_text` for an 'Other…' field (omit `options` entirely for a free-text-only question). Returns { answer, selected, free_text } — the selected option label(s) and any free text, verbatim — or { cancelled: true } if the user dismisses it.",
+    {
+      question: z.string().describe("The question to put to the user"),
+      options: z
+        .array(z.string())
+        .min(2)
+        .max(8)
+        .optional()
+        .describe(
+          "2-8 predefined answer choices shown as click-to-select cards; omit for a free-text-only question",
+        ),
+      multi_select: z
+        .boolean()
+        .optional()
+        .describe("Allow the user to pick more than one option (checkboxes)"),
+      allow_free_text: z
+        .boolean()
+        .optional()
+        .describe("Also offer an 'Other…' free-text field alongside the options"),
+      context: z
+        .string()
+        .optional()
+        .describe("One line on WHY you're asking, shown as a muted subline under the question"),
+    },
+    async ({ question, options, multi_select, allow_free_text, context }) => {
+      const hasOptions = Array.isArray(options) && options.length > 0
+      // Compose the dedicated question form. With no options there's nothing to
+      // pick, so free text is implied on.
+      const props = {
+        kind: "question",
+        question,
+        context,
+        options: hasOptions ? options : undefined,
+        multiSelect: !!multi_select,
+        allowFreeText: !!allow_free_text || !hasOptions,
+      }
+      // Same blocking pending-promise contract as show_form; attributed to the
+      // caller's bound identity so the tier-1 attention entry names who's blocked.
+      const data = await panels.showForm(props, undefined, {
+        sessionId: identity.sessionId,
+        terminalId: identity.terminalId,
+      })
+      if (data?.cancelled) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }] }
+      }
+      // The question form submits { options: string[], text: string }. Return the
+      // selected label(s) and any free text verbatim, plus a combined `answer`.
+      const selected: string[] = Array.isArray(data.options)
+        ? data.options.filter((x: unknown): x is string => typeof x === "string")
+        : []
+      const freeText = typeof data.text === "string" ? data.text.trim() : ""
+      const parts = [...selected]
+      if (freeText) parts.push(freeText)
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              answer: parts.join(", "),
+              selected,
+              free_text: freeText || undefined,
+            }),
+          },
+        ],
+      }
+    },
+  )
+
   server.tool(
     "update_panel",
     "Update an existing panel's content",
