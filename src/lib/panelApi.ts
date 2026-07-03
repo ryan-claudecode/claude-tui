@@ -53,6 +53,15 @@ export interface PanelApi {
   missionStop: (id: string) => void
   missionPause: (id: string) => void
 
+  // ── #24 schedule detail panel (CAPP-115): run-now / enable-disable / delete /
+  //    edit. WRAPPED per-window like missionStop/Pause (each builder wires them over
+  //    its own bridge), so they're EXCLUDED from the accessor-parity subset below. ──
+  scheduleRunNow: (id: string) => void
+  scheduleSetEnabled: (id: string, enabled: boolean) => void
+  scheduleDelete: (id: string) => void
+  /** Open the pre-filled ScheduleForm for this schedule (routes to the main window). */
+  scheduleEdit: (id: string) => void
+
   // ── #23 worktree-review approve / reject (the result-bearing round-trip). The
   //    PanelContent switch swallows IPC failures to `null` so the panel shows its
   //    inline error rather than rejecting the click handler. ─────────────────────
@@ -152,5 +161,11 @@ export interface PanelApi {
  */
 export type PanelApiAccessors = Omit<
   PanelApi,
-  "sendToSession" | "missionStop" | "missionPause"
+  | "sendToSession"
+  | "missionStop"
+  | "missionPause"
+  | "scheduleRunNow"
+  | "scheduleSetEnabled"
+  | "scheduleDelete"
+  | "scheduleEdit"
 >

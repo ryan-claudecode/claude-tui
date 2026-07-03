@@ -54,7 +54,7 @@ import { registerSttHandlers } from "./ipc/stt-handlers"
 import { SttService } from "./services/stt"
 import { createSttRuntimeDeps } from "./stt/runtime"
 import { MODEL_DIRNAME } from "./stt/protocol"
-import { resolveSttEnabled } from "./config"
+import { resolveSttEnabled, resolveSchedulerMaxConcurrent } from "./config"
 
 export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
@@ -613,6 +613,9 @@ export async function setupIpc(win: BrowserWindow) {
 
   missionService.start()
   // CAPP-114 (SCHED-1) — start the scheduler's single 30s tick (+ launch catch-up).
+  // CAPP-115 (SCHED-2) — apply the config `scheduler.maxConcurrent` override BEFORE the
+  // first tick (tolerant-parsed; absent → the service keeps its built-in default of 2).
+  schedulerService.setMaxConcurrent(resolveSchedulerMaxConcurrent(config))
   schedulerService.start()
 
   // Register IPC handlers by domain (MOVE, not rewrite — see ipc/*-handlers.ts)
@@ -649,7 +652,7 @@ export async function setupIpc(win: BrowserWindow) {
     sessionService,
   })
   registerMissionHandlers({ missionService })
-  registerScheduleHandlers({ schedulerService })
+  registerScheduleHandlers({ schedulerService, win })
   // CAPP-120 (STT-1) — push acquisition progress to the renderer's inline download flow
   // (the composer's mic overlay listens on `stt:progress`). Mirrors schedule:updated.
   sttService.onProgress((p) => {

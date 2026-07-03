@@ -37,6 +37,7 @@ export function usePanels(
   activeSession: WorkSession | null,
   _missionsListOpen: boolean,
   liveMissions?: Array<{ id: string; [key: string]: any }>,
+  liveSchedules?: Array<{ id: string; [key: string]: any }>,
 ) {
   const [panels, setPanels] = useState<PanelState[]>([])
   const [recentlyChanged, setRecentlyChanged] = useState(false)
@@ -99,6 +100,21 @@ export function usePanels(
       }),
     )
   }, [liveMissions])
+
+  // CAPP-115 (SCHED-2): keep an open `schedule` detail panel fresh from the live
+  // schedules list. useSchedules owns the `schedule:updated` listener; we react to the
+  // derived state here (same pattern as the mission live-refresh above), matching on
+  // props.id (the schedule id) because panels carry auto-generated panel-N ids.
+  useEffect(() => {
+    if (!liveSchedules || liveSchedules.length === 0) return
+    setPanels((prev) =>
+      prev.map((p) => {
+        if (p.type !== "schedule") return p
+        const s = liveSchedules.find((x) => x.id === (p.props as { id?: string })?.id)
+        return s ? { ...p, props: s } : p
+      }),
+    )
+  }, [liveSchedules])
 
   // M5: keep any open Session Overview panel live. When a terminal's state or the
   // container changes, re-fetch the overview for each open overview panel and
@@ -174,6 +190,13 @@ export function usePanels(
     await window.api.showPanel("mission", m, "right")
   }, [])
 
+  // CAPP-115 (SCHED-2): open (or refresh) a schedule's detail panel. The full
+  // ScheduleSummary snapshot rides as the panel props; the live-refresh effect above
+  // keeps it current off `schedule:updated`.
+  const openSchedule = useCallback(async (s: { id: string; [key: string]: any }) => {
+    await window.api.showPanel("schedule", s, "right")
+  }, [])
+
   const openOverview = useCallback(async (sessionId: string) => {
     const ov = await window.api.getSessionOverview(sessionId)
     if (!ov) return
@@ -213,6 +236,7 @@ export function usePanels(
     recentlyChanged,
     setPanels,
     openMission,
+    openSchedule,
     openOverview,
     openTimeline,
     createMission,

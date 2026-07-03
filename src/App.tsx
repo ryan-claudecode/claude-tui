@@ -263,6 +263,8 @@ declare global {
       runScheduleNow: (id: string) => Promise<boolean>
       onScheduleUpdated: (callback: (schedule: any) => void) => void
       onScheduleRemoved?: (callback: (id: string) => void) => void
+      requestScheduleEdit: (id: string) => Promise<void>
+      onScheduleEdit?: (callback: (id: string) => void) => void
       // WW-2b — worktree review
       approveWorktreeTask: (missionId: string, taskId: string) => Promise<{ status?: string; reviewReason?: string } | null>
       rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) => Promise<{ status?: string; reviewReason?: string } | null>
@@ -610,6 +612,20 @@ export default function App() {
   } = useSchedules()
   const [scheduleFormOpen, setScheduleFormOpen] = useState(false)
   const [editingSchedule, setEditingSchedule] = useState<ScheduleSummary | null>(null)
+  // CAPP-115 (SCHED-2) — the detail panel's "Edit" button routes here via IPC
+  // (schedule:request-edit → schedule:edit). A fresh-schedules ref lets the mount-time
+  // listener resolve the id to the current ScheduleSummary without re-registering.
+  const allSchedulesRef = useRef<ScheduleSummary[]>(allSchedules)
+  allSchedulesRef.current = allSchedules
+  useEffect(() => {
+    window.api.onScheduleEdit?.((id: string) => {
+      const s = allSchedulesRef.current.find((x) => x.id === id)
+      if (!s) return
+      setEditingSchedule(s)
+      setScheduleFormOpen(true)
+    })
+    return () => window.api.removeAllListeners?.("schedule:edit")
+  }, [])
 
   // WS-D/H — the workspaces surface (switcher + active-workspace scoping). The
   // active id drives the FILTER & HIDE of the three sidebar sections below.
@@ -686,10 +702,11 @@ export default function App() {
     recentlyChanged: panelsRecentlyChanged,
     setPanels,
     openMission,
+    openSchedule,
     openOverview,
     openTimeline,
     createMission,
-  } = usePanels(refreshOverviewsRef, activeSession, missionsListOpen, allMissions)
+  } = usePanels(refreshOverviewsRef, activeSession, missionsListOpen, allMissions, allSchedules)
 
   // CAPP-109 / S2 — the ModalHost renders panels IN the main window (modal-by-default).
   // `modalActiveId` is the renderer-side tab selection; null = the form-exclusive default
@@ -1326,7 +1343,7 @@ export default function App() {
         onFocusConductor={(sessionId) => handleSelectSession(sessionId)}
         schedules={scopedSchedules}
         onNewSchedule={() => { setEditingSchedule(null); setScheduleFormOpen(true) }}
-        onOpenSchedule={(s) => { setEditingSchedule(s); setScheduleFormOpen(true) }}
+        onOpenSchedule={(s) => { openSchedule(s).catch(() => {}) }}
         onToggleSchedule={(id, enabled) => toggleSchedule(id, enabled)}
         onRunSchedule={(id) => runScheduleNow(id)}
         onNewSession={handleNewSession}

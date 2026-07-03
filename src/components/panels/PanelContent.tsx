@@ -21,6 +21,7 @@ import RecallPanel from "./RecallPanel"
 import WorktreeReviewPanel from "./WorktreeReviewPanel"
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel"
 import ContextInspectorPanel from "./ContextInspectorPanel"
+import SchedulePanel from "./SchedulePanel"
 import type { PanelApi } from "../../lib/panelApi"
 
 /**
@@ -55,7 +56,7 @@ export const PANEL_LABELS: Record<string, string> = {
   stat: "Stats", log: "Log", progress: "Progress", code: "Code",
   heatmap: "Heatmap", mission: "Mission", "session-overview": "Overview",
   "worktree-review": "Review", recall: "Recall", "workspace-memory": "Memory",
-  "context-inspector": "Context",
+  "context-inspector": "Context", schedule: "Schedule",
 }
 
 /** The specialized tab/title label for a concrete panel: the session name for an
@@ -75,6 +76,9 @@ export function tabLabel(p: PanelLike): string {
   }
   if (p.type === "context-inspector" && typeof p.props?.workspaceName === "string" && p.props.workspaceName) {
     return `Context: ${p.props.workspaceName}`
+  }
+  if (p.type === "schedule" && typeof p.props?.name === "string" && p.props.name) {
+    return `Schedule: ${p.props.name}`
   }
   return base
 }
@@ -138,6 +142,16 @@ export default function PanelContent({ panel, api }: PanelContentProps) {
       return <WorkspaceMemoryPanel {...(panel.props as any)} api={api} />
     case "context-inspector":
       return <ContextInspectorPanel {...(panel.props as any)} api={api} />
+    case "schedule":
+      return (
+        <SchedulePanel
+          {...(panel.props as any)}
+          onRunNow={api?.scheduleRunNow}
+          onSetEnabled={api?.scheduleSetEnabled}
+          onDelete={api?.scheduleDelete}
+          onEdit={api?.scheduleEdit}
+        />
+      )
     case "worktree-review":
       return (
         <WorktreeReviewPanel

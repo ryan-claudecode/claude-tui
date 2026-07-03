@@ -220,7 +220,15 @@ describe("describeNext", () => {
     const late = mon(5, 23, 0)
     expect(describeNext({ enabled: true, nextRunAt: mon(6, 8, 0).toISOString() }, late)).toBe("tomorrow 08:00")
   })
-  it("reports days for a distant fire", () => {
-    expect(describeNext({ enabled: true, nextRunAt: mon(8, 9, 0).toISOString() }, now)).toBe("in 3d")
+  it("reports '{Weekday} HH:mm' for a fire 2–6 days out", () => {
+    // now = Mon Jan 5; Jan 8 is a Thursday, 3 calendar days out → unambiguous weekday.
+    expect(describeNext({ enabled: true, nextRunAt: mon(8, 9, 30).toISOString() }, now)).toBe("Thu 09:30")
+    // The upper edge (6 days out): Jan 11 is a Sunday.
+    expect(describeNext({ enabled: true, nextRunAt: mon(11, 8, 0).toISOString() }, now)).toBe("Sun 08:00")
+  })
+  it("reports 'in Nd' for a fire a week or more out (weekday would be ambiguous)", () => {
+    // 7 days out (Jan 12) and 10 days out (Jan 15) fall back to the day count.
+    expect(describeNext({ enabled: true, nextRunAt: mon(12, 9, 0).toISOString() }, now)).toBe("in 7d")
+    expect(describeNext({ enabled: true, nextRunAt: mon(15, 9, 0).toISOString() }, now)).toBe("in 10d")
   })
 })

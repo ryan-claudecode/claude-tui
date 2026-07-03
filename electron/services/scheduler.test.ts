@@ -611,6 +611,60 @@ describe("SchedulerService event seam", () => {
   })
 })
 
+describe("SchedulerService run-note truncation (CAPP-115)", () => {
+  it("caps a long run note at 200 chars, ellipsis-marked", () => {
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir, now: () => 1000 })
+    const s = svc.create(baseInput())
+    svc.runNow(s.id)
+    // The result note is the final assistant text — a chatty turn can be huge.
+    const longNote = "x".repeat(500)
+    deps.emitEnd({ terminalId: deps.lastTerminalId()!, kind: "result", note: longNote })
+    const rec = svc.get(s.id)!.runHistory[0]
+    expect(rec.note!.length).toBeLessThanOrEqual(200)
+    expect(rec.note!.endsWith("…")).toBe(true)
+  })
+
+  it("keeps a note at/under the cap verbatim (no ellipsis)", () => {
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir, now: () => 1000 })
+    const s = svc.create(baseInput())
+    svc.runNow(s.id)
+    deps.emitEnd({ terminalId: deps.lastTerminalId()!, kind: "result", note: "found a hit" })
+    expect(svc.get(s.id)!.runHistory[0].note).toBe("found a hit")
+  })
+})
+
+describe("SchedulerService setMaxConcurrent (config override)", () => {
+  it("lowers the machine-wide cap so an over-cap schedule stays due", () => {
+    let t = 1000
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir, now: () => t }) // built-in default cap = 2
+    svc.setMaxConcurrent(1)
+    svc.create(baseInput({ name: "a" }))
+    svc.create(baseInput({ name: "b" }))
+    t = 61_000 // both due; neither run ends
+    svc.tick()
+    expect(deps.calls.spawned).toHaveLength(1) // capped at the override
+  })
+
+  it("ignores a non-positive / non-finite / absent override (keeps the current cap)", () => {
+    let t = 1000
+    const deps = makeFakeDeps()
+    const svc = new SchedulerService(deps, { dir, now: () => t, maxConcurrent: 2 })
+    svc.setMaxConcurrent(0)
+    svc.setMaxConcurrent(Number.NaN)
+    svc.setMaxConcurrent(-3)
+    svc.setMaxConcurrent(undefined)
+    svc.create(baseInput({ name: "a" }))
+    svc.create(baseInput({ name: "b" }))
+    svc.create(baseInput({ name: "c" }))
+    t = 61_000 // all three due
+    svc.tick()
+    expect(deps.calls.spawned).toHaveLength(2) // unchanged from the constructor cap
+  })
+})
+
 // A tiny type-only guard so a Schedule shape drift surfaces here too.
 const _shape: Schedule | undefined = undefined
 void _shape

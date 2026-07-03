@@ -60,6 +60,21 @@ export function buildMainPanelApi(): PanelApi {
     missionPause: (id: string) => {
       void a.pauseMission(id)
     },
+    // CAPP-115 — schedule detail-panel controls over window.api. `scheduleEdit` routes
+    // through requestScheduleEdit → main process → the main window's `schedule:edit`
+    // listener (App.tsx) opens the pre-filled ScheduleForm.
+    scheduleRunNow: (id: string) => {
+      void a.runScheduleNow(id)
+    },
+    scheduleSetEnabled: (id: string, enabled: boolean) => {
+      void a.updateSchedule(id, { enabled })
+    },
+    scheduleDelete: (id: string) => {
+      void a.deleteSchedule(id)
+    },
+    scheduleEdit: (id: string) => {
+      void a.requestScheduleEdit(id)
+    },
     approveWorktreeTask: (m, t) => a.approveWorktreeTask(m, t),
     rejectWorktreeTask: (m, t, reason) => a.rejectWorktreeTask(m, t, reason),
     recall: (query, scope, sessionId) => a.recall(query, scope, sessionId),

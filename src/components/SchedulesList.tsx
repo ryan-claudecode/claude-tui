@@ -59,7 +59,7 @@ export default function SchedulesList({ schedules, onNew, onOpen, onToggle, onRu
             className="schedule-item"
             style={{ "--i": i } as CSSProperties}
             onClick={() => onOpen(s)}
-            title="Edit scheduled run"
+            title="Open schedule details"
           >
             <div className="schedule-item-line1">
               <span className={`schedule-status-chip ${s.enabled ? "chip-enabled" : "chip-paused"}`}>

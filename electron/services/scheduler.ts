@@ -27,12 +27,21 @@ const MIGRATIONS: Migration[] = []
 
 /** Newest-first cap on a schedule's run-history ring. */
 const RUN_HISTORY_MAX = 50
+/** CAPP-115 — char cap on a per-run note (the last assistant line / error excerpt),
+ *  so a chatty final message can't bloat the persisted ring or the panel's history. */
+const RUN_NOTE_MAX = 200
 /** Machine-wide cap on concurrent scheduler-initiated runs (laptop-friendly). */
 const MAX_CONCURRENT_SCHEDULED = 2
 /** Default per-run runtime ceiling — a hung run is killed after this. */
 const DEFAULT_MAX_RUNTIME_MS = 30 * 60_000
 /** The single tick cadence. */
 const TICK_MS = 30_000
+
+/** Cap a run note at {@link RUN_NOTE_MAX} chars (ellipsis-marked when clipped). */
+function truncateNote(note: string): string {
+  if (note.length <= RUN_NOTE_MAX) return note
+  return `${note.slice(0, RUN_NOTE_MAX - 1).trimEnd()}…`
+}
 
 export type RunStatus =
   | "ok"
@@ -357,6 +366,16 @@ export class SchedulerService {
   }
 
   /**
+   * CAPP-115 — apply the config `scheduler.maxConcurrent` override to the machine-wide
+   * concurrent-run cap. Tolerant (mirrors the models block): a non-positive / non-finite
+   * / non-number value is IGNORED so a malformed config can never silently drop the cap
+   * to 0 and stall every schedule. Wired in ipc.ts off the resolved config.
+   */
+  setMaxConcurrent(n: number | undefined): void {
+    if (typeof n === "number" && Number.isFinite(n) && n > 0) this.maxConcurrent = Math.floor(n)
+  }
+
+  /**
    * Launch catch-up (once): a schedule whose `nextRunAt` passed while the app was
    * closed either records `skipped-missed` (default, nextRunAt re-derived from now)
    * or, when `catchUp`, is LEFT DUE — nextRunAt stays in the past so the normal
@@ -623,7 +642,7 @@ export class SchedulerService {
       ...(rec.durationMs != null ? { durationMs: rec.durationMs } : {}),
       ...(rec.sessionId ? { sessionId: rec.sessionId } : {}),
       ...(rec.terminalId ? { terminalId: rec.terminalId } : {}),
-      ...(rec.note ? { note: rec.note } : {}),
+      ...(rec.note ? { note: truncateNote(rec.note) } : {}),
     }
     s.runHistory.unshift(record)
     if (s.runHistory.length > RUN_HISTORY_MAX) s.runHistory.length = RUN_HISTORY_MAX

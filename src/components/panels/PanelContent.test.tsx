@@ -21,6 +21,10 @@ function mockApi(overrides: Partial<PanelApi> = {}): PanelApi {
     sendToSession: vi.fn(() => true),
     missionStop: vi.fn(),
     missionPause: vi.fn(),
+    scheduleRunNow: vi.fn(),
+    scheduleSetEnabled: vi.fn(),
+    scheduleDelete: vi.fn(),
+    scheduleEdit: vi.fn(),
     approveWorktreeTask: vi.fn(async () => null),
     rejectWorktreeTask: vi.fn(async () => null),
     recall: vi.fn(async () => []),
@@ -162,6 +166,32 @@ describe("PanelContent — renders behavior panels with a mock api", () => {
     )
     expect(html).toContain("context-inspector-panel")
     expect(html).toContain("Refresh")
+  })
+
+  it("renders the schedule detail panel with the action buttons + run history", () => {
+    const html = renderToStaticMarkup(
+      <PanelContent
+        panel={panel("schedule", {
+          id: "sch-1",
+          name: "Fable watch",
+          recurrence: { kind: "interval", everyMinutes: 20, window: { start: "08:00", end: "22:00" } },
+          enabled: true,
+          nextRunAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          runHistory: [{ at: new Date().toISOString(), status: "ok", durationMs: 3200, note: "found a hit" }],
+        })}
+        api={mockApi()}
+      />,
+    )
+    expect(html).toContain("schedule-panel")
+    expect(html).toContain("Fable watch")
+    // Statically-visible TEXT buttons (words over icons).
+    expect(html).toContain(">Edit<")
+    expect(html).toContain(">Disable<")
+    expect(html).toContain(">Run now<")
+    expect(html).toContain(">Delete<")
+    // Run history row rendered with its note.
+    expect(html).toContain("found a hit")
+    expect(html).toContain("Run history (1)")
   })
 
   it("renders a simple data panel (markdown) that ignores api", () => {
