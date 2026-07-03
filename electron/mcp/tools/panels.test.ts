@@ -153,4 +153,37 @@ describe("ask_user — showForm composition + blocking round-trip", () => {
     const res = await p
     expect(JSON.parse(res.content[0].text)).toEqual({ cancelled: true })
   })
+
+  it("NIT 2 — duplicate options are de-duped (order preserved) before rendering", async () => {
+    const env = fakePanels()
+    const tools = register(env.panels)
+
+    const p = tools.ask_user.handler({
+      question: "Pick one",
+      options: ["Yes", "No", "Yes", "Maybe"],
+    })
+    expect(env.getCall()!.props.options).toEqual(["Yes", "No", "Maybe"])
+    expect(env.getCall()!.props.allowFreeText).toBe(false)
+    env.resolve({ options: ["No"], text: "" })
+    await p
+  })
+
+  it("NIT 2 — a single-item post-dedupe list falls back to free-text-implied (like no options)", async () => {
+    const env = fakePanels()
+    const tools = register(env.panels)
+
+    const p = tools.ask_user.handler({
+      question: "Pick one",
+      options: ["Yes", "Yes"], // passes the 2-8 schema, collapses to 1 unique
+    })
+    expect(env.getCall()!.props.options).toBeUndefined()
+    expect(env.getCall()!.props.allowFreeText).toBe(true)
+    env.resolve({ options: [], text: "fine" })
+    const res = await p
+    expect(JSON.parse(res.content[0].text)).toEqual({
+      answer: "fine",
+      selected: [],
+      free_text: "fine",
+    })
+  })
 })

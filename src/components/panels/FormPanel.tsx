@@ -1,4 +1,8 @@
 import { useState } from "react"
+// CAPP-107 (review MINOR 1) — the QuestionForm↔ask_user payload contract is pinned in
+// ONE shared pure module; the tool's parser (electron/mcp/tools/panels.ts) imports the
+// same file, so the submit keys can never drift between the two sides.
+import { buildQuestionSubmit, buildQuestionCancel } from "../../lib/questionSubmit"
 
 interface Field {
   name: string
@@ -215,12 +219,14 @@ function QuestionForm({
   const submit = () => {
     if (!canSubmit) return
     setDone("submitted")
-    submitForm(panelId, { options: selected, text: freeText ? trimmed : "" })
+    // MINOR 1 — build the payload through the shared contract module (the tool's
+    // parseQuestionAnswer reads the same keys).
+    submitForm(panelId, buildQuestionSubmit(selected, freeText ? trimmed : ""))
   }
 
   const cancel = () => {
     setDone("cancelled")
-    submitForm(panelId, { cancelled: true })
+    submitForm(panelId, buildQuestionCancel())
   }
 
   if (done === "submitted") return <div className="panel-empty">Answer sent.</div>
@@ -236,12 +242,14 @@ function QuestionForm({
           className={`question-options ${multiSelect ? "multi" : "single"}`}
           role={multiSelect ? "group" : "radiogroup"}
         >
-          {options.map((opt) => {
+          {options.map((opt, i) => {
             const on = selected.includes(opt)
             return (
               <button
                 type="button"
-                key={opt}
+                // NIT 2 — key by index: the ask_user tool dedupes labels, but a direct
+                // showPanel can still pass twins; a label key would collide.
+                key={i}
                 className={`question-option ${on ? "selected" : ""}`}
                 role={multiSelect ? "checkbox" : "radio"}
                 aria-checked={on}

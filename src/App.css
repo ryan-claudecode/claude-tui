@@ -3018,6 +3018,9 @@ body {
   font-weight: 650;
   color: var(--text-0);
   letter-spacing: -0.2px;
+  /* CAPP-107 (review NIT 3) — long unbreakable tokens must wrap, not force
+     horizontal scroll in the modal. */
+  overflow-wrap: anywhere;
 }
 
 .form-field { margin-bottom: var(--s-4); }
@@ -3151,6 +3154,7 @@ body {
   font-size: 16px;
   line-height: 1.35;
   margin-bottom: var(--s-2);
+  overflow-wrap: anywhere; /* NIT 3 — wrap long unbreakable tokens */
 }
 
 .question-context {
@@ -3211,7 +3215,13 @@ body {
   box-shadow: inset 0 0 0 3px var(--bg-0);
 }
 
-.question-option-label { flex: 1; }
+.question-option-label {
+  flex: 1;
+  /* NIT 3 — a long unbreakable option label must wrap inside the card, not
+     stretch the modal into horizontal scroll. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 .question-freetext { margin-bottom: var(--s-4); }
 .question-freetext-input { min-height: 64px; }

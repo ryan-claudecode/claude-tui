@@ -5,6 +5,10 @@ import type { PanelService } from "../../services/panels"
 import type { NotesService } from "../../services/notes"
 import type { FileService } from "../../services/files"
 import { resolveCwd, type TerminalIdentity } from "./shared"
+// CAPP-107 (review MINOR 1) — the QuestionForm↔ask_user payload contract lives in ONE
+// shared pure module (renderer-safe, no node imports) so the submit keys can never
+// drift between the renderer's builder and this parser. See src/lib/questionSubmit.ts.
+import { normalizeQuestionOptions, parseQuestionAnswer } from "../../../src/lib/questionSubmit"
 
 export function registerPanelTools(
   server: McpServer,
@@ -85,14 +89,16 @@ export function registerPanelTools(
         .describe("One line on WHY you're asking, shown as a muted subline under the question"),
     },
     async ({ question, options, multi_select, allow_free_text, context }) => {
-      const hasOptions = Array.isArray(options) && options.length > 0
-      // Compose the dedicated question form. With no options there's nothing to
-      // pick, so free text is implied on.
+      // NIT 2 — de-duplicate the options (order-preserving). Fewer than 2 unique
+      // choices is not a real choice: fall back to the no-options shape (free
+      // text implied on), same as omitting `options` entirely.
+      const uniqueOptions = normalizeQuestionOptions(options)
+      const hasOptions = uniqueOptions !== undefined
       const props = {
         kind: "question",
         question,
         context,
-        options: hasOptions ? options : undefined,
+        options: uniqueOptions,
         multiSelect: !!multi_select,
         allowFreeText: !!allow_free_text || !hasOptions,
       }
@@ -102,28 +108,11 @@ export function registerPanelTools(
         sessionId: identity.sessionId,
         terminalId: identity.terminalId,
       })
-      if (data?.cancelled) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }] }
-      }
-      // The question form submits { options: string[], text: string }. Return the
-      // selected label(s) and any free text verbatim, plus a combined `answer`.
-      const selected: string[] = Array.isArray(data.options)
-        ? data.options.filter((x: unknown): x is string => typeof x === "string")
-        : []
-      const freeText = typeof data.text === "string" ? data.text.trim() : ""
-      const parts = [...selected]
-      if (freeText) parts.push(freeText)
+      // MINOR 1 — parse through the SHARED contract module (the same one whose
+      // buildQuestionSubmit the QuestionForm submits with): returns the selected
+      // label(s) + free text verbatim, or { cancelled: true }.
       return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({
-              answer: parts.join(", "),
-              selected,
-              free_text: freeText || undefined,
-            }),
-          },
-        ],
+        content: [{ type: "text" as const, text: JSON.stringify(parseQuestionAnswer(data)) }],
       }
     },
   )
