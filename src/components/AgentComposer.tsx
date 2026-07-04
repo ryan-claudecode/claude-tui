@@ -589,6 +589,7 @@ export default function AgentComposer({
           index={picker.index}
           onHover={picker.setIndex}
           onSelect={picker.accept}
+          stale={picker.stale}
         />
       )}
       {attachments.length > 0 && (

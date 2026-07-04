@@ -2,7 +2,7 @@ import { readdirSync, unlinkSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 import { parseActivityLine } from "./terminals"
-import { modelSupportsXhigh } from "./streamProtocol"
+import { modelSupportsXhigh, type AgentCatalog } from "./streamProtocol"
 import {
   listFolderConversations as listFolderConversationsRaw,
   type FolderConversation,
@@ -96,6 +96,16 @@ export interface TerminalRef {
    * alias/id we spawned with). Undefined until the first turn emits init / for xterm.
    */
   resolvedModel?: string
+  /**
+   * CAPP-126 — the `/`-command picker catalog (slash commands + skills) this STRUCTURED
+   * terminal's headless `init` event last reported. PERSISTED so a restored terminal's
+   * picker works IMMEDIATELY (with last session's catalog) BEFORE its first turn — a
+   * headless `claude -p` emits init only AFTER the first user message, so without this
+   * the picker would be dead until turn 1 completes. On restore, {@link SessionService.reopenTerminal}
+   * seeds it back onto the fresh PTY via `terminals.seedCatalog`, where a live init later
+   * replaces it. Optional/additive: legacy refs load fine (undefined → the builtin floor).
+   */
+  catalog?: AgentCatalog
   /** Rich-presence "what this terminal is doing now" line (Claude self-reports it). */
   activity?: string
   /** Epoch ms when `activity` was last set. */
@@ -287,6 +297,11 @@ export interface TerminalLike {
   createXterm(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string, ultracode?: boolean): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; ultracode?: boolean }
   /** BO-5: is this terminal headless? Lets the container branch xterm-vs-structured. */
   isHeadless(id: string): boolean
+  /** CAPP-126: seed a restored headless terminal's picker catalog from the persisted
+   *  ref so `/`-autocomplete works BEFORE its first turn (init arrives only after the
+   *  first message). No-op if the terminal isn't headless or already has a fresher
+   *  catalog. Optional so test mocks that never restore need no churn. */
+  seedCatalog?(id: string, catalog: AgentCatalog): void
   /** CAPP-39 gate ②: is this terminal the one-time interactive `claude /login` PTY?
    *  Lets the container skip idle-flush/handoff-flush on it. */
   isLogin(id: string): boolean
@@ -309,6 +324,14 @@ export interface TerminalLike {
 interface MainWinLike {
   webContents: { send: (channel: string, ...args: unknown[]) => void }
   isDestroyed(): boolean
+}
+
+/** CAPP-126 — order-sensitive equality of two picker catalogs (avoids a disk write
+ *  when init re-reports the same catalog it already persisted). */
+function sameCatalog(a: AgentCatalog | undefined, b: AgentCatalog): boolean {
+  if (!a) return false
+  const eq = (x: string[], y: string[]) => x.length === y.length && x.every((v, i) => v === y[i])
+  return eq(a.slashCommands ?? [], b.slashCommands ?? []) && eq(a.skills ?? [], b.skills ?? [])
 }
 
 export class SessionService {
@@ -377,9 +400,22 @@ export class SessionService {
         // CAPP-113 — capture the RESOLVED full model id off the headless `init` event
         // (diagnostic-only; surfaced as the picker's tooltip). Cheap discriminant guard:
         // only the init event carries `model`; every other stream event is ignored.
-        const ev = e.event as { kind?: string; model?: unknown }
-        if (ev.kind === "init" && typeof ev.model === "string" && ev.model.trim()) {
-          this.recordResolvedModel(e.id, ev.model.trim())
+        const ev = e.event as { kind?: string; model?: unknown; slashCommands?: unknown; skills?: unknown }
+        if (ev.kind === "init") {
+          if (typeof ev.model === "string" && ev.model.trim()) {
+            this.recordResolvedModel(e.id, ev.model.trim())
+          }
+          // CAPP-126 — persist the picker catalog so a RESTORED terminal's `/`-autocomplete
+          // works BEFORE its first turn (init lands only after the first user message).
+          const slashCommands = Array.isArray(ev.slashCommands)
+            ? ev.slashCommands.filter((x): x is string => typeof x === "string")
+            : []
+          const skills = Array.isArray(ev.skills)
+            ? ev.skills.filter((x): x is string => typeof x === "string")
+            : []
+          if (slashCommands.length || skills.length) {
+            this.recordCatalog(e.id, { slashCommands, skills })
+          }
         }
       }
     })
@@ -460,6 +496,23 @@ export class SessionService {
     t.resolvedModel = resolvedModel
     this.persist(s)
     this.emit("worksession:updated", this.withEffectiveActivity(s))
+  }
+
+  /**
+   * CAPP-126 — persist the `/`-command picker catalog (from the headless `init` event)
+   * onto the terminal ref so a RESTORED terminal's picker works immediately (with last
+   * session's catalog) before its first turn. Persist-only (no emit): the catalog isn't
+   * a rendered snapshot field — the renderer pulls it via the `agent:catalog` accessor —
+   * so this mirrors {@link recordConversationId}, not recordResolvedModel. No-op when
+   * unchanged (init fires ~once per spawn) to keep churn off the stream path.
+   */
+  private recordCatalog(terminalId: string, catalog: AgentCatalog): void {
+    const s = this.sessionOf(terminalId)
+    if (!s) return
+    const t = s.terminals.find((x) => x.id === terminalId)
+    if (!t || sameCatalog(t.catalog, catalog)) return
+    t.catalog = catalog
+    this.persist(s)
   }
 
   /** Fold a live terminal's state into its ref + recompute session status; persist + emit. */
@@ -863,6 +916,10 @@ export class SessionService {
     // re-passing it on the `--resume` spawn the agent silently loses ultracode after
     // a restart. true → the resume spawn re-adds `--settings` ultracode + omits `--effort`.
     const info = this.terminals.create(ref.name, ref.cwd, s.id, ref.ccConversationId, ref.model, ref.effort, ref.ultracode)
+    // CAPP-126 — seed the fresh PTY's picker catalog from the persisted ref so the
+    // `/`-autocomplete works IMMEDIATELY on a restored terminal (with last session's
+    // catalog), BEFORE its first turn re-emits init. A live init later replaces it.
+    if (ref.catalog) this.terminals.seedCatalog?.(info.id, ref.catalog)
     this.clearLaunchStamp(terminalId) // CAPP-97 — the ref's id is being replaced; drop the old stamp.
     this.clearPendingMemoryDelta(ref) // CAPP-101 — the reopened terminal gets the CURRENT brain.
     ref.id = info.id

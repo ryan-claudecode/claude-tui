@@ -1715,9 +1715,30 @@ export class TerminalService {
    * headless / hasn't emitted init yet. The renderer's AgentComposer pulls this on
    * mount via the `agent:catalog` IPC accessor (and also tracks live `init` stream
    * events), so the picker reflects the LIVE catalog, never a hardcoded list.
+   *
+   * CAPP-126 — `live` reports whether a LIVE `init` has arrived on THIS spawn
+   * (`sawInit`), vs. a catalog seeded from the persisted ref on restore. Freshness is
+   * a property of the SPAWN, not of the picker component — the composer remounts on
+   * every terminal switch and must not re-show the "from last session" hint for a
+   * catalog init already refreshed this process.
    */
-  getCatalog(id: string): AgentCatalog | null {
-    return this.headless.get(id)?.catalog ?? null
+  getCatalog(id: string): (AgentCatalog & { live: boolean }) | null {
+    const entry = this.headless.get(id)
+    if (!entry?.catalog) return null
+    return { ...entry.catalog, live: entry.sawInit === true }
+  }
+
+  /**
+   * CAPP-126 — seed a headless terminal's picker catalog from a persisted copy (the
+   * SessionService ref, captured off a previous session's `init`). Called on RESTORE
+   * (`reopenTerminal`) so the `/`-autocomplete works immediately with last session's
+   * catalog BEFORE the first turn re-emits `init`. Only fills an entry that has no
+   * catalog yet — a fresh live `init` (which lands after the first message) always
+   * WINS and is never clobbered. No-op for an unknown / xterm (non-headless) terminal.
+   */
+  seedCatalog(id: string, catalog: AgentCatalog): void {
+    const entry = this.headless.get(id)
+    if (entry && !entry.catalog) entry.catalog = catalog
   }
 
   /**

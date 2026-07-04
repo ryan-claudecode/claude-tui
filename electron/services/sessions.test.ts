@@ -693,6 +693,15 @@ class FakeTerminals {
   }
   isHeadless(id: string) { return this.headlessIds.has(id) }
   isLogin(id: string) { return this.loginIds.has(id) }
+  /** CAPP-126: per-terminal picker catalogs + the seed log so a restore test can
+   *  assert reopenTerminal re-seeds the persisted catalog onto the fresh PTY. */
+  catalogs = new Map<string, any>()
+  seededCatalogs: Array<{ id: string; catalog: any }> = []
+  seedCatalog(id: string, catalog: any) {
+    this.seededCatalogs.push({ id, catalog })
+    if (!this.catalogs.has(id)) this.catalogs.set(id, catalog)
+  }
+  getCatalog(id: string) { return this.catalogs.get(id) ?? null }
   /** CAPP-39 gate ③: terminal ids the fake reports as busy (generating / permission). */
   busyIds = new Set<string>()
   isBusy(id: string) { return this.busyIds.has(id) }
@@ -885,6 +894,91 @@ describe("SessionService resolvedModel recording (CAPP-113)", () => {
     // And a later VALID init still lands (the guards above didn't wedge anything).
     term.emit({ type: "stream", id: terminalId, event: { kind: "init", model: "claude-fable-5" } })
     expect(svc.get(session.id)!.terminals[0].resolvedModel).toBe("claude-fable-5")
+  })
+})
+
+// CAPP-126 — the picker catalog is captured off the headless `init` stream event and
+// PERSISTED on the terminal ref so a restored terminal's `/`-autocomplete works BEFORE
+// its first turn (init lands only after the first message). On reopen, the persisted
+// catalog is seeded back onto the fresh PTY.
+describe("SessionService picker-catalog persistence + restore seeding (CAPP-126)", () => {
+  it("records the picker catalog off a stream init event onto the ref + persists it", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+
+    term.emit({
+      type: "stream",
+      id: terminalId,
+      event: { kind: "init", slashCommands: ["clear", "compact"], skills: ["deep-research"] },
+    })
+
+    const ref = svc.get(session.id)!.terminals.find((t) => t.id === terminalId)
+    expect(ref?.catalog).toEqual({ slashCommands: ["clear", "compact"], skills: ["deep-research"] })
+    // Survives a fresh service load (persisted to disk).
+    const b = new SessionService({ dir, now: () => 2000 })
+    b.load()
+    expect(b.get(session.id)!.terminals[0].catalog).toEqual({
+      slashCommands: ["clear", "compact"],
+      skills: ["deep-research"],
+    })
+  })
+
+  it("ignores an init with no catalog arrays and dedups an unchanged re-report (no ref churn)", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+
+    // An init with no slash_commands/skills leaves the catalog undefined.
+    term.emit({ type: "stream", id: terminalId, event: { kind: "init", model: "claude-opus-4-8" } })
+    expect(svc.get(session.id)!.terminals[0].catalog).toBeUndefined()
+
+    // A first real catalog lands; a second identical re-report is a no-op (dedup).
+    term.emit({ type: "stream", id: terminalId, event: { kind: "init", slashCommands: ["clear"], skills: [] } })
+    const after = svc.get(session.id)!.updatedAt
+    term.emit({ type: "stream", id: terminalId, event: { kind: "init", slashCommands: ["clear"], skills: [] } })
+    expect(svc.get(session.id)!.updatedAt).toBe(after) // unchanged → not re-persisted
+  })
+
+  it("reopenTerminal seeds the persisted catalog onto the fresh restored terminal", () => {
+    const term = new FakeTerminals()
+    term.structuredEngine = true // route create() → the headless path (real restore shape)
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    term.emit({
+      type: "stream",
+      id: terminalId,
+      event: { kind: "init", slashCommands: ["clear", "compact"], skills: ["deep-research"] },
+    })
+    // App-close: the terminal exits, its ref goes dead but stays (the resume path).
+    term.emit({ type: "exit", id: terminalId })
+
+    const ref = svc.get(session.id)!.terminals[0]
+    const r = svc.reopenTerminal(session.id, ref.id)!
+
+    // The fresh PTY was seeded with last session's catalog (before any live init).
+    expect(term.seededCatalogs).toContainEqual({
+      id: r.terminalId,
+      catalog: { slashCommands: ["clear", "compact"], skills: ["deep-research"] },
+    })
+    expect(term.getCatalog(r.terminalId)).toEqual({
+      slashCommands: ["clear", "compact"],
+      skills: ["deep-research"],
+    })
+  })
+
+  it("reopenTerminal seeds nothing when the ref has no persisted catalog (legacy ref)", () => {
+    const term = new FakeTerminals()
+    term.structuredEngine = true
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo")
+    term.emit({ type: "exit", id: terminalId })
+    svc.reopenTerminal(session.id, svc.get(session.id)!.terminals[0].id)
+    expect(term.seededCatalogs).toHaveLength(0)
   })
 })
 
