@@ -2,11 +2,6 @@ import { useState, useEffect, useRef, useMemo } from "react"
 import PanelContent, { tabLabel } from "../components/panels/PanelContent"
 import { type InspectResultView } from "../components/panels/ContextInspectorPanel"
 import type { PanelApi } from "../lib/panelApi"
-import type {
-  WorkspaceMemoryRecord,
-  WorkspaceFinding,
-} from "../lib/workspaceMemoryView"
-import type { ExportStateView, EnableResultView, AdoptionStateView, WireResultView } from "../lib/exportView"
 
 interface PanelState {
   id: string
@@ -31,72 +26,11 @@ declare global {
       scheduleDelete: (id: string) => Promise<boolean>
       requestScheduleEdit: (id: string) => Promise<void>
       hidePanel: (panelId: string) => Promise<boolean>
-      // CAPP-86 — read-only cross-session recall + click-to-open SessionOverview.
-      recall: (query: string, scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any[]>
-      recallSummary: (scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any>
       openSessionOverview: (sessionId: string) => Promise<any>
-      // CAPP-94 / U6 — workspace-memory editor accessors. A `null` workspaceId
-      // addresses the untagged "All" bucket. The WorkspaceMemoryPanel (which runs in
-      // THIS companion window) calls these directly (NOT window.api). Live-refresh via
-      // onWorkspaceMemoryChanged (per-instance unsubscribe).
-      getWorkspaceMemory: (workspaceId: string | null) => Promise<WorkspaceMemoryRecord>
-      setWorkspaceInstructions: (
-        workspaceId: string | null,
-        text: string,
-      ) => Promise<WorkspaceMemoryRecord>
-      addWorkspaceFinding: (
-        workspaceId: string | null,
-        text: string,
-        source: "user" | "agent",
-      ) => Promise<WorkspaceFinding>
-      editWorkspaceFinding: (
-        workspaceId: string | null,
-        findingId: string,
-        text: string,
-      ) => Promise<boolean>
-      deleteWorkspaceFinding: (
-        workspaceId: string | null,
-        findingId: string,
-      ) => Promise<boolean>
-      // CAPP-97 — pin/unpin a finding (never evicted under the auto-load context cap).
-      setWorkspaceFindingPinned: (
-        workspaceId: string | null,
-        findingId: string,
-        pinned: boolean,
-      ) => Promise<boolean>
-      onWorkspaceMemoryChanged: (cb: (workspaceId: string) => void) => () => void
-      // CAPP-94 / U6 — promote a session's findings into its OWNING workspace memory
-      // (the SessionOverviewPanel "Push context to workspace" button). The owning
-      // workspace is resolved main-side; the panel only needs the session id.
-      promoteSessionToWorkspace: (
-        sessionId: string,
-      ) => Promise<{ ok: boolean; count: number; workspaceId: string | null }>
       // CAPP-98 / I1 — the READ-ONLY Context Inspector. The ContextInspectorPanel (in THIS
       // companion window) calls this on its Refresh button to re-enumerate the launch-time
-      // native context + our injected primer. A `null` workspaceId is the untagged bucket.
+      // native context. A `null` workspaceId is the untagged bucket.
       inspectWorkspaceContext: (workspaceId: string | null) => Promise<InspectResultView>
-      // CAPP-99 / E1 — export accessors. The export control lives in THIS companion window's
-      // WorkspaceMemoryPanel. STRICTLY one-directional (store → file): read state / trigger
-      // regen only — there is no file → store accessor. A `null` workspaceId is the untagged bucket.
-      getExportState: (workspaceId: string | null) => Promise<ExportStateView>
-      enableExport: (
-        workspaceId: string | null,
-        mode: "A" | "C",
-        customPath?: string,
-      ) => Promise<EnableResultView>
-      disableExport: (workspaceId: string | null) => Promise<ExportStateView>
-      setUntaggedExportEnabled: (enabled: boolean) => Promise<ExportStateView>
-      regenerateExport: (
-        workspaceId: string | null,
-      ) => Promise<{ ok: boolean; wrote?: boolean; error?: string }>
-      // CAPP-100 / E2 — adoption: the reversible CLAUDE.local.md insert/Unwire (NON-MCP) + probe.
-      getAdoptionState: (workspaceId: string | null) => Promise<AdoptionStateView>
-      wireImportBlock: (workspaceId: string | null) => Promise<WireResultView>
-      unwireImportBlock: (workspaceId: string | null) => Promise<WireResultView>
-      setExportSelfWired: (
-        workspaceId: string | null,
-        selfWired: boolean,
-      ) => Promise<ExportStateView>
       getTheme: () => Promise<string>
       onThemeChanged: (cb: (mode: string) => void) => void
       removeAllListeners: (channel: string) => void
@@ -150,15 +84,6 @@ export default function CompanionApp() {
       window.companionApi.closeWindow()
     })
 
-    // CAPP-94 / U6 — workspace-memory editor live-refresh is owned ENTIRELY by the
-    // WorkspaceMemoryPanel itself: it subscribes to `workspace:memory-changed`, matches
-    // its own pinned workspaceId, and re-fetches its authoritative record. CompanionApp
-    // deliberately does NOT also push fresh props here — that was a redundant second
-    // refresh path the panel ignored after mount (it seeds `record` from props once),
-    // and doing the async fetch inside a setPanels updater is a React anti-pattern.
-    // Single source of truth = the panel. (The backend push reaches this window via
-    // companionService.sendToCompanion in ipc.ts's onMemoryChanged.)
-
     return () => {
       window.companionApi.removeAllListeners("theme:changed")
     }
@@ -184,25 +109,7 @@ export default function CompanionApp() {
       // PanelService.hide routes panel:hide back to THIS window too (onPanelHide
       // drops it locally and closes the window when empty) — no local-only close.
       hidePanel: (panelId) => { void c.hidePanel(panelId) },
-      recall: (query, scope, sessionId) => c.recall(query, scope, sessionId),
       openSessionOverview: (sessionId) => c.openSessionOverview(sessionId),
-      promoteSessionToWorkspace: (sessionId) => c.promoteSessionToWorkspace(sessionId),
-      getWorkspaceMemory: (workspaceId) => c.getWorkspaceMemory(workspaceId),
-      setWorkspaceInstructions: (workspaceId, text) => c.setWorkspaceInstructions(workspaceId, text),
-      addWorkspaceFinding: (workspaceId, text, source) => c.addWorkspaceFinding(workspaceId, text, source),
-      editWorkspaceFinding: (workspaceId, findingId, text) => c.editWorkspaceFinding(workspaceId, findingId, text),
-      deleteWorkspaceFinding: (workspaceId, findingId) => c.deleteWorkspaceFinding(workspaceId, findingId),
-      setWorkspaceFindingPinned: (workspaceId, findingId, pinned) => c.setWorkspaceFindingPinned(workspaceId, findingId, pinned),
-      onWorkspaceMemoryChanged: (cb) => c.onWorkspaceMemoryChanged(cb),
-      getExportState: (workspaceId) => c.getExportState(workspaceId),
-      enableExport: (workspaceId, mode, customPath) => c.enableExport(workspaceId, mode, customPath),
-      disableExport: (workspaceId) => c.disableExport(workspaceId),
-      setUntaggedExportEnabled: (enabled) => c.setUntaggedExportEnabled(enabled),
-      regenerateExport: (workspaceId) => c.regenerateExport(workspaceId),
-      getAdoptionState: (workspaceId) => c.getAdoptionState(workspaceId),
-      wireImportBlock: (workspaceId) => c.wireImportBlock(workspaceId),
-      unwireImportBlock: (workspaceId) => c.unwireImportBlock(workspaceId),
-      setExportSelfWired: (workspaceId, selfWired) => c.setExportSelfWired(workspaceId, selfWired),
       inspectWorkspaceContext: (workspaceId) => c.inspectWorkspaceContext(workspaceId),
     }
   }, [])

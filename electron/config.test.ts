@@ -10,7 +10,6 @@ import {
   resolveRenderingEffort,
   resolveSkipApproval,
   resolveAgentRailOpen,
-  resolvePrimerRecall,
   resolveInjectMaxBytes,
   DEFAULT_INJECT_MAX_BYTES,
   claudeDefaultModel,
@@ -176,29 +175,10 @@ describe("agentRail config (Agent Rail v1)", () => {
   })
 })
 
-describe("context.primerRecall config (CAPP-86 — The Lexicon)", () => {
+describe("agentRail config", () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.resetAllMocks()
-  })
-
-  it("resolvePrimerRecall defaults to OFF (false) when absent — byte-identical default primer", () => {
-    expect(resolvePrimerRecall(undefined)).toBe(false)
-    expect(resolvePrimerRecall(null)).toBe(false)
-    expect(resolvePrimerRecall({})).toBe(false)
-    expect(resolvePrimerRecall({ context: {} })).toBe(false)
-  })
-
-  it("resolvePrimerRecall returns true ONLY when explicitly true", () => {
-    expect(resolvePrimerRecall({ context: { primerRecall: true } })).toBe(true)
-    expect(resolvePrimerRecall({ context: { primerRecall: false } })).toBe(false)
-  })
-
-  it("loadConfig surfaces context so getConfig carries the override", () => {
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      JSON.stringify({ schemaVersion: 1, data: { context: { primerRecall: true } } }),
-    )
-    expect(loadConfig().context?.primerRecall).toBe(true)
   })
 
   it("setAgentRailOpen writes agentRail.open in the versioned envelope, preserving other fields", () => {

@@ -9,21 +9,20 @@ import type { CompanionApi } from "../../electron/companion-preload"
  * The shared `PanelContent` switch (`src/components/panels/PanelContent.tsx`) derives every
  * behavior-panel callback from a single `PanelApi`. Two windows must each be able to build it
  * over their native bridge: the companion over `window.companionApi`, and (S2) the main-window
- * ModalHost over `window.api`. The panel-INTERNAL accessors (`PanelApiAccessors` — recall,
- * overview, promote, workspace-memory, export, adoption, inspect) map
- * 1:1 to a RAW bridge method with the SAME signature, and the bridge crosses the preload
- * boundary UNTYPED (`any`), so without a pin a drift (an accessor on one bridge but not the
- * other) compiles clean and only blows up at the call site.
+ * ModalHost over `window.api`. The panel-INTERNAL accessors (`PanelApiAccessors` — overview,
+ * inspect) map 1:1 to a RAW bridge method with the SAME signature, and the bridge crosses the
+ * preload boundary UNTYPED (`any`), so without a pin a drift (an accessor on one bridge but not
+ * the other) compiles clean and only blows up at the call site.
  *
  * This compile-time pin closes that gap: it asserts BOTH `MainApi` (the inferred shape of
  * `electron/preload.ts`'s exposed object) AND `CompanionApi` (`electron/companion-preload.ts`)
- * structurally satisfy every accessor in `PanelApiAccessors`. `tsc -b` FAILS the moment either
- * bridge drops/renames/narrows one — exactly the guard that would have caught F1
- * (`openSessionOverview` / `promoteSessionToWorkspace` having been companion-only). Type-only;
- * no preload runtime is imported. (The caller-WRAPPED member — sendToSession — is excluded
- * by `PanelApiAccessors`; see its doc in panelApi.ts.)
+ * structurally satisfy every accessor in `PanelApiAccessors` (openSessionOverview,
+ * inspectWorkspaceContext). `tsc -b` FAILS the moment either bridge drops/renames/narrows one —
+ * exactly the guard that would have caught F1 (`openSessionOverview` having been companion-only).
+ * Type-only; no preload runtime is imported. (The caller-WRAPPED member — sendToSession — is
+ * excluded by `PanelApiAccessors`; see its doc in panelApi.ts.)
  *
- * Mirrors the `workspaceMemoryViewSync` / `contextInspectorViewSync` parity pins.
+ * Mirrors the `contextInspectorViewSync` parity pin.
  */
 
 /** Compile-time assertion: `T` (a bridge's accessor subset) satisfies `PanelApiAccessors`.

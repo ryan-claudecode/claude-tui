@@ -1,13 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { TranscriptBlock } from "../lib/agentTranscript"
-import {
-  sumCost,
-  formatCost,
-  deriveNow,
-  formatElapsed,
-  type RailKnows,
-  type RuledOutLine,
-} from "../lib/agentRail"
+import { sumCost, formatCost, deriveNow, formatElapsed } from "../lib/agentRail"
 
 interface Props {
   /** Effective open/collapsed (from useAgentRail → effectiveRailOpen). Open = full
@@ -30,28 +23,6 @@ interface Props {
   /** The active terminal's folded transcript blocks, for the session-cumulative COST
    *  sum. Sourced renderer-side from the shared transcript cache (see App.tsx). */
   blocks: readonly TranscriptBlock[]
-  /** KNOWS (Phase 3) — the two shaped context digests for the active session/
-   *  workspace (this-session overview + cross-session recall). Sourced from the
-   *  EXISTING getSessionOverview + recallSummary accessors via useAgentRailKnows;
-   *  shaped by the pure deriveKnows. The section renders ONLY when it has content
-   *  (knows.hasContent) so an empty session never clutters the calm column. */
-  knows?: RailKnows
-  /** Open the active session's SessionOverview companion panel ("Open context →").
-   *  Reuses the EXISTING openOverview path (the ⊕ sidebar button). Absent when there
-   *  is no active session to open. */
-  onOpenContext?: () => void
-  /** Open the cross-session RecallPanel companion view ("Open Recall →"). Reuses the
-   *  EXISTING `show_panel` "recall" type (CAPP-86 v1). */
-  onOpenRecall?: () => void
-  /** CAPP-101 (P1) — the propagation nudge. True when the ACTIVE terminal's owning session's
-   *  WORKSPACE memory changed AFTER it spawned (its frozen launch inject is now stale). Drives
-   *  a quiet, STATICALLY-VISIBLE KNOWS-tier "re-prime to pull" affordance (NOT a tier-1 gate —
-   *  those never go in the rail). */
-  memoryUpdated?: boolean
-  /** CAPP-101 (P1) — the re-prime action: PROMPTS the running agent to pull the
-   *  get_session_context delta (it does NOT itself inject the finding). Absent → no live
-   *  terminal to re-prime (the affordance renders disabled). */
-  onReprime?: () => void
 }
 
 /**
@@ -61,14 +32,9 @@ interface Props {
  * sums the per-turn ResultCost already parsed in agentTranscript.ts. See
  * docs/roadmap/agent-rail-design.md (§3, Phase 1).
  *
- * HARD RULES honored: every control (the collapse chevron, the spine reopen, the
- * KNOWS "Open context →" / "Open Recall →" links) is ALWAYS visible — no hover-reveal
- * (hover only tints). Warm Sand & Stone tokens only. Purely additive — collapsed, it
- * is a 32px spine and the center transcript reflows.
- *
- * Phase 3 — KNOWS (context digest) is now wired (CAPP-84 × CAPP-86 v1.5): two digests
- * (this-session overview + cross-session recall) slotted into the placeholder below,
- * rendered ONLY when there's content so the empty rail stays byte-identical/calm.
+ * HARD RULES honored: every control (the collapse chevron, the spine reopen) is
+ * ALWAYS visible — no hover-reveal (hover only tints). Warm Sand & Stone tokens only.
+ * Purely additive — collapsed, it is a 32px spine and the center transcript reflows.
  *
  * The AWAITING (tier-2/3 signals + inline answer) section remains a LATER phase —
  * its slot stays a clearly-commented placeholder so the next phase drops in without
@@ -82,11 +48,6 @@ export default function AgentRail({
   busy,
   activity,
   blocks,
-  knows,
-  onOpenContext,
-  onOpenRecall,
-  memoryUpdated,
-  onReprime,
 }: Props) {
   const now = deriveNow({ hasTerminal, busy, activity })
   const cost = sumCost(blocks)
@@ -136,13 +97,9 @@ export default function AgentRail({
     )
   }
 
-  const showKnows = open && !!knows?.hasContent
-  // CAPP-101 (P1) — the propagation nudge renders only when this terminal is marked.
-  const showReprime = open && memoryUpdated === true
-  // The resting "All quiet" copy shows only when EVERY surface is empty — NOW idle,
-  // no cost yet, KNOWS has nothing, AND no pending re-prime nudge.
-  const empty =
-    now.state === "idle" && costLabel == null && !showKnows && !showReprime
+  // The resting "All quiet" copy shows only when EVERY surface is empty — NOW idle
+  // and no cost yet.
+  const empty = now.state === "idle" && costLabel == null
 
   return (
     <aside className="agent-rail" aria-label="Agent Rail">
@@ -186,136 +143,11 @@ export default function AgentRail({
           )}
         </section>
 
-        {/* CAPP-101 (P1) — the PROPAGATION NUDGE. The workspace memory changed AFTER this
-            terminal spawned, so its frozen launch inject is stale. A quiet, STATICALLY-VISIBLE
-            KNOWS-tier affordance (no hover-reveal) with an honest label + a "Re-prime" action.
-            HONEST: re-prime PROMPTS the agent to pull the get_session_context delta — it does
-            NOT itself inject the finding. NOT a tier-1 blocking gate (those never go in the
-            rail). Slots between NOW and KNOWS. */}
-        {showReprime && (
-          <section
-            className="agent-rail-section agent-rail-reprime"
-            aria-label="Workspace memory updated"
-          >
-            <div className="agent-rail-section-label">KNOWS</div>
-            <div className="agent-rail-reprime-card">
-              <div className="agent-rail-reprime-text">
-                Workspace memory updated — re-prime to pull
-              </div>
-              <button
-                type="button"
-                className="agent-rail-reprime-btn"
-                onClick={onReprime}
-                disabled={!onReprime}
-                title="Ask the running agent to pull the latest workspace memory (get_session_context)"
-              >
-                Re-prime
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* KNOWS (Phase 3 — CAPP-84 × CAPP-86 v1.5) — the context digest. TWO
-            sub-sections for the active session/workspace, each present only when it
-            has content: "This session" (overview) + "Across sessions" (recall). Both
-            carry an ALWAYS-VISIBLE "Open …→" link (no hover-reveal) to the matching
-            companion panel. Slots HERE, between NOW and COST. */}
-        {showKnows && knows && (
-          <section className="agent-rail-section agent-rail-knows">
-            <div className="agent-rail-section-label">KNOWS</div>
-
-            {knows.session && (
-              <div className="agent-rail-knows-group">
-                <div className="agent-rail-knows-head">
-                  <span className="agent-rail-knows-scope">This session</span>
-                  <button
-                    type="button"
-                    className="agent-rail-knows-open"
-                    onClick={onOpenContext}
-                    disabled={!onOpenContext}
-                    title="Open the Session Overview panel"
-                  >
-                    Open context →
-                  </button>
-                </div>
-                <KnowsChips
-                  findings={knows.session.findings}
-                  ruledOut={knows.session.ruledOut}
-                  provisional={knows.session.provisional}
-                />
-                {knows.session.summary && (
-                  <div className="agent-rail-knows-summary" title={knows.session.summary}>
-                    {knows.session.summary}
-                  </div>
-                )}
-                {knows.session.recentRuledOut && (
-                  <RuledOutOneLiner line={knows.session.recentRuledOut} />
-                )}
-              </div>
-            )}
-
-            {knows.recall && (
-              <div className="agent-rail-knows-group">
-                <div className="agent-rail-knows-head">
-                  <span className="agent-rail-knows-scope">
-                    Across {knows.recall.sessions}{" "}
-                    {knows.recall.sessions === 1 ? "session" : "sessions"}
-                  </span>
-                  <button
-                    type="button"
-                    className="agent-rail-knows-open"
-                    onClick={onOpenRecall}
-                    disabled={!onOpenRecall}
-                    title="Open the cross-session Recall panel"
-                  >
-                    Open Recall →
-                  </button>
-                </div>
-                <KnowsChips
-                  findings={knows.recall.findings}
-                  ruledOut={knows.recall.ruledOut}
-                />
-                {knows.recall.recentRuledOut && (
-                  <RuledOutOneLiner
-                    line={knows.recall.recentRuledOut}
-                    from={knows.recall.recentRuledOut.sessionName}
-                  />
-                )}
-              </div>
-            )}
-
-            {/* Workspace memory — the durable, always-present tier (CAPP-87 / U4),
-                surfaced as its OWN third group (independent of how many sessions
-                contributed). "Open Recall →" reuses the same cross-session Recall panel
-                (which now unions workspace memory too). No hover-reveal. */}
-            {knows.workspaceMemory && (
-              <div className="agent-rail-knows-group">
-                <div className="agent-rail-knows-head">
-                  <span className="agent-rail-knows-scope">Workspace memory</span>
-                  <button
-                    type="button"
-                    className="agent-rail-knows-open"
-                    onClick={onOpenRecall}
-                    disabled={!onOpenRecall}
-                    title="Open the cross-session Recall panel"
-                  >
-                    Open Recall →
-                  </button>
-                </div>
-                <KnowsChips
-                  findings={knows.workspaceMemory.findings}
-                  ruledOut={knows.workspaceMemory.ruledOut}
-                />
-              </div>
-            )}
-          </section>
-        )}
-
         {/* ── LATER-PHASE SEAMS (docs/roadmap/agent-rail-design.md §3) ──────────────
             Phase 4 — AWAITING (tier-2/3 only): tier-tinted dismissable rows scoped
               to the active terminal (tier-1 filtered out), with an inline mini-
               composer on an `asked` entry wired to sendAgentInput.
-            Each slots in HERE, between KNOWS and COST, without re-laying out the column.
+            Slots in HERE, between NOW and COST, without re-laying out the column.
             ─────────────────────────────────────────────────────────────────────── */}
 
         {/* EMPTY STATE — calm resting copy when NOW is idle and there's no cost yet.
@@ -347,55 +179,5 @@ export default function AgentRail({
         </div>
       </div>
     </aside>
-  )
-}
-
-/**
- * The KNOWS count chips — findings / ruled-out / (optional) provisional. A chip is
- * rendered for every count (including 0 for findings/ruled-out so the digest reads
- * as a complete picture); provisional is shown only when the seam has any (it stays
- * dormant for most sessions). Always visible — no hover-reveal.
- */
-function KnowsChips({
-  findings,
-  ruledOut,
-  provisional,
-}: {
-  findings: number
-  ruledOut: number
-  provisional?: number
-}) {
-  return (
-    <div className="agent-rail-knows-chips">
-      <span className="agent-rail-knows-chip findings" title="Active findings">
-        {findings} {findings === 1 ? "finding" : "findings"}
-      </span>
-      <span className="agent-rail-knows-chip ruled-out" title="Ruled-out / corrected">
-        {ruledOut} ruled out
-      </span>
-      {provisional != null && (
-        <span className="agent-rail-knows-chip provisional" title="Provisional findings">
-          {provisional} provisional
-        </span>
-      )}
-    </div>
-  )
-}
-
-/**
- * The most-recent ruled-out one-liner, rendered as the `~~old~~ → new` correction
- * pair (matching the SessionOverview / RecallPanel rendering) so a glance shows what
- * was DISPROVEN and what replaced it. Optionally tagged with the owning session name
- * (the cross-session digest), so a recall hit reads as "from <that session>".
- */
-function RuledOutOneLiner({ line, from }: { line: RuledOutLine; from?: string }) {
-  return (
-    <div className="agent-rail-knows-ruled" title={line.text}>
-      <span className="agent-rail-knows-struck">{line.text}</span>
-      {line.correction && (
-        <span className="agent-rail-knows-correction"> → {line.correction}</span>
-      )}
-      {from && <span className="agent-rail-knows-from"> · {from}</span>}
-    </div>
   )
 }

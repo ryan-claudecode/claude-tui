@@ -73,26 +73,7 @@ export function buildMainPanelApi(): PanelApi {
     hidePanel: (panelId: string) => {
       void a.hidePanel(panelId)
     },
-    recall: (query, scope, sessionId) => a.recall(query, scope, sessionId),
     openSessionOverview: (sessionId) => a.openSessionOverview(sessionId),
-    promoteSessionToWorkspace: (sessionId) => a.promoteSessionToWorkspace(sessionId),
-    getWorkspaceMemory: (workspaceId) => a.getWorkspaceMemory(workspaceId),
-    setWorkspaceInstructions: (workspaceId, text) => a.setWorkspaceInstructions(workspaceId, text),
-    addWorkspaceFinding: (workspaceId, text, source) => a.addWorkspaceFinding(workspaceId, text, source),
-    editWorkspaceFinding: (workspaceId, findingId, text) => a.editWorkspaceFinding(workspaceId, findingId, text),
-    deleteWorkspaceFinding: (workspaceId, findingId) => a.deleteWorkspaceFinding(workspaceId, findingId),
-    setWorkspaceFindingPinned: (workspaceId, findingId, pinned) =>
-      a.setWorkspaceFindingPinned(workspaceId, findingId, pinned),
-    onWorkspaceMemoryChanged: (cb) => a.onWorkspaceMemoryChanged(cb),
-    getExportState: (workspaceId) => a.getExportState(workspaceId),
-    enableExport: (workspaceId, mode, customPath) => a.enableExport(workspaceId, mode, customPath),
-    disableExport: (workspaceId) => a.disableExport(workspaceId),
-    setUntaggedExportEnabled: (enabled) => a.setUntaggedExportEnabled(enabled),
-    regenerateExport: (workspaceId) => a.regenerateExport(workspaceId),
-    getAdoptionState: (workspaceId) => a.getAdoptionState(workspaceId),
-    wireImportBlock: (workspaceId) => a.wireImportBlock(workspaceId),
-    unwireImportBlock: (workspaceId) => a.unwireImportBlock(workspaceId),
-    setExportSelfWired: (workspaceId, selfWired) => a.setExportSelfWired(workspaceId, selfWired),
     inspectWorkspaceContext: (workspaceId) => a.inspectWorkspaceContext(workspaceId),
   }
 }

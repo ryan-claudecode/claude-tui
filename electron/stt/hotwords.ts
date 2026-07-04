@@ -102,25 +102,6 @@ export function phraseFromSource(source: string): string {
     .join(" ")
 }
 
-/**
- * Extract the "significant" words from free prose (session summaries, finding texts,
- * standing instructions). A cheap proxy for "nouns / domain terms" without a POS tagger:
- * keep a word iff it is Capitalized, has an internal capital (an identifier fragment),
- * contains a digit, or is reasonably long (≥6). Common short function words ("the", "and",
- * "with") fall through. Because {@link splitWords} already splits camelCase, an identifier
- * embedded in prose ("the TerminalService owns…") surfaces its parts as capitalized words.
- */
-export function extractSignificantWords(prose: string): string[] {
-  const out: string[] = []
-  for (const w of splitWords(prose)) {
-    if (w.length < MIN_WORD_LEN) continue
-    const significant =
-      /^[A-Z]/.test(w) || /[A-Z]/.test(w.slice(1)) || /[0-9]/.test(w) || w.length >= 6
-    if (significant) out.push(w)
-  }
-  return out
-}
-
 /** The categorized raw inputs {@link deriveHotwords} folds into one vocabulary. */
 export interface HotwordInputs {
   /** User config `stt.hotwords` — highest priority (always kept under the cap). */
@@ -129,19 +110,17 @@ export interface HotwordInputs {
   terms?: readonly string[]
   /** File/dir basenames from the bounded workspace walk. */
   fileNames?: readonly string[]
-  /** Free prose from the context engine: summaries + finding texts + instructions. */
-  prose?: readonly string[]
 }
 
 /**
- * Fold the four vocabulary sources into ONE deduped, capped hotword-entry list. Each entry
+ * Fold the vocabulary sources into ONE deduped, capped hotword-entry list. Each entry
  * is a phrase (space-separated words) suitable for {@link encodeHotwordLines}. Ordering is
- * PRIORITY order (extras → terms → fileNames → prose) so the user's own vocabulary and the
- * core constants always survive the {@link MAX_HOTWORDS} cap. Dedup is case-insensitive,
+ * PRIORITY order (extras → terms → fileNames) so the user's own vocabulary and the core
+ * constants always survive the {@link MAX_HOTWORDS} cap. Dedup is case-insensitive,
  * first occurrence (and its casing) wins.
  *
- * PURE — no I/O. The wiring layer (`ipc.ts`) gathers the raw inputs (through injected getters,
- * the way `contextInject` reads the stores) and hands them here.
+ * PURE — no I/O. The wiring layer (`ipc.ts`) gathers the raw inputs (through injected getters)
+ * and hands them here.
  */
 export function deriveHotwords(inputs: HotwordInputs, opts?: { max?: number }): string[] {
   const max = opts?.max ?? MAX_HOTWORDS
@@ -152,7 +131,6 @@ export function deriveHotwords(inputs: HotwordInputs, opts?: { max?: number }): 
   for (const e of inputs.extras ?? []) push(phraseFromSource(e))
   for (const t of inputs.terms ?? []) push(phraseFromSource(t))
   for (const n of inputs.fileNames ?? []) push(phraseFromSource(n))
-  for (const p of inputs.prose ?? []) for (const w of extractSignificantWords(p)) push(w)
 
   const seen = new Set<string>()
   const out: string[] = []
@@ -164,47 +142,6 @@ export function deriveHotwords(inputs: HotwordInputs, opts?: { max?: number }): 
     if (out.length >= max) break
   }
   return out
-}
-
-/** The context-engine surfaces {@link gatherContextProse} reads — injected (the way
- *  contextInject reads the stores) so the assembly stays pure + hermetically testable. */
-export interface ContextProseDeps {
-  /** The ACTIVE workspace id, or null when none — null reads the untagged "All" bucket. */
-  activeWorkspaceId: string | null
-  /** Workspace-memory bucket lookup. MUST accept null (the untagged bucket), like
-   *  `WorkspaceMemoryService.getMemory`. */
-  getMemory: (workspaceId: string | null) => {
-    instructions: string
-    findings: ReadonlyArray<{ text: string }>
-  }
-  listSessions: () => ReadonlyArray<{ id: string; workspaceId?: string }>
-  getSessionSections: (
-    sessionId: string,
-  ) => { summary: string; active: ReadonlyArray<{ text: string }> } | undefined
-}
-
-/**
- * Gather the context-engine PROSE feeding the active workspace's dictation vocabulary:
- * the workspace-memory bucket (standing instructions + finding texts) plus every matching
- * live session's summary + active findings. Review NIT 5 — a null active workspace reads
- * the UNTAGGED "All" bucket (getMemory(null)) and the untagged sessions, so the global
- * scope contributes vocabulary exactly like a real workspace does.
- */
-export function gatherContextProse(deps: ContextProseDeps): string[] {
-  const prose: string[] = []
-  const wsId = deps.activeWorkspaceId
-  const mem = deps.getMemory(wsId)
-  if (mem.instructions) prose.push(mem.instructions)
-  for (const f of mem.findings) if (f.text) prose.push(f.text)
-  for (const s of deps.listSessions()) {
-    // Scope to the active workspace; an untagged session matches the null/untagged scope.
-    if ((s.workspaceId ?? null) !== wsId) continue
-    const sec = deps.getSessionSections(s.id)
-    if (!sec) continue
-    if (sec.summary) prose.push(sec.summary)
-    for (const n of sec.active) if (n.text) prose.push(n.text)
-  }
-  return prose
 }
 
 // ---------------------------------------------------------------------------

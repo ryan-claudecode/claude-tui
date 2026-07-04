@@ -5,9 +5,7 @@ import { join } from "node:path"
 import {
   splitWords,
   phraseFromSource,
-  extractSignificantWords,
   deriveHotwords,
-  gatherContextProse,
   spellWord,
   spellPhrase,
   encodeHotwordLines,
@@ -40,7 +38,7 @@ function makeTokenSet(): Set<string> {
 describe("splitWords / phraseFromSource — identifier splitting", () => {
   it("splits camelCase and PascalCase into words", () => {
     expect(splitWords("TerminalService")).toEqual(["Terminal", "Service"])
-    expect(splitWords("workspaceMemory")).toEqual(["workspace", "Memory"])
+    expect(splitWords("agentComposer")).toEqual(["agent", "Composer"])
   })
 
   it("splits acronym boundaries", () => {
@@ -62,36 +60,17 @@ describe("splitWords / phraseFromSource — identifier splitting", () => {
   })
 })
 
-describe("extractSignificantWords — prose", () => {
-  it("keeps capitalized / long / identifier words, drops short function words", () => {
-    const out = extractSignificantWords("the TerminalService owns pty and idle state")
-    // "the","and","pty","owns","idle" dropped (short/lowercase, no cap/digit, <6 chars)
-    expect(out).toContain("Terminal")
-    expect(out).toContain("Service")
-    expect(out).not.toContain("owns")
-    expect(out).not.toContain("the")
-    expect(out).not.toContain("and")
-  })
-
-  it("keeps a 6+ char lowercase domain word", () => {
-    expect(extractSignificantWords("workspace dictation")).toEqual(["workspace", "dictation"])
-  })
-})
-
 describe("deriveHotwords — folding, dedup, cap, priority", () => {
-  it("folds all four sources into phrase entries", () => {
+  it("folds all three sources into phrase entries", () => {
     const out = deriveHotwords({
       extras: ["Widget"],
       terms: ["opus", "--dangerously-skip-permissions"],
       fileNames: ["TerminalService.ts"],
-      prose: ["The RecallService indexes findings"],
     })
     expect(out).toContain("Widget")
     expect(out).toContain("opus")
     expect(out).toContain("dangerously skip permissions")
     expect(out).toContain("Terminal Service") // ".ts" (2 chars) is dropped
-    expect(out).toContain("Recall")
-    expect(out).toContain("Service")
   })
 
   it("dedupes case-insensitively, first occurrence (and its casing) wins", () => {
@@ -99,9 +78,9 @@ describe("deriveHotwords — folding, dedup, cap, priority", () => {
     expect(out).toEqual(["electron"])
   })
 
-  it("caps at the requested max, honoring priority order (extras > terms > files > prose)", () => {
+  it("caps at the requested max, honoring priority order (extras > terms > files)", () => {
     const out = deriveHotwords(
-      { extras: ["zeta"], terms: ["alpha"], fileNames: ["middle"], prose: ["Prosetermone Prosetermtwo"] },
+      { extras: ["zeta"], terms: ["alpha"], fileNames: ["middle"] },
       { max: 2 },
     )
     expect(out).toEqual(["zeta", "alpha"])
@@ -122,45 +101,6 @@ describe("deriveHotwords — folding, dedup, cap, priority", () => {
 
   it("empty inputs -> empty vocabulary", () => {
     expect(deriveHotwords({})).toEqual([])
-  })
-})
-
-describe("gatherContextProse — context-engine prose (review NIT 5)", () => {
-  const memories: Record<string, { instructions: string; findings: { text: string }[] }> = {
-    "ws-1": { instructions: "ws1 standing rules", findings: [{ text: "WsOneFinding" }] },
-    untagged: { instructions: "global standing rules", findings: [{ text: "GlobalFinding" }] },
-  }
-  const base = {
-    // getMemory(null) => the untagged "All" bucket, like WorkspaceMemoryService.
-    getMemory: (id: string | null) => memories[id ?? "untagged"],
-    listSessions: () => [
-      { id: "s1", workspaceId: "ws-1" },
-      { id: "s2" }, // an UNTAGGED session
-    ],
-    getSessionSections: (id: string) =>
-      id === "s1"
-        ? { summary: "s1 summary", active: [{ text: "S1Finding" }] }
-        : { summary: "s2 summary", active: [{ text: "S2Finding" }] },
-  }
-
-  it("an active workspace reads ITS bucket + ITS sessions only", () => {
-    const prose = gatherContextProse({ ...base, activeWorkspaceId: "ws-1" })
-    expect(prose).toEqual(["ws1 standing rules", "WsOneFinding", "s1 summary", "S1Finding"])
-  })
-
-  it("NO active workspace reads the UNTAGGED 'All' bucket + untagged sessions", () => {
-    const prose = gatherContextProse({ ...base, activeWorkspaceId: null })
-    expect(prose).toEqual(["global standing rules", "GlobalFinding", "s2 summary", "S2Finding"])
-  })
-
-  it("empty instructions / missing sections contribute nothing (no empty strings)", () => {
-    const prose = gatherContextProse({
-      activeWorkspaceId: null,
-      getMemory: () => ({ instructions: "", findings: [] }),
-      listSessions: () => [{ id: "s9" }],
-      getSessionSections: () => undefined,
-    })
-    expect(prose).toEqual([])
   })
 })
 

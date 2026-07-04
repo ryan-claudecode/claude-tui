@@ -15,11 +15,8 @@ import type { FileService } from "../services/files"
 import type { UiService } from "../services/ui"
 import type { SchedulerService } from "../services/scheduler"
 import type { SessionService } from "../services/sessions"
-import type { RecallService } from "../services/recall"
 import type { AttentionService } from "../services/attention"
-import type { WorkspaceMemoryService } from "../services/workspaceMemory"
 import type { ContextInspectorService } from "../services/contextInspector"
-import type { ExportService } from "../services/export"
 import { registerTools, type TerminalIdentity } from "./tools"
 
 // Injected into every connecting session's context via the MCP initialize
@@ -31,10 +28,10 @@ const SERVER_INSTRUCTIONS = `You are running inside ClaudeTUI — a workbench wh
 Tool groups (all prefixed mcp__claudetui__):
 
 PILLAR 1 — CONTINUITY (work outlives any single context window):
-- Work sessions (the context engine) — create_work_session / list_work_sessions / work_session_status build a durable *container* that groups many terminals and accumulates knowledge across restarts and context exhaustion. set_terminal_activity reports what a terminal is doing now; session_note records authoritative findings (pass 'corrects' to supersede a wrong one); set_session_summary sets the running summary; get_session_context pulls the primer (summary + findings + ruled-out) a fresh terminal reads to inherit what the session knows. recall searches every finding + summary ACROSS sessions ("have we learned this before?") — call it BEFORE re-exploring; scope defaults to your workspace, ruled-out hits surface what was disproven (with the fix) so you don't re-walk dead ends. list_folder_conversations + restore_conversation discover and reopen ANY past Claude Code conversation for a folder (including ones started outside this app) — claude --resume in that folder as a new work session.
+- Work sessions — create_work_session / list_work_sessions / work_session_status build a durable *container* that groups many terminals and survives restarts. set_terminal_activity reports what a terminal is doing now. list_folder_conversations + restore_conversation discover and reopen ANY past Claude Code conversation for a folder (including ones started outside this app) — claude --resume in that folder as a new work session. Durable KNOWLEDGE lives in Claude's own native memory (CLAUDE.md / CLAUDE.local.md / auto-memory), not in this app.
 - Session history — get_session_output / search_session_output (review what a background session did while you were away), get_session_activity (which sessions are active vs idle), wait_for_session_idle (delegate a task to another session and block until it finishes).
 - Durable notes — save_note / list_notes / get_note / delete_note / show_notes (a cross-session scratchpad on disk for the next session).
-- Workspace memory (the durable, workspace-level knowledge tier — survives ALL session deletion, distinct from per-session findings) — get_workspace_memory (read a workspace's standing context + findings), add_workspace_memory (record a workspace-wide finding), set_workspace_memory_context (set the workspace's standing instructions), promote_finding (graduate a session note up to its OWNING session's workspace so it outlives the session), pin_workspace_finding (mark a foundational finding never-evict so it always survives the curated context auto-loaded into a fresh session), inspect_workspace_context (READ-ONLY: enumerate the complete launch-time context a fresh Claude eats — managed policy, user/project memory + rules, parent-chain, native auto-memory, plus our injected primer — by precedence; @imports listed not expanded; never writes a file), export_workspace_memory (materialize the workspace tier into a user-owned markdown file a plain claude can @import — STRICTLY one-way, store→file; Mode A in-folder gitignore-first / Mode C custom path; returns the @import line). Destination is always YOUR bound session's workspace (or the owning session's, for promote) — never the global active selection.
+- Native context (READ-ONLY) — inspect_workspace_context enumerates the complete launch-time context a fresh Claude eats in a workspace — managed policy, user/project memory + rules, parent-chain, native auto-memory — by precedence; @imports listed not expanded; it NEVER writes a file.
 
 PILLAR 2 — AGENT-RENDERED UI (you drive the app back, routing the user's attention):
 - Panels — show_panel renders a rich panel in the companion window: diff, image, markdown, table, test, chart, heatmap, tree, timeline, git, kanban, notes, stat, log, progress, code. show_form shows an interactive form and waits for the user's submission. Plus update_panel / hide_panel / hide_all_panels / list_panels. diff_files opens an interactive, review-enabled diff of two files (or a proposed rewrite).
@@ -51,7 +48,7 @@ SUPPORTING (observability & self-verification):
 - Workspaces — the durable registry of user-named single-folder workspaces (the spatial frame sessions scope to; each workspace is ONE optional directory): list_workspaces / get_active_workspace (read), rescan_workspaces (re-scan the configured paths for new workspace.json manifests and seed them — idempotent, never duplicates or reverts user edits), create_workspace (name + optional single dir) / rename_workspace / set_workspace_dir (set or clear the workspace's one folder; null clears) / delete_workspace (CRUD by registry id), set_active_workspace (SELECTION-ONLY — mark the active workspace; null clears to the 'All' bucket; does NOT spawn), launch_workspace (the explicit BOOT verb — open editors + spawn one session per repo, or one in the workspace's folder).
 - Self-verification — take_screenshot, get_app_state, run_build, run_tests.
 
-IF YOU WERE SPAWNED AS A TERMINAL IN A WORK SESSION: your identity is bound to this MCP connection — the work-session tools (get_session_context, set_terminal_activity, session_note, set_session_summary, work_session_status) all default to YOUR session and terminal, so call them with NO ids (e.g. set_terminal_activity({ activity: "running the test suite" })). On entry, call get_session_context to inherit what prior terminals discovered (root causes, gotchas, ruled-out approaches). As you work, call set_terminal_activity whenever your focus changes. Whenever you learn something a fresh terminal would otherwise re-discover, pin it with session_note (and session_note with 'corrects' if an earlier note was wrong). When you finish a chunk of work and go quiet, you may receive a short prompt asking you to refresh the session summary via set_session_summary — do it concisely; it's how a fresh terminal inherits your progress. On Ctrl+Shift+H you'll be asked to flush and retire. Then proceed with the user's instructions.
+IF YOU WERE SPAWNED AS A TERMINAL IN A WORK SESSION: your identity is bound to this MCP connection — the work-session tools (set_terminal_activity, work_session_status) default to YOUR session and terminal, so call them with NO ids (e.g. set_terminal_activity({ activity: "running the test suite" })). As you work, call set_terminal_activity whenever your focus changes. On Ctrl+Shift+H you'll be asked to retire and continue in a fresh terminal. Record durable knowledge in the project's native memory files (CLAUDE.md / CLAUDE.local.md), not in this app. Then proceed with the user's instructions.
 
 Notes: tool schemas may be deferred — if a tool isn't loaded yet, search for it by exact name to load its schema before calling. See CLAUDE.md for full per-tool detail and the panel prop schemas.`
 
@@ -93,11 +90,8 @@ export async function startMcpServer(
   fileService: FileService,
   uiService: UiService,
   workSessionService: SessionService,
-  recallService: RecallService,
   attentionService: AttentionService,
-  workspaceMemoryService: WorkspaceMemoryService,
   contextInspectorService: ContextInspectorService,
-  exportService: ExportService,
   schedulerService: SchedulerService,
 ): Promise<{ port: number; configPath: string }> {
   // A single McpServer can only be bound to one transport at a time, so we
@@ -128,11 +122,8 @@ export async function startMcpServer(
       fileService,
       uiService,
       workSessionService,
-      recallService,
       attentionService,
-      workspaceMemoryService,
       contextInspectorService,
-      exportService,
       schedulerService,
       identity,
     )

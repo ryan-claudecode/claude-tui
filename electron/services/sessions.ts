@@ -10,12 +10,6 @@ import {
 import type { RenderingEngine } from "../config"
 import { logWarn } from "../log"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
-import type { PromoteEntry } from "./workspaceMemory"
-import {
-  buildContextDelta,
-  type ContextStamp,
-  type InjectContextInput,
-} from "./contextInject"
 
 /**
  * BO-11 (CAPP-50) — the deny message {@link SessionService.interruptAgent} settles a
@@ -26,19 +20,6 @@ import {
  */
 const INTERRUPT_ABORT_MESSAGE =
   "The user interrupted this action with Stop. Do not retry or complete it. Stop now and await further instructions."
-
-/**
- * CAPP-101 (P1) — the re-prime prompt. The workspace memory changed AFTER this terminal
- * spawned, so its frozen launch inject is stale. This bracketed-paste / stdin prompt asks
- * the LIVE agent to PULL the delta via get_session_context (the CAPP-97 launch-delta path
- * returns only what changed since spawn). HONEST: this PROMPTS the pull — it does NOT itself
- * inject the finding. We deliberately don't dump the new findings here; get_session_context
- * is the single source of the durable brain.
- */
-const REPRIME_PROMPT =
-  "Workspace memory was updated since you started. Call get_session_context now to pull the " +
-  "latest durable findings/instructions (it returns only what changed since you launched), then " +
-  "fold anything relevant into your current work."
 
 export interface TerminalRef {
   id: string
@@ -120,39 +101,17 @@ export interface TerminalRef {
    * a normal terminal). reopenTerminal also skips it defensively.
    */
   isLogin?: boolean
-  /**
-   * CAPP-101 (P1) — the propagation nudge mark. Set true when this terminal's owning
-   * session's WORKSPACE memory changed AFTER the terminal spawned (so its frozen
-   * launch inject is now stale relative to the durable brain). Surfaced to the renderer
-   * (rides the `worksession:updated` snapshot → the Agent Rail KNOWS "re-prime to pull"
-   * affordance). HONEST: the change reaches the renderer chrome, NOT the running Claude
-   * process — re-priming only PROMPTS the agent to pull the delta via get_session_context,
-   * it does NOT itself inject the finding (true zero-touch propagation to a live session
-   * is out of scope for v1). Cleared on re-prime AND on any handoff/reopen/respawn (a
-   * fresh terminal already has current context). Optional/additive: legacy refs load fine
-   * (undefined → not marked).
-   */
-  pendingMemoryDelta?: boolean
-}
-
-export interface Note {
-  id: string
-  text: string
-  createdAt: number
-  source: "self" | "observer"
-  status: "active" | "superseded"
-  supersededBy?: string
 }
 
 /**
  * One terse, human-readable entry in a work session's durable life-history. The
  * session accumulates these at its lifecycle points (terminal spawn/retire,
- * note/correction/summary refresh, handoff, idle-flush) so "what did my agents
- * do while I was away?" is answerable from the on-disk record alone.
+ * handoff) so "what did my agents do while I was away?" is answerable from the
+ * on-disk record alone.
  */
 export interface SessionEvent {
   time: number
-  kind: "spawn" | "retire" | "handoff" | "note" | "correction" | "summary" | "idle-flush"
+  kind: "spawn" | "retire" | "handoff"
   text: string
   terminalId?: string
 }
@@ -162,9 +121,6 @@ export interface WorkSession {
   name: string
   status: "active" | "stopped"
   workspaceId?: string
-  summary: string
-  notes: Note[]
-  provisionalFindings: Note[]
   terminals: TerminalRef[]
   /**
    * Durable life-history (ST-1). OPTIONAL and additive: legacy sessions persisted
@@ -180,17 +136,12 @@ export interface SessionOverview {
   id: string
   name: string
   status: "active" | "stopped"
-  summary: string
-  notes: Note[]
-  ruledOut: Array<{ id: string; text: string; correction?: string }>
-  provisionalFindings: Note[]
   terminals: Array<TerminalRef & { activity?: string }>
 }
 
 export interface SessionServiceOpts {
   dir?: string
   now?: () => number
-  idleFlushGraceMs?: number
   /**
    * WS-C — data-scoping seam. A getter returning the CURRENTLY-ACTIVE workspace id
    * (or null/undefined when "All" mode), so a session minted while a workspace is
@@ -224,33 +175,10 @@ export interface SessionServiceOpts {
    */
   ccProjectsRoot?: string
   /**
-   * CAPP-86 — OPTIONAL cross-session primer enrichment seam ("The Lexicon"). When
-   * present AND enabled (see {@link SessionServiceOpts.primerRecallEnabled}),
-   * {@link SessionService.getContext} appends a capped "## Related from other
-   * sessions" block of recall hits sourced from this callback. Injected as a
-   * callback (RecallService is read-only and decoupled), the same posture as
-   * getActiveWorkspaceId. ABSENT → the primer is byte-identical (existing call
-   * sites/tests unaffected). The callback is given the session's own id + workspace
-   * id so it can scope to the workspace and exclude the session's own entries.
-   */
-  recallRelated?: (args: {
-    sessionId: string
-    workspaceId?: string
-    query: string
-    limit: number
-  }) => Array<{ text: string; sessionName: string; status: "active" | "ruled-out" | "summary"; correction?: string }>
-  /**
-   * CAPP-86 — gate for the primer enrichment above. Re-read FRESH each call
-   * (mirroring the loadConfig() re-read posture elsewhere) so a config flip is
-   * honored without an app restart. DEFAULT (absent) → FALSE (OFF): the default
-   * primer is byte-identical. Only an explicit `true` arms the enrichment.
-   */
-  primerRecallEnabled?: () => boolean
-  /**
    * CAPP-113 — ADDITIVE config `models.xhigh` seam. A getter returning extra models
    * that support xhigh reasoning, threaded into {@link modelSupportsXhigh} so a
    * model-switch to a config-declared xhigh model PRESERVES ultracode (instead of
-   * force-clearing it). Re-read FRESH each call (mirroring primerRecallEnabled) so a
+   * force-clearing it). Re-read FRESH each call so a
    * config edit is honored without a restart. ABSENT → `() => []`: the keepUltra
    * classification is byte-identical to the built-in matcher (existing tests
    * unaffected). `ipc.ts` wires it to `resolveXhighModels(loadConfig())`.
@@ -346,12 +274,6 @@ export class SessionService {
    *  overlapping Stops don't double-respawn). Keyed by the original terminal id. */
   private interrupting = new Set<string>()
 
-  /** Sessions with notes added since their last summary refresh. */
-  private summaryDirty = new Set<string>()
-  /** Last idle-flush injection time per session (debounce). */
-  private lastFlushAt = new Map<string, number>()
-  private readonly idleFlushMinIntervalMs = 60_000
-  private idleFlushGraceMs: number
   /** WS-C — active-workspace getter, stamped onto every freshly-minted session. */
   private getActiveWorkspaceId: () => string | null | undefined
   /** WS-G (G1) — active-workspace-dir getter, used as the spawn cwd for a NEW
@@ -359,31 +281,15 @@ export class SessionService {
   private getActiveWorkspaceDir: () => string | null | undefined
   /** CAPP-75 — the Claude Code transcript store root for conversation discovery. */
   private ccProjectsRoot: string
-  /** CAPP-86 — OPTIONAL cross-session primer enrichment seam (default: none → off). */
-  private recallRelated?: SessionServiceOpts["recallRelated"]
-  private primerRecallEnabled: () => boolean
   /** CAPP-113 — extra xhigh-capable models (config `models.xhigh`), read fresh. */
   private getXhighModels: () => string[]
-  /**
-   * CAPP-97 — per-terminal launch snapshot of the auto-loaded context (the curated
-   * "brain" CAPP-96 pushes at spawn). Keyed by the SAME terminalId the inject wrote
-   * `<tid>.md` under. `getContext(sessionId, { terminalId })` diffs the current context
-   * against this stamp and returns only the DELTA, so the agent's later pull doesn't
-   * re-load bytes already injected. In-memory (lives for the terminal's runtime life): a
-   * terminal restored after an app restart has NO stamp and correctly gets the FULL
-   * context (the resume-pointer path injected no snapshot to diff against).
-   */
-  private launchStamps = new Map<string, ContextStamp>()
 
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
     this.now = opts.now ?? (() => Date.now())
-    this.idleFlushGraceMs = opts.idleFlushGraceMs ?? 20000
     this.getActiveWorkspaceId = opts.getActiveWorkspaceId ?? (() => undefined)
     this.getActiveWorkspaceDir = opts.getActiveWorkspaceDir ?? (() => undefined)
     this.ccProjectsRoot = opts.ccProjectsRoot ?? join(homedir(), ".claude", "projects")
-    this.recallRelated = opts.recallRelated
-    this.primerRecallEnabled = opts.primerRecallEnabled ?? (() => false)
     this.getXhighModels = opts.xhighModels ?? (() => [])
   }
 
@@ -523,125 +429,8 @@ export class SessionService {
     if (!t) return
     t.lastState = state
     s.status = s.terminals.some((x) => x.lastState === "active" || x.lastState === "idle") ? "active" : "stopped"
-    if (state === "idle") this.scheduleIdleFlush(s.id, terminalId)
-    // CAPP-101 — a terminal that DIED can't pull a delta; drop any pending nudge so the rail
-    // doesn't keep a stale "re-prime to pull" affordance + an inert button on a dead ref.
-    if (state === "dead") this.clearPendingMemoryDelta(t)
     this.persist(s)
     this.emit("worksession:updated", this.withEffectiveActivity(s))
-  }
-
-  /**
-   * After a terminal goes idle, refresh the session summary IF new notes have
-   * landed since the last refresh. The terminal that did the work distills it —
-   * we inject one prompt asking it to call set_session_summary. Debounced so we
-   * never flush more than once per idleFlushMinIntervalMs, and gated on dirty so
-   * an idle terminal with nothing new is left alone.
-   */
-  private scheduleIdleFlush(sessionId: string, terminalId: string): void {
-    setTimeout(() => {
-      const s = this.sessions.get(sessionId)
-      if (!s || !this.terminals) return
-      const t = s.terminals.find((x) => x.id === terminalId)
-      if (!t || t.lastState !== "idle") return // moved on; don't interrupt
-      // CAPP-39 gate ② — NEVER write the bracketed-paste summary-refresh prompt into
-      // a login terminal: it's the live interactive OAuth prompt, not an agent. (Also
-      // guards a non-structured/xterm-only login PTY whose ref might lack the flag.)
-      if (t.isLogin || this.terminals.isLogin(terminalId)) return
-      if (!this.summaryDirty.has(sessionId)) return
-      const last = this.lastFlushAt.get(sessionId)
-      if (last !== undefined && this.now() - last < this.idleFlushMinIntervalMs) return
-
-      this.summaryDirty.delete(sessionId)
-      this.lastFlushAt.set(sessionId, this.now())
-      this.logEvent(s, "idle-flush", `Requested summary refresh from "${t.name}" on idle`, terminalId)
-      this.persist(s)
-      const prompt =
-        "Before you go quiet: fold any new findings into the session summary now. " +
-        "Call set_session_summary with the updated goal + current-state blurb so a " +
-        "fresh terminal inherits it. Keep it concise."
-      this.terminals.write(terminalId, `\x1b[200~${prompt}\x1b[201~\r`)
-    }, this.idleFlushGraceMs)
-  }
-
-  /**
-   * CAPP-101 (P1) — the propagation nudge. A workspace's memory just changed; mark every
-   * ALREADY-RUNNING terminal whose OWNING SESSION's workspaceId === `workspaceId` so the
-   * renderer can surface a quiet "re-prime to pull" affordance. The running terminal's
-   * Claude process froze its inject at spawn (the `workspace:memory-changed` push reaches
-   * only the renderer chrome — §C case (ii)); the mark + re-prime are the honest nudge.
-   *
-   * HARD SCOPING: keyed on the session's OWN `workspaceId`, NEVER `getActiveId()` — a memory
-   * change in W marks ONLY W's running terminals (a session in another workspace, or untagged
-   * when W is a real id, is never marked). `workspaceId` is a string (a real id or the untagged
-   * sentinel "__untagged__"), normalized so a session's undefined workspaceId matches the
-   * untagged bucket and nothing else.
-   *
-   * "Running" = a live PTY (lastState active|idle), excluding login terminals (an ephemeral
-   * OAuth prompt has no inject to re-prime) and dead refs (a cold/restored ref will get the
-   * current brain when it's reopened). Only emits/persists for sessions that actually changed.
-   */
-  markWorkspaceMemoryChanged(workspaceId: string): void {
-    // Normalize the public id-or-sentinel to the same scope a session's workspaceId uses:
-    // a real id matches sessions stamped with it; the untagged sentinel matches sessions with
-    // NO workspaceId. We deliberately do NOT consult getActiveId — the mark is per-session scope.
-    const isUntaggedTarget = workspaceId === "__untagged__"
-    for (const s of this.sessions.values()) {
-      const sessionScope = s.workspaceId ?? "__untagged__"
-      if (isUntaggedTarget ? sessionScope !== "__untagged__" : s.workspaceId !== workspaceId) {
-        continue
-      }
-      let changed = false
-      for (const t of s.terminals) {
-        // Skip login terminals (no inject) and non-running refs (a dead/cold ref gets the
-        // current brain on reopen). Only set the flag when it isn't already set (idempotent).
-        if (t.isLogin) continue
-        if (t.lastState !== "active" && t.lastState !== "idle") continue
-        if (t.pendingMemoryDelta) continue
-        t.pendingMemoryDelta = true
-        changed = true
-      }
-      if (changed) {
-        this.persist(s)
-        this.emit("worksession:updated", this.withEffectiveActivity(s))
-      }
-    }
-  }
-
-  /**
-   * CAPP-101 (P1) — the re-prime action (a USER affordance, NOT MCP). Bracket-paste the
-   * get_session_context PULL prompt to the running terminal via the SAME idle-flush stdin
-   * path: structured (headless) → a clean prompt to the stdin sink; xterm → the bracketed-
-   * paste keystroke idiom. It PROMPTS the agent to pull the CAPP-97 delta — it does NOT itself
-   * inject the finding. Clears the pending flag, persists + emits. No-op (false) for an unknown
-   * session/terminal, a login terminal, or a non-running ref.
-   */
-  reprimeTerminal(sessionId: string, terminalId: string): boolean {
-    const s = this.sessions.get(sessionId)
-    if (!s || !this.terminals) return false
-    const t = s.terminals.find((x) => x.id === terminalId)
-    if (!t) return false
-    if (t.isLogin || this.terminals.isLogin(terminalId)) return false
-    if (t.lastState !== "active" && t.lastState !== "idle") return false
-
-    const structured = this.terminals.isHeadless(terminalId) || t.engine === "structured"
-    // Reuse the idle-flush stdin idiom EXACTLY: structured → plain prompt (TerminalService.write
-    // routes it to the stdin sink as a user message); xterm → the bracketed-paste keystroke.
-    this.terminals.write(terminalId, structured ? REPRIME_PROMPT : `\x1b[200~${REPRIME_PROMPT}\x1b[201~\r`)
-
-    if (t.pendingMemoryDelta) {
-      t.pendingMemoryDelta = false
-      this.persist(s)
-      this.emit("worksession:updated", this.withEffectiveActivity(s))
-    }
-    return true
-  }
-
-  /** CAPP-101 (P1) — clear a terminal ref's pending-delta mark (a fresh/re-primed terminal
-   *  already has current context). Used by handoff/reopen/respawn after the ref's id is
-   *  replaced. Silent if the flag wasn't set. */
-  private clearPendingMemoryDelta(ref: TerminalRef): void {
-    if (ref.pendingMemoryDelta) ref.pendingMemoryDelta = false
   }
 
   /**
@@ -808,7 +597,6 @@ export class SessionService {
     if (!s) return
     const closed = s.terminals.find((t) => t.id === terminalId)
     this.terminals?.kill(terminalId)
-    this.clearLaunchStamp(terminalId) // CAPP-97 — the terminal is gone; drop its launch stamp.
     s.terminals = s.terminals.filter((t) => t.id !== terminalId)
     s.status = s.terminals.some((t) => t.lastState === "active" || t.lastState === "idle") ? "active" : "stopped"
     if (closed) this.logEvent(s, "retire", `Closed terminal "${closed.name}"`, terminalId)
@@ -822,23 +610,15 @@ export class SessionService {
     if (!s) return
     for (const t of s.terminals) {
       this.terminals?.kill(t.id)
-      this.clearLaunchStamp(t.id) // CAPP-97 — drop each terminal's launch stamp.
     }
     this.sessions.delete(sessionId)
-    this.summaryDirty.delete(sessionId)
-    this.lastFlushAt.delete(sessionId)
     try { unlinkSync(join(this.dir, `${sessionId}.json`)) } catch { /* already gone */ }
     this.emit("worksession:removed", sessionId)
   }
 
-  /** @internal test accessor */ __test_summaryDirtyHas(id: string): boolean { return this.summaryDirty.has(id) }
-  /** @internal test accessor */ __test_lastFlushAtHas(id: string): boolean { return this.lastFlushAt.has(id) }
-  /** @internal test accessor */ __test_setLastFlushAt(id: string): void { this.lastFlushAt.set(id, this.now()) }
-
   /**
-   * Retire & continue: force an immediate summary flush on the active terminal,
-   * spawn a fresh primed terminal in the same session, and mark the old one dead.
-   * The fresh terminal inherits everything via get_session_context on entry.
+   * Retire & continue: spawn a fresh primed terminal in the same session, and mark
+   * the old one dead. The fresh terminal resumes the conversation on entry.
    */
   handoffTerminal(sessionId: string, terminalId: string): { terminalId: string } | undefined {
     const s = this.sessions.get(sessionId)
@@ -851,32 +631,16 @@ export class SessionService {
     // structured primitives. Detect once, before we kill anything.
     const structured = this.terminals.isHeadless(terminalId)
 
-    // CAPP-39 gate ② — a login terminal is the live interactive OAuth prompt, not an
-    // agent: NEVER inject the summary-refresh prompt into it (the bracketed paste
-    // would corrupt the sign-in flow). Detect once, alongside the engine branch.
+    // CAPP-39 gate ② — a login terminal is the live interactive OAuth prompt, not an agent.
     const login = old.isLogin === true || this.terminals.isLogin(terminalId)
 
-    // CAPP-54 gate ② (re-review FIX B) — REFUSE handoff on a login terminal. The old
-    // path only skipped the summary-flush but still killed the live `claude /login`
-    // PTY and spawned a normal agent replacement — silently discarding an in-progress
-    // sign-in. There is no "retire & continue" semantics for an OAuth prompt: no-op.
+    // CAPP-54 gate ② (re-review FIX B) — REFUSE handoff on a login terminal: killing the
+    // live `claude /login` PTY and spawning a normal agent replacement would silently
+    // discard an in-progress sign-in. There is no "retire & continue" for an OAuth prompt.
     if (login) return undefined
 
-    // Force a summary flush now if dirty (bypass debounce — explicit user intent).
-    if (this.summaryDirty.has(sessionId)) {
-      this.summaryDirty.delete(sessionId)
-      this.lastFlushAt.set(sessionId, this.now())
-      const prompt =
-        "You're being retired. Fold all findings into the session summary NOW via " +
-        "set_session_summary, then stop."
-      // Structured: route the flush request to the stdin sink as a clean user
-      // message (TerminalService.write strips the PTY bracketed-paste idiom for
-      // headless terminals). Legacy xterm: keep the bracketed-paste keystroke.
-      this.terminals.write(terminalId, structured ? prompt : `\x1b[200~${prompt}\x1b[201~\r`)
-    }
-
     // Spawn the replacement in the SAME engine as the retired terminal, so the
-    // user's mode is preserved; it inherits state via get_session_context on entry.
+    // user's mode is preserved.
     // BO-6: a structured replacement also inherits the retired terminal's `--model`;
     // CAPP-46: and its `--effort` level (undefined → the replacement omits `--effort`).
     // CAPP-108: and its ultracode posture (true → the replacement re-adds `--settings`
@@ -886,8 +650,6 @@ export class SessionService {
       : this.terminals.create(undefined, old.cwd, s.id)
     s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: info.state as TerminalRef["lastState"], engine: info.engine, model: info.model, effort: info.effort, ultracode: info.ultracode })
     this.terminals.kill(terminalId)
-    this.clearLaunchStamp(terminalId) // CAPP-97 — the retired terminal's id is dead; drop its stamp.
-    this.clearPendingMemoryDelta(old) // CAPP-101 — the retired ref is dead; the fresh one has the current brain.
     old.lastState = "dead"
     s.status = "active"
     this.logEvent(s, "handoff", `Handoff: retired "${old.name}", continued in "${info.name}"`, info.id)
@@ -920,8 +682,6 @@ export class SessionService {
     // `/`-autocomplete works IMMEDIATELY on a restored terminal (with last session's
     // catalog), BEFORE its first turn re-emits init. A live init later replaces it.
     if (ref.catalog) this.terminals.seedCatalog?.(info.id, ref.catalog)
-    this.clearLaunchStamp(terminalId) // CAPP-97 — the ref's id is being replaced; drop the old stamp.
-    this.clearPendingMemoryDelta(ref) // CAPP-101 — the reopened terminal gets the CURRENT brain.
     ref.id = info.id
     // BO-4b: reopen re-derives the engine (create() routes to the headless path
     // when the engine config is structured) and honors the spawn's state, so a
@@ -1186,7 +946,6 @@ export class SessionService {
     ref.id = info.id
     ref.lastState = info.state as TerminalRef["lastState"]
     ref.engine = info.engine
-    this.clearPendingMemoryDelta(ref) // CAPP-101 — a respawn got the CURRENT brain at its inject.
     // PRESERVE the last structured model+effort across an xterm round-trip: an xterm
     // spawn carries no model/effort (createXterm ignores them), so adopting them would
     // null out the user's choices and a later switch back to structured would lose them.
@@ -1302,9 +1061,6 @@ export class SessionService {
       name: opts.name ?? "Untitled session",
       status: "active",
       ...(workspaceId ? { workspaceId } : {}),
-      summary: "",
-      notes: [],
-      provisionalFindings: [],
       terminals: [],
       createdAt: t,
       updatedAt: t,
@@ -1355,15 +1111,13 @@ export class SessionService {
 
   /**
    * Re-read every persisted session file from disk into the in-memory map and emit
-   * a `worksession:updated` for each, WITHOUT touching live terminal/PTY state.
-   * Used after a LocalHistory restore (CAPP-95 / D1) overwrites a session JSON
-   * out-of-band: the durable container fields (summary, notes/findings, name) are
-   * refreshed from disk so the recovered state is reflected in-memory, in the recall
-   * index, and in the renderer. Unlike `load()` (boot-time, marks all terminals
+   * a `worksession:updated` for each, WITHOUT touching live terminal/PTY state. Used
+   * when a session JSON is overwritten out-of-band: the durable container fields (name,
+   * terminal membership) are refreshed from disk so the recovered state is reflected
+   * in-memory and in the renderer. Unlike `load()` (boot-time, marks all terminals
    * dead) this preserves the running terminals' lastState — a restore is a recovery
-   * op, not a cold start. A session file the restore DELETED is left in the map (we
-   * don't reconcile removals here — recovery is additive); a fresh restore of an
-   * older snapshot re-adds it.
+   * op, not a cold start. A session file that was DELETED is left in the map (we don't
+   * reconcile removals here — recovery is additive); a fresh restore re-adds it.
    */
   reloadFromDisk(): void {
     let files: string[]
@@ -1404,7 +1158,6 @@ export class SessionService {
     const s = this.sessions.get(sessionId)
     if (!s) return
     s.terminals = s.terminals.filter((t) => t.id !== terminalId)
-    this.clearLaunchStamp(terminalId) // CAPP-97 — the id is gone; drop its launch stamp.
     this.persist(s)
   }
 
@@ -1485,7 +1238,6 @@ export class SessionService {
     const t = s.terminals.find((x) => x.id === terminalId)
     if (!t) return
     t.lastState = state
-    if (state === "dead") this.clearPendingMemoryDelta(t) // CAPP-101 — a dead terminal can't re-prime.
     this.persist(s)
   }
 
@@ -1507,287 +1259,21 @@ export class SessionService {
     return "Idle"
   }
 
-  addNote(sessionId: string, text: string, opts: { corrects?: string } = {}): Note | undefined {
-    const s = this.sessions.get(sessionId)
-    if (!s) return undefined
-    const note: Note = {
-      id: `note-${this.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      text,
-      createdAt: this.now(),
-      source: "self",
-      status: "active",
-    }
-    let correctsTarget: Note | undefined
-    if (opts.corrects) {
-      const target = s.notes.find((n) => n.id === opts.corrects)
-      if (target) {
-        target.status = "superseded"
-        target.supersededBy = note.id
-        correctsTarget = target
-      }
-    }
-    s.notes.push(note)
-    this.summaryDirty.add(sessionId)
-    if (correctsTarget) this.logEvent(s, "correction", `Corrected an earlier note: ${text}`)
-    else this.logEvent(s, "note", `Note: ${text}`)
-    this.persist(s)
-    // CAPP-86 — push so cross-session recall (RecallService) + the Rail KNOWS digest
-    // refresh LIVE when a finding lands. Verified-missing before The Lexicon: addNote
-    // persisted but did NOT emit (same bug class fixed for setTerminalActivity).
-    this.emit("worksession:updated", this.withEffectiveActivity(s))
-    return note
-  }
-
-  setSummary(sessionId: string, summary: string): void {
-    const s = this.sessions.get(sessionId)
-    if (!s) return
-    s.summary = summary
-    this.summaryDirty.delete(sessionId)
-    this.logEvent(s, "summary", "Summary refreshed")
-    this.persist(s)
-    // CAPP-86 — push so cross-session recall (RecallService) + the Rail KNOWS digest
-    // refresh LIVE when the summary changes. Verified-missing before The Lexicon:
-    // setSummary persisted but did NOT emit (same bug class as addNote above).
-    this.emit("worksession:updated", this.withEffectiveActivity(s))
-  }
-
+  /**
+   * A bird's-eye view of a session for the SessionOverview panel: its identity +
+   * status and its terminals with resolved (effective) activity. The durable
+   * knowledge tier (summary / findings / ruled-out) was removed in R3a — durable
+   * knowledge now lives in Claude's native memory files.
+   */
   getOverview(sessionId: string): SessionOverview | undefined {
     const s = this.sessions.get(sessionId)
     if (!s) return undefined
-    const ruledOut = s.notes
-      .filter((n) => n.status === "superseded")
-      .map((n) => ({
-        id: n.id,
-        text: n.text,
-        correction: s.notes.find((c) => c.id === n.supersededBy)?.text,
-      }))
     return {
       id: s.id,
       name: s.name,
       status: s.status,
-      summary: s.summary,
-      notes: s.notes.filter((n) => n.status === "active"),
-      ruledOut,
-      provisionalFindings: s.provisionalFindings,
       terminals: s.terminals.map((t) => ({ ...t, activity: this.effectiveActivity(s.id, t.id) })),
     }
-  }
-
-  /**
-   * Map a session's confirmed `notes` (CAPP-87 / U2) into `PromoteEntry[]` — the
-   * candidate list the workspace-memory promote path (U1's `promoteFindings`)
-   * consumes. Carries BOTH active AND ruled-out (superseded) notes: ruled-out
-   * findings are the highest-value rescue, so they are promotable too.
-   *
-   * Active-vs-superseded and the corrector linkage are determined EXACTLY the way
-   * {@link SessionService.getOverview} / {@link SessionService.getContext} already
-   * do it — off the note's `status` field (`getOverview` filters ruled-out by
-   * `n.status === "superseded"`), and `supersededBy` is the SESSION note id of the
-   * corrector (the same value `getOverview` resolves a correction text from). We
-   * pass that origin note id straight through: U1's `promoteFindings` rewrites the
-   * supersede graph over the freshly-minted workspace twin ids, so it needs the
-   * corrector's ORIGIN note id here, NOT a workspace id.
-   *
-   * `provisionalFindings` (the observer seam — unconfirmed) are EXCLUDED in v1:
-   * only confirmed `notes` are promotable.
-   *
-   * Unknown `sessionId` → `[]`.
-   */
-  getPromotableFindings(sessionId: string): PromoteEntry[] {
-    const s = this.sessions.get(sessionId)
-    if (!s) return []
-    return s.notes.map((n) => ({
-      text: n.text,
-      originSessionId: sessionId,
-      originNoteId: n.id,
-      createdAt: n.createdAt,
-      // status carried verbatim — "superseded" === ruled-out (getOverview:1167-1168).
-      status: n.status,
-      // corrector linkage: n.supersededBy is the corrector's ORIGIN note id
-      // (getOverview:1172 / getContext:1202 resolve the correction off this id).
-      ...(n.supersededBy != null ? { supersededBy: n.supersededBy } : {}),
-      source: n.source,
-    }))
-  }
-
-  /** The single promote candidate matching `noteId` (by `originNoteId === noteId`),
-   *  or undefined if the session/note isn't found. See {@link getPromotableFindings}. */
-  getPromotableFinding(sessionId: string, noteId: string): PromoteEntry | undefined {
-    return this.getPromotableFindings(sessionId).find((e) => e.originNoteId === noteId)
-  }
-
-  /**
-   * CAPP-96 — the SHARED, pure session-context sections both `getContext` (the pull
-   * tool) and the auto-load builder ({@link buildSessionTier}) read, so the two can
-   * never drift. Returns the session name + the three durable sections — summary,
-   * active findings, ruled-out/corrected — as a structured object (NOT the rendered
-   * string), so the auto-load builder can value-order + length-cap them independently
-   * before rendering while the primer renders them exactly as before.
-   *
-   * DELIBERATELY EXCLUDES the `## Related from other sessions` cross-session recall
-   * block — that's firehose-adjacent and stays pull-only (`getContext` appends it
-   * separately under its config gate). Unknown sessionId → undefined.
-   */
-  getSessionContextSections(sessionId: string):
-    | {
-        name: string
-        summary: string
-        active: { text: string; originKey?: string }[]
-        ruledOut: { text: string; correction?: string }[]
-      }
-    | undefined {
-    const s = this.sessions.get(sessionId)
-    if (!s) return undefined
-    // CAPP-100 / E2 — carry each active note's `(sessionId|noteId)` originKey so the ADOPTED
-    // (session-tier-only) inject can suppress an origin note whose promoted workspace twin
-    // arrives via the user's @import. Non-adopted path never consults it (byte-unchanged).
-    const active = s.notes
-      .filter((n) => n.status === "active")
-      .map((n) => ({ text: n.text, originKey: `${s.id}|${n.id}` }))
-    const ruledOut = s.notes
-      .filter((n) => n.status === "superseded")
-      .map((n) => {
-        const correction = s.notes.find((c) => c.id === n.supersededBy)
-        return correction ? { text: n.text, correction: correction.text } : { text: n.text }
-      })
-    return { name: s.name, summary: s.summary.trim(), active, ruledOut }
-  }
-
-  /**
-   * CAPP-97 — record the launch snapshot stamp for a terminal (called by the spawn
-   * wiring right after the auto-load payload is assembled, keyed by the SAME terminalId
-   * the inject wrote `<tid>.md` under). A later `getContext(sessionId, { terminalId })`
-   * diffs against this so the agent's pull returns only the DELTA, not the bytes already
-   * pushed at spawn. Resume spawns / empty payloads inject no snapshot → no stamp →
-   * getContext correctly degrades to the FULL context.
-   */
-  recordLaunchStamp(terminalId: string, stamp: ContextStamp): void {
-    this.launchStamps.set(terminalId, stamp)
-  }
-
-  /** Drop a terminal's launch stamp (on terminal kill/retire — the id is gone). */
-  clearLaunchStamp(terminalId: string): void {
-    this.launchStamps.delete(terminalId)
-  }
-
-  /**
-   * CAPP-97 — the DELTA path. When the calling `terminalId` has a recorded launch stamp
-   * (the curated brain was auto-loaded at spawn), return ONLY what changed since launch —
-   * new/edited findings, ruled-out, a changed summary — assembled from the SAME source the
-   * inject used (so the shape can never drift). When nothing changed, a short stable header.
-   * No stamp (xterm legacy, inject disabled, resume pointer, pre-existing session) → undefined,
-   * so the caller falls back to the FULL {@link getContext} (byte-identical to pre-CAPP-97).
-   *
-   * Pure-ish: the current {@link InjectContextInput} is supplied by the `injectInputResolver`
-   * the wiring layer installs (it owns the workspace-tier + instructions deps), so this method
-   * stays inside SessionService for the stamp lookup but never reaches into the workspace
-   * services directly. Returns undefined (→ caller falls back to FULL context) when there's no
-   * stamp, no resolver, or the resolver yields no current input.
-   */
-  getContextDelta(terminalId: string | undefined): string | undefined {
-    if (!terminalId) return undefined
-    const stamp = this.launchStamps.get(terminalId)
-    if (!stamp) return undefined
-    if (!this.injectInputResolver) return undefined
-    const currentInput = this.injectInputResolver(this.sessionIdOf(terminalId))
-    if (!currentInput) return undefined
-    return buildContextDelta(currentInput, stamp)
-  }
-
-  /** Whether a terminal has a recorded launch stamp (the wiring uses this to decide
-   *  between the delta path and the full primer without a redundant assembly). */
-  hasLaunchStamp(terminalId: string | undefined): boolean {
-    return terminalId != null && this.launchStamps.has(terminalId)
-  }
-
-  /**
-   * CAPP-97 — install the resolver that re-assembles the CURRENT auto-load
-   * {@link InjectContextInput} for a sessionId (the SAME `assembleInjectInput` deps the
-   * spawn inject used). ipc.ts wires it after the workspace services exist; left UNSET in
-   * isolated tests so `getContextDelta` degrades to undefined (full context).
-   */
-  setInjectInputResolver(fn: (sessionId: string | undefined) => InjectContextInput | undefined): void {
-    this.injectInputResolver = fn
-  }
-  private injectInputResolver?: (sessionId: string | undefined) => InjectContextInput | undefined
-
-  /**
-   * The primer a terminal pulls: summary, then active notes, then ruled-out (with corrections).
-   *
-   * CAPP-97 — when `terminalId` has a recorded launch stamp (the curated brain was
-   * auto-loaded at this terminal's spawn), this returns ONLY the DELTA since launch instead
-   * of the full primer, so the agent's pull doesn't re-load the same bytes. No stamp →
-   * the FULL primer below, byte-identical to the pre-CAPP-97 behavior.
-   */
-  getContext(sessionId: string, terminalId?: string): string | undefined {
-    const s = this.sessions.get(sessionId)
-    if (!s) return undefined
-    // CAPP-97 delta path — only when this terminal has a launch stamp to diff against.
-    if (terminalId && this.hasLaunchStamp(terminalId)) {
-      const delta = this.getContextDelta(terminalId)
-      if (delta !== undefined) {
-        // The "## Related from other sessions" block is pull-only — it is NEVER injected at
-        // launch, so it isn't double-loaded and MUST ride on the delta too, else an opt-in
-        // primerRecall user loses it entirely on the structured-spawn path.
-        const related = this.renderRelatedBlock(s)
-        return related ? `${delta}\n\n${related}` : delta
-      }
-    }
-    const sections = this.getSessionContextSections(sessionId)!
-    const parts: string[] = []
-    parts.push(`# Session: ${sections.name}`)
-    if (sections.summary) parts.push(`## Summary\n${sections.summary}`)
-
-    if (sections.active.length) {
-      parts.push(`## Findings\n` + sections.active.map((n) => `- ${n.text}`).join("\n"))
-    }
-
-    if (sections.ruledOut.length) {
-      const lines = sections.ruledOut.map((n) =>
-        n.correction ? `- ~~${n.text}~~ → ${n.correction}` : `- ~~${n.text}~~`,
-      )
-      parts.push(`## Ruled out / corrected\n` + lines.join("\n"))
-    }
-
-    // CAPP-86 — GATED primer enrichment (default OFF → byte-identical primer). Shared with
-    // the CAPP-97 delta path (renderRelatedBlock) so an opt-in user gets the cross-session
-    // block on BOTH the full primer and the delta.
-    const related = this.renderRelatedBlock(s)
-    if (related) parts.push(related)
-
-    return parts.join("\n\n")
-  }
-
-  /**
-   * CAPP-86 — the GATED "## Related from other sessions" block (default OFF → undefined).
-   * When the owner has opted in (config.context.primerRecall) AND a recall seam is wired,
-   * returns a capped block of cross-session hits keyed off this session's name + summary, so
-   * a terminal inherits relevant knowledge from OTHER sessions. Ruled-out hits keep the same
-   * `~~old~~ → new` correction-arrow rendering as the session's own ruled-out section.
-   * Extracted (CAPP-97) so it rides on BOTH the full primer AND the launch-delta — it is
-   * pull-only (never injected at spawn), so it is never double-loaded.
-   */
-  private renderRelatedBlock(s: WorkSession): string | undefined {
-    if (!this.recallRelated || !this.primerRecallEnabled()) return undefined
-    const query = `${s.name} ${s.summary}`.trim()
-    if (!query) return undefined
-    const related = this.recallRelated({
-      sessionId: s.id,
-      workspaceId: s.workspaceId,
-      query,
-      limit: 3,
-    })
-    if (!related.length) return undefined
-    const lines = related.map((r) => {
-      const text =
-        r.status === "ruled-out"
-          ? r.correction
-            ? `~~${r.text}~~ → ${r.correction}`
-            : `~~${r.text}~~`
-          : r.text
-      return `- ${text} _(from "${r.sessionName}")_`
-    })
-    return `## Related from other sessions\n` + lines.join("\n")
   }
 
   /**
@@ -1805,10 +1291,8 @@ export class SessionService {
 
   /**
    * The session's life-history, sorted oldest→newest (ST-1). For sessions that
-   * predate the event log (empty/undefined `eventLog`), BACKFILL a best-effort
-   * timeline from existing durable data — the session's own creation, each note's
-   * createdAt, and corrections inferred from superseded notes — so an old session
-   * still shows something rather than a blank panel.
+   * predate the event log (empty/undefined `eventLog`), BACKFILL a single creation
+   * entry so an old session still shows something rather than a blank panel.
    */
   getSessionTimeline(sessionId: string): SessionEvent[] {
     const s = this.sessions.get(sessionId)
@@ -1816,18 +1300,7 @@ export class SessionService {
     if (s.eventLog && s.eventLog.length > 0) {
       return [...s.eventLog].sort((a, b) => a.time - b.time)
     }
-    // Backfill: reconstruct from createdAt + notes (+ corrections).
-    const events: SessionEvent[] = [
-      { time: s.createdAt, kind: "spawn", text: `Session "${s.name}" created` },
-    ]
-    for (const n of s.notes) {
-      if (n.status === "superseded") {
-        events.push({ time: n.createdAt, kind: "correction", text: `Corrected: ${n.text}` })
-      } else {
-        events.push({ time: n.createdAt, kind: "note", text: `Note: ${n.text}` })
-      }
-    }
-    return events.sort((a, b) => a.time - b.time)
+    return [{ time: s.createdAt, kind: "spawn", text: `Session "${s.name}" created` }]
   }
 
   private persist(s: WorkSession): void {

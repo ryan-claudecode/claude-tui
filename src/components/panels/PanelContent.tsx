@@ -16,8 +16,6 @@ import ProgressPanel from "./ProgressPanel"
 import CodePanel from "./CodePanel"
 import HeatmapPanel from "./HeatmapPanel"
 import SessionOverviewPanel from "./SessionOverviewPanel"
-import RecallPanel from "./RecallPanel"
-import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel"
 import ContextInspectorPanel from "./ContextInspectorPanel"
 import SchedulePanel from "./SchedulePanel"
 import type { PanelApi } from "../../lib/panelApi"
@@ -34,7 +32,7 @@ import type { PanelApi } from "../../lib/panelApi"
  * accessors — into `api`, dropping NONE of them). Each caller builds a `PanelApi` over its native
  * bridge (companion → window.companionApi; modal → window.api). `api` is optional so a
  * harness can render a static panel without a bridge; the behavior panels degrade
- * gracefully when it's absent (e.g. RecallPanel's A.4 negative control).
+ * gracefully when it's absent.
  */
 
 /** The minimal panel shape the switch reads. Mirrors `PanelService.PanelState`'s
@@ -52,7 +50,6 @@ export const PANEL_LABELS: Record<string, string> = {
   timeline: "Timeline", git: "Git", kanban: "Kanban", notes: "Notes",
   stat: "Stats", log: "Log", progress: "Progress", code: "Code",
   heatmap: "Heatmap", "session-overview": "Overview",
-  recall: "Recall", "workspace-memory": "Memory",
   "context-inspector": "Context", schedule: "Schedule",
 }
 
@@ -64,9 +61,6 @@ export function tabLabel(p: PanelLike): string {
   const base = PANEL_LABELS[p.type] ?? p.type
   if (p.type === "session-overview" && typeof p.props?.name === "string" && p.props.name) {
     return p.props.name
-  }
-  if (p.type === "workspace-memory" && typeof p.props?.workspaceName === "string" && p.props.workspaceName) {
-    return `Memory: ${p.props.workspaceName}`
   }
   if (p.type === "context-inspector" && typeof p.props?.workspaceName === "string" && p.props.workspaceName) {
     return `Context: ${p.props.workspaceName}`
@@ -121,11 +115,7 @@ export default function PanelContent({ panel, api }: PanelContentProps) {
     case "heatmap":
       return <HeatmapPanel {...(panel.props as any)} />
     case "session-overview":
-      return <SessionOverviewPanel {...(panel.props as any)} api={api} />
-    case "recall":
-      return <RecallPanel {...(panel.props as any)} api={api} />
-    case "workspace-memory":
-      return <WorkspaceMemoryPanel {...(panel.props as any)} api={api} />
+      return <SessionOverviewPanel {...(panel.props as any)} />
     case "context-inspector":
       return <ContextInspectorPanel {...(panel.props as any)} api={api} />
     case "schedule":

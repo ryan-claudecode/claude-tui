@@ -195,8 +195,8 @@ export class SttService {
 
   /**
    * CAPP-121 (STT-2) — set the workspace-vocabulary hotwords. Called from the wiring layer
-   * on workspace activation + (debounced) workspace-memory changes, resolving from the ACTIVE
-   * workspace (dictation is a user-facing input affordance — active selection is correct here).
+   * on workspace activation, resolving from the ACTIVE workspace (dictation is a user-facing
+   * input affordance — active selection is correct here).
    *
    * Materializes the hotwords FILE eagerly (cheap: char-level tokenization + an only-if-changed
    * atomic write) so the count is known immediately, but keeps the recognizer rebuild LAZY:

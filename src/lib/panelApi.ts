@@ -1,44 +1,25 @@
 /**
  * CAPP-106 / S1 — the PanelApi contract: the EXHAUSTIVE, typed manifest of every
- * bridge method any of the behavior panels (#1 diff, #19 recall, #20
- * session-overview, #21 workspace-memory, #22 context-inspector) calls. The shared
- * `PanelContent` switch (`src/components/panels/PanelContent.tsx`) derives EVERY
- * callback it threads to a panel from a single `api: PanelApi` object, so a caller
- * supplies ONE object and the switch owns the per-panel wiring (this folds the
- * previously-inline companion callbacks — onSendToSession, plus the panel-internal
- * accessors — into `api`).
+ * bridge method any of the behavior panels (#1 diff, #20 session-overview, #22
+ * context-inspector) calls. The shared `PanelContent` switch
+ * (`src/components/panels/PanelContent.tsx`) derives EVERY callback it threads to a
+ * panel from a single `api: PanelApi` object, so a caller supplies ONE object and the
+ * switch owns the per-panel wiring.
  *
  * Two callers each build a PanelApi over their native bridge:
- *   - CompanionApp → over `window.companionApi` (1:1 wrap of today's callbacks +
- *     the panel-internal accessors the #19-23 panels used to read off companionApi).
- *   - (S2) ModalHost → over `window.api`, using the F1-added accessors.
+ *   - CompanionApp → over `window.companionApi`.
+ *   - ModalHost → over `window.api`.
  *
  * A compile-time parity GATE (`src/lib/panelApiParity.test.ts`) asserts that BOTH
  * `window.api` AND `window.companionApi` structurally satisfy `PanelApi`, so the
- * build fails if either window ever lacks a method some panel needs (this is the
- * standing guard against the exact F1 drift — `openSessionOverview` /
- * `promoteSessionToWorkspace` having been companion-only).
+ * build fails if either window ever lacks a method some panel needs.
  *
- * These shapes reference the renderer-side type MIRRORS (`workspaceMemoryView.ts`,
- * `exportView.ts`, `contextInspectorView.ts`) because the canonical service modules
- * pull in `node:fs` and cannot be imported into the renderer build.
+ * These shapes reference the renderer-side type MIRROR (`contextInspectorView.ts`)
+ * because the canonical service module pulls in `node:fs` and cannot be imported into
+ * the renderer build.
  */
 
-import type {
-  WorkspaceMemoryRecord,
-  WorkspaceFinding,
-} from "./workspaceMemoryView"
-import type {
-  ExportStateView,
-  EnableResultView,
-  AdoptionStateView,
-  WireResultView,
-} from "./exportView"
 import type { InspectResultView } from "./contextInspectorView"
-
-/** A recall hit — kept loose (`any[]`) to match the untyped IPC boundary both
- *  bridges return; RecallPanel owns its own concrete RecallHit shape. */
-export type RecallHit = any
 
 export interface PanelApi {
   // ── #1 diff: the send-review sink. Returns false when there's no active session
@@ -60,68 +41,8 @@ export interface PanelApi {
   //    guard). WRAPPED per-window like the schedule members above. ──────────────────
   hidePanel: (panelId: string) => void
 
-  // ── #19 recall: cross-session search + click-a-session-header → open its
-  //    Overview into the SAME host (recursive-by-design from the modal). ─────────
-  recall: (
-    query: string,
-    scope?: "session" | "workspace" | "all",
-    sessionId?: string,
-  ) => Promise<RecallHit[]>
+  // ── #20 session-overview: open a session's Overview into the SAME host ─────────
   openSessionOverview: (sessionId: string) => Promise<unknown>
-
-  // ── #20 session-overview: "Push context to workspace" ────────────────────────
-  promoteSessionToWorkspace: (
-    sessionId: string,
-  ) => Promise<{ ok: boolean; count: number; workspaceId: string | null }>
-
-  // ── #21 workspace-memory editor (instructions + findings + pin) + live-refresh ─
-  getWorkspaceMemory: (workspaceId: string | null) => Promise<WorkspaceMemoryRecord>
-  setWorkspaceInstructions: (
-    workspaceId: string | null,
-    text: string,
-  ) => Promise<WorkspaceMemoryRecord>
-  addWorkspaceFinding: (
-    workspaceId: string | null,
-    text: string,
-    source: "user" | "agent",
-  ) => Promise<WorkspaceFinding>
-  editWorkspaceFinding: (
-    workspaceId: string | null,
-    findingId: string,
-    text: string,
-  ) => Promise<boolean>
-  deleteWorkspaceFinding: (
-    workspaceId: string | null,
-    findingId: string,
-  ) => Promise<boolean>
-  setWorkspaceFindingPinned: (
-    workspaceId: string | null,
-    findingId: string,
-    pinned: boolean,
-  ) => Promise<boolean>
-  onWorkspaceMemoryChanged: (cb: (workspaceId: string) => void) => () => void
-
-  // ── #21 workspace-memory: export (CAPP-99 / E1) ──────────────────────────────
-  getExportState: (workspaceId: string | null) => Promise<ExportStateView>
-  enableExport: (
-    workspaceId: string | null,
-    mode: "A" | "C",
-    customPath?: string,
-  ) => Promise<EnableResultView>
-  disableExport: (workspaceId: string | null) => Promise<ExportStateView>
-  setUntaggedExportEnabled: (enabled: boolean) => Promise<ExportStateView>
-  regenerateExport: (
-    workspaceId: string | null,
-  ) => Promise<{ ok: boolean; wrote?: boolean; error?: string }>
-
-  // ── #21 workspace-memory: adoption (CAPP-100 / E2) ───────────────────────────
-  getAdoptionState: (workspaceId: string | null) => Promise<AdoptionStateView>
-  wireImportBlock: (workspaceId: string | null) => Promise<WireResultView>
-  unwireImportBlock: (workspaceId: string | null) => Promise<WireResultView>
-  setExportSelfWired: (
-    workspaceId: string | null,
-    selfWired: boolean,
-  ) => Promise<ExportStateView>
 
   // ── #22 context-inspector: the READ-ONLY Refresh re-read ─────────────────────
   inspectWorkspaceContext: (
@@ -132,16 +53,12 @@ export interface PanelApi {
 /**
  * The subset of `PanelApi` that maps 1:1 to a RAW bridge accessor present (with the SAME
  * signature) on BOTH `window.api` AND `window.companionApi` — i.e. the panel-INTERNAL
- * accessors the #19-22 panels read directly (recall, overview, promote, workspace-memory,
- * export, adoption, inspect). The type-parity GATE (`panelApiParity.test.ts`) checks BOTH
- * bridges against THIS subset.
+ * accessors the panels read directly (overview, inspect). The type-parity GATE
+ * (`panelApiParity.test.ts`) checks BOTH bridges against THIS subset.
  *
  * The remaining `PanelApi` member — `sendToSession` — is deliberately EXCLUDED: each caller
- * WRAPS a window-specific primitive into it (CompanionApp wraps companionApi's fire-and-forget
- * `sendToSession` to return `true`; the ModalHost wraps `window.api`'s `companion:send-to-session`).
- * It is not a raw shared accessor, so a structural bridge check doesn't apply — the wrapping is
- * the contract. The F1 drift class (an ACCESSOR being on one bridge but not the other) lives
- * entirely in this subset, which is what the gate guards.
+ * WRAPS a window-specific primitive into it. It is not a raw shared accessor, so a structural
+ * bridge check doesn't apply — the wrapping is the contract.
  */
 export type PanelApiAccessors = Omit<
   PanelApi,

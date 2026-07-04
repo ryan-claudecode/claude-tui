@@ -2,14 +2,6 @@ import { describe, it, expect } from "vitest"
 import { registerWorkSessionTools } from "./worksessions"
 import type { SessionService } from "../../services/sessions"
 import type { PanelService } from "../../services/panels"
-import type { RecallService } from "../../services/recall"
-
-/** A no-op fake RecallService for the CAPP-75 round-trip tests (recall not exercised here). */
-const fakeRecall = {
-  recall: () => [],
-  summary: () => ({ sessions: 0, findings: 0, ruledOut: 0 }),
-  workspaceIdOf: () => undefined,
-} as unknown as RecallService
 
 /**
  * CAPP-75 — MCP tool round-trip for list_folder_conversations + restore_conversation.
@@ -38,7 +30,7 @@ describe("worksessions MCP tools — CAPP-75", () => {
       },
     } as unknown as SessionService
     const { server, handlers } = fakeServer()
-    registerWorkSessionTools(server as any, ws, {} as unknown as PanelService, fakeRecall, {})
+    registerWorkSessionTools(server as any, ws, {} as unknown as PanelService, {})
 
     const res = await handlers["list_folder_conversations"]({ folder: "C:\\proj\\foo" })
     expect(calls).toEqual(["C:\\proj\\foo"])
@@ -53,7 +45,7 @@ describe("worksessions MCP tools — CAPP-75", () => {
       }),
     } as unknown as SessionService
     const { server, handlers } = fakeServer()
-    registerWorkSessionTools(server as any, ws, {} as unknown as PanelService, fakeRecall, {})
+    registerWorkSessionTools(server as any, ws, {} as unknown as PanelService, {})
 
     const res = await handlers["restore_conversation"]({
       folder: "C:\\proj\\foo",
@@ -69,7 +61,7 @@ describe("worksessions MCP tools — CAPP-75", () => {
       openConversationInFolder: () => undefined,
     } as unknown as SessionService
     const { server, handlers } = fakeServer()
-    registerWorkSessionTools(server as any, ws, {} as unknown as PanelService, fakeRecall, {})
+    registerWorkSessionTools(server as any, ws, {} as unknown as PanelService, {})
 
     const res = await handlers["restore_conversation"]({ folder: "/x", conversation_id: "bad" })
     expect(res.content[0].text).toMatch(/could not restore/i)

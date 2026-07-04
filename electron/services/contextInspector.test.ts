@@ -11,10 +11,7 @@ import {
   type ContextSource,
 } from "./contextInspector"
 import { WorkspaceService } from "./workspaces"
-import { WorkspaceMemoryService } from "./workspaceMemory"
-import { RecallService } from "./recall"
 import { encodeProjectDir } from "./terminals"
-import { buildInjectedContext, type InjectWorkspaceFinding } from "./contextInject"
 import type { TerminalService, TerminalInfo } from "./terminals"
 
 /**
@@ -28,7 +25,6 @@ import type { TerminalService, TerminalInfo } from "./terminals"
 let home: string
 let root: string // a temp dir to hold the workspace registry + folders
 let regFile: string
-let memDir: string
 
 /** A no-op TerminalService stub — WorkspaceService.create() needs it but we never spawn. */
 function fakeTerminals(): TerminalService {
@@ -46,24 +42,17 @@ function gitInit(dir: string): boolean {
   return typeof r.status === "number" && r.status === 0
 }
 
-/** Build an inspector wired to real (temp-backed) services, with F set as the workspace's
- *  folder. Returns { inspector, workspaceId }. */
+/** Build an inspector wired to a real (temp-backed) workspace registry, with F set as the
+ *  workspace's folder. Returns { inspector, workspaceId }. */
 function makeInspector(folder?: string): {
   inspector: ContextInspectorService
   workspaceId: string
   workspaces: WorkspaceService
-  memory: WorkspaceMemoryService
-  recall: RecallService
 } {
   const workspaces = new WorkspaceService(fakeTerminals(), { file: regFile })
   const ws = workspaces.create("Test WS", folder)
-  const memory = new WorkspaceMemoryService({ dir: memDir })
-  const recall = new RecallService(
-    () => [],
-    () => memory.listWorkspaceMemory(),
-  )
-  const inspector = new ContextInspectorService(workspaces, memory, recall, home)
-  return { inspector, workspaceId: ws.id, workspaces, memory, recall }
+  const inspector = new ContextInspectorService(workspaces, home)
+  return { inspector, workspaceId: ws.id, workspaces }
 }
 
 /** Find a tier's first source in an inspect result. */
@@ -75,7 +64,6 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ctui-inspect-home-"))
   root = mkdtempSync(join(tmpdir(), "ctui-inspect-root-"))
   regFile = join(root, "workspaces.json")
-  memDir = join(root, "workspace-memory")
 })
 afterEach(() => {
   rmSync(home, { recursive: true, force: true })
@@ -148,8 +136,8 @@ describe("ContextInspectorService — tier enumeration", () => {
     const result = inspector.inspectWorkspaceContext(workspaceId)
 
     // Every present tier number appears at least once. With an empty fixture, tiers 0–7
-    // are all "none" placeholders + tier 10 (no primer → exists:false), but PRESENT.
-    for (const t of [0, 1, 2, 3, 4, 5, 6, 7, 10]) {
+    // are all "none" placeholders, but PRESENT.
+    for (const t of [0, 1, 2, 3, 4, 5, 6, 7]) {
       const src = tier(result, t)
       expect(src, `tier ${t} must be present`).toBeDefined()
       expect(src!.exists).toBe(false)
@@ -310,115 +298,16 @@ describe("ContextInspectorService — parent-chain boundary (tier 3)", () => {
 })
 
 describe("ContextInspectorService — folderless / untagged", () => {
-  it("renders only #10 + machine-global tiers 0/1/2 + the folderless note", () => {
+  it("renders only the machine-global tiers 0/1/2 (folder-scoped tiers absent)", () => {
     // A null workspaceId (the untagged "All" bucket) is folderless by definition.
     const { inspector } = makeInspector()
     const result = inspector.inspectWorkspaceContext(null)
 
     expect(result.folder).toBeNull()
     expect(result.gitRoot).toBeNull()
-    // The folder-scoped tiers (3,4,5,6,7) are absent; only 0/1/2 + 10 are enumerated.
+    // The folder-scoped tiers (3,4,5,6,7) are absent; only 0/1/2 are enumerated.
     const tiers = result.sources.map((s) => s.tier).sort((a, b) => a - b)
-    expect(tiers).toEqual([0, 1, 2, 10])
-
-    const t10 = tier(result, 10)!
-    expect(t10.truncatedNote).toContain("Folderless")
-    expect(t10.truncatedNote).toContain("machine-global tiers 0/1/2 still shown")
-  })
-
-  it("adopted is always false in v1", () => {
-    const { inspector } = makeInspector()
-    expect(inspector.inspectWorkspaceContext(null).adopted).toBe(false)
-  })
-})
-
-describe("ContextInspectorService — tier 10 truncation parity with the inject", () => {
-  it("renders the SAME capped primer the spawn injects (buildInjectedContext)", () => {
-    const folder = join(root, "proj-primer")
-    mkdirSync(folder, { recursive: true })
-    const { inspector, workspaceId, memory } = makeInspector(folder)
-
-    // Seed the workspace tier (instructions + a finding) the inject reads.
-    memory.setInstructions(workspaceId, "Workspace standing rule: always X.")
-    memory.addFinding(workspaceId, "Durable finding: the auth flow uses cookies.", "user")
-
-    const result = inspector.inspectWorkspaceContext(workspaceId)
-    const t10 = tier(result, 10)!
-    expect(t10.exists).toBe(true)
-
-    // Recompute the EXPECTED primer through the SAME path, from the SAME source the
-    // inspector reads, and assert byte-identity (truncation-parity).
-    const recall = (inspector as any).recall as RecallService
-    const workspaceFindings: InjectWorkspaceFinding[] = recall
-      .workspaceTierEntries(workspaceId)
-      .map((e) => ({
-        text: e.text,
-        status: e.status === "ruled-out" ? ("ruled-out" as const) : ("active" as const),
-        ...(e.correction ? { correction: e.correction } : {}),
-        createdAt: e.createdAt,
-        ...(e.pinned ? { pinned: true } : {}),
-      }))
-    const expected = buildInjectedContext(
-      { instructions: memory.getMemory(workspaceId).instructions, workspaceFindings },
-      { maxBytes: 8192 },
-    )
-    expect(t10.content).toBe(expected)
-    // It is the WORKSPACE tier only — no per-session section.
-    expect(t10.content).not.toContain("This session:")
-  })
-
-  it("renders tier 10 as absent (none) when the workspace brain is empty", () => {
-    const folder = join(root, "proj-empty-brain")
-    mkdirSync(folder, { recursive: true })
-    const { inspector, workspaceId } = makeInspector(folder)
-    const t10 = tier(inspector.inspectWorkspaceContext(workspaceId), 10)!
-    expect(t10.exists).toBe(false)
-    expect(t10.content).toBe("")
-  })
-})
-
-describe("ContextInspectorService — CAPP-100 / E2 adoption tie-in (tier #10 + adopted field)", () => {
-  it("adopted=false + plain #10 render when no host file imports our marker", () => {
-    const folder = join(root, "proj-not-adopted")
-    mkdirSync(folder, { recursive: true })
-    const { inspector, memory, workspaceId } = makeInspector(folder)
-    memory.setInstructions(workspaceId, "Use TS.")
-    const result = inspector.inspectWorkspaceContext(workspaceId)
-    expect(result.adopted).toBe(false)
-    const t10 = tier(result, 10)!
-    // Not adopted → the workspace tier IS in #10 (instructions present).
-    expect(t10.content).toContain("Workspace standing instructions")
-  })
-
-  it("adopted=true + #10 self-attribution when CLAUDE.md @imports our marker", () => {
-    const folder = join(root, "proj-adopted")
-    mkdirSync(folder, { recursive: true })
-    const { inspector, memory, workspaceId } = makeInspector(folder)
-    memory.setInstructions(workspaceId, "Use TS.")
-    // The user has @import'ed our exported primer — the marker for THIS workspace is present.
-    const marker = `<!-- mission-control:workspace-memory v1 workspace=${workspaceId} -->`
-    writeFileSync(join(folder, "CLAUDE.md"), `# Project\n@./.claude-tui/workspace-memory.md\n${marker}\n`)
-    const result = inspector.inspectWorkspaceContext(folder ? workspaceId : null)
-    expect(result.adopted).toBe(true)
-    const t10 = tier(result, 10)!
-    // The workspace tier is dropped from our inject (it rides the @import) → empty content +
-    // the self-attribution note.
-    expect(t10.content).not.toContain("Workspace standing instructions")
-    expect(t10.exists).toBe(true)
-    expect(t10.truncatedNote ?? "").toContain("delivered via your @import")
-  })
-
-  it("a marker for a DIFFERENT workspace does NOT mark this one adopted", () => {
-    const folder = join(root, "proj-other-marker")
-    mkdirSync(folder, { recursive: true })
-    const { inspector, memory, workspaceId } = makeInspector(folder)
-    memory.setInstructions(workspaceId, "Use TS.")
-    writeFileSync(
-      join(folder, "CLAUDE.md"),
-      `# Project\n<!-- mission-control:workspace-memory v1 workspace=some-other-id -->\n`,
-    )
-    const result = inspector.inspectWorkspaceContext(workspaceId)
-    expect(result.adopted).toBe(false)
+    expect(tiers).toEqual([0, 1, 2])
   })
 })
 

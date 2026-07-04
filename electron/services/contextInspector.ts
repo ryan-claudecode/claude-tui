@@ -3,33 +3,23 @@ import { spawnSync } from "node:child_process"
 import { join, dirname, isAbsolute } from "node:path"
 import { homedir } from "node:os"
 import type { WorkspaceService } from "./workspaces"
-import type { WorkspaceMemoryService } from "./workspaceMemory"
-import type { RecallService } from "./recall"
 import { encodeProjectDir } from "./terminals"
-import {
-  buildInjectedContext,
-  type InjectWorkspaceFinding,
-} from "./contextInject"
-import { detectAdoption } from "./adoption"
-import { loadConfig, resolveInjectMaxBytes } from "../config"
 
 /**
- * CAPP-98 (Slice I1) — the Context Inspector v1 backend (READ-ONLY).
+ * CAPP-98 (Slice I1) — the Context Inspector backend (READ-ONLY).
  *
- * Surfaces, for a workspace, the COMPLETE launch-time native context a fresh `claude`
- * eats PLUS our own injected primer — by precedence — so the user can see exactly what
- * the agent reads at spawn. This is the READ relationship of the coexistence layer
- * (design doc `docs/roadmap/claudemd-coexistence-design.md` §A); the INJECT
- * (`contextInject.ts`) and EXPORT (later slices) relationships compose on top.
+ * Surfaces, for a workspace, the COMPLETE launch-time NATIVE context a fresh `claude`
+ * eats — by precedence — so the user can see exactly what the agent reads at spawn.
+ * This is the READ relationship to Claude's native memory files (design doc
+ * `docs/roadmap/claudemd-coexistence-design.md` §A).
  *
  * HARD INVARIANT — INSPECT-ONLY. This service may ONLY `existsSync`/`readFileSync`/
  * read directories. It has NO write path into ANY native file: it never edits a
  * CLAUDE.md, never inserts an `@import`, never touches the user's settings. The honest
  * read set is F + F's ancestors up to the git root + `~/.claude/*` + the OS
- * managed-policy paths — all read-only, no network, single device (same posture as
- * workspace memory; not a confidentiality boundary, nothing leaves the device).
+ * managed-policy paths — all read-only, no network, single device.
  *
- * v1 is DISCOVERY ONLY: it enumerates the launch FILES + their `@import` LINES (shown
+ * DISCOVERY ONLY: it enumerates the launch FILES + their `@import` LINES (shown
  * literally, never expanded) — NO merged/effective view, NO recursive import expansion.
  * The {@link InspectResult} contract leaves `resolved`/`effective` undefined so later
  * phases grow completeness WITHOUT a contract change.
@@ -37,8 +27,8 @@ import { loadConfig, resolveInjectMaxBytes } from "../config"
 
 /** The precedence tier a source belongs to (0 = highest precedence). The numbering
  *  matches the design doc §A.1 table; tiers 8/9 (recursive @imports + path-scoped
- *  rules) are DEFERRED, so this v1 enumerates 0–7 and 10. */
-export type ContextTier = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 10
+ *  rules) are DEFERRED, so this enumerates 0–7. */
+export type ContextTier = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
 
 /** One enumerated context source in the precedence list. Absent tiers are NEVER
  *  omitted — an absent source renders with `exists:false` and an empty `content`,
@@ -48,8 +38,7 @@ export interface ContextSource {
   tier: ContextTier
   /** A short human label for the tier (e.g. "Project memory"). */
   label: string
-  /** The on-disk path inspected (the canonical one when a tier has alternatives), or a
-   *  synthetic descriptor for the injected primer (#10). */
+  /** The on-disk path inspected (the canonical one when a tier has alternatives). */
   path: string
   /** Whether the file/source exists + contributed content. */
   exists: boolean
@@ -79,9 +68,6 @@ export interface InspectResult {
   folder: string | null
   /** The git toplevel of F (absolute), or null when F isn't in a git repo / is folderless. */
   gitRoot: string | null
-  /** Whether this workspace's export is ADOPTED via the user's `@import` (E2 computes it;
-   *  always false in v1 — the field is wired now so the contract is stable). */
-  adopted: boolean
   /** The enumerated sources in precedence order (0 first), absent tiers included. */
   sources: ContextSource[]
   /** DEFERRED (later phase): the merged effective context. Undefined in v1. */
@@ -97,10 +83,10 @@ const EXCERPT_CHAR_CAP = 4000
  *  surface that fact on the tier-7 source (we don't re-enforce it — it's Claude's cap). */
 const AUTO_MEMORY_CAP_NOTE = "cap: 200 lines / 25 KB"
 
-/** A real synchronous `git` invocation, hardened against the user's global config the
- *  same way LocalHistoryService is (a global hooks/excludes/autocrlf
- *  setting must not perturb a plain `rev-parse`). Never throws — a spawn failure yields a
- *  non-zero code and the caller treats it as "no git root". */
+/** A real synchronous `git` invocation, hardened against the user's global config (a
+ *  global hooks/excludes/autocrlf setting must not perturb a plain `rev-parse`). Never
+ *  throws — a spawn failure yields a non-zero code and the caller treats it as "no git
+ *  root". */
 function gitToplevel(cwd: string): string | null {
   try {
     const r = spawnSync(
@@ -228,13 +214,6 @@ function nonePlaceholder(tier: ContextTier, label: string, path: string): Contex
   return { tier, label, path, exists: false, content: "", imports: [] }
 }
 
-/** Join two optional notes with the standard separator (skips undefined), or undefined when both
- *  are absent. */
-function combineNotes(a?: string, b?: string): string | undefined {
-  const parts = [a, b].filter(Boolean)
-  return parts.length ? parts.join(" · ") : undefined
-}
-
 /**
  * Best-effort read of the `claudeMdExcludes` array from the user's Claude settings
  * (`~/.claude/settings.json`) + the project settings (`F/.claude/settings.json`,
@@ -337,40 +316,20 @@ export function hasPathsFrontMatter(raw: string): boolean {
 export class ContextInspectorService {
   constructor(
     private readonly workspaces: WorkspaceService,
-    private readonly workspaceMemory: WorkspaceMemoryService,
-    private readonly recall: RecallService,
     // Injectable home dir so a hermetic test points the machine-global tiers (0/1/2/7) at a
     // temp dir instead of the real `~`. Defaults to `os.homedir()` in production.
     private readonly home: string = homedir(),
-    // CAPP-100 / E2 — an optional Mode-C "wired myself" hint (the only non-scan adoption
-    // signal). Injected by ipc.ts from the ExportService; defaults to none so the inspector
-    // stays constructible without the export service (and tests stay simple).
-    private readonly selfWiredHint: (workspaceId: string | null) => boolean = () => false,
-    // CAPP-100 / E2 — the export's advertised `@import` line, so the adoption scan matches a
-    // MANUAL paste (not just our delimited block). Injected by ipc.ts; defaults to none.
-    private readonly importLineHint: (workspaceId: string | null) => string | null = () => null,
   ) {}
 
   /**
-   * Inspect the complete launch-time context for a workspace. READ-ONLY: enumerates every
-   * tier (0–7, 10) in precedence order, rendering a "none" placeholder for an absent tier
+   * Inspect the complete launch-time NATIVE context for a workspace. READ-ONLY: enumerates
+   * every tier (0–7) in precedence order, rendering a "none" placeholder for an absent tier
    * (NEVER omitting it). Returns the stable {@link InspectResult} contract.
    */
   inspectWorkspaceContext(workspaceId: string | null): InspectResult {
     const folder = this.resolveFolder(workspaceId)
     const gitRoot = folder ? gitToplevel(folder) : null
     const excludes = readClaudeMdExcludes(this.home, folder)
-
-    // CAPP-100 / E2 — a FRESH adoption scan (marker grep over the host CLAUDE-family files,
-    // bounded by the same home + git-root the inspector uses). When adopted, tier #10
-    // self-attributes the workspace portion under the host @import + `adopted` is true.
-    const adopted = detectAdoption(workspaceId, {
-      resolveFolder: (id) => this.resolveFolder(id),
-      gitRoot: () => gitRoot,
-      home: this.home,
-      selfWiredHint: (id) => this.selfWiredHint(id),
-      importLine: (id) => this.importLineHint(id),
-    })
 
     const sources: ContextSource[] = []
 
@@ -403,14 +362,9 @@ export class ContextInspectorService {
     // design calls out). Folderless → no auto-memory (it's a project-keyed store).
     if (folder) sources.push(this.autoMemorySource(folder, gitRoot))
 
-    // ── Tier 10 — Our injected primer (the WORKSPACE tier, through the truncating path) ─
-    sources.push(this.injectedPrimerSource(workspaceId, folder, adopted))
-
     return {
       folder,
       gitRoot,
-      // CAPP-100 / E2 — real adoption from the fresh marker scan over the host CLAUDE-family files.
-      adopted,
       sources,
     }
   }
@@ -558,69 +512,5 @@ export class ContextInspectorService {
     // Even an ABSENT auto-memory carries the cap note (so the user sees the constraint).
     if (!src.exists && !src.truncatedNote) src.truncatedNote = AUTO_MEMORY_CAP_NOTE
     return src
-  }
-
-  /**
-   * Tier 10 — OUR injected primer, rendered through the SAME truncating `buildInjectedContext`
-   * path the real spawn uses, so the inspector shows the CAPPED brain (not the untruncated
-   * store — the design's fidelity requirement). WORKSPACE-scoped: only the workspace tier
-   * (instructions + workspace findings), NO session tier (that's per-spawn, not
-   * workspace-level). Sourced from the SAME services the spawn reads
-   * (`workspaceMemory.getMemory(W).instructions` + `recall.workspaceTierEntries(W)`).
-   */
-  private injectedPrimerSource(
-    workspaceId: string | null,
-    folder: string | null,
-    adopted: boolean,
-  ): ContextSource {
-    const instructions = this.workspaceMemory.getMemory(workspaceId).instructions
-    const workspaceFindings: InjectWorkspaceFinding[] = this.recall
-      .workspaceTierEntries(workspaceId ?? undefined)
-      .map((e) => ({
-        text: e.text,
-        status: e.status === "ruled-out" ? ("ruled-out" as const) : ("active" as const),
-        ...(e.correction ? { correction: e.correction } : {}),
-        createdAt: e.createdAt,
-        ...(e.pinned ? { pinned: true } : {}),
-      }))
-
-    const maxBytes = resolveInjectMaxBytes(loadConfig())
-    // CAPP-100 / E2 — tier #10 adoption self-attribution. When this workspace is ADOPTED (the
-    // user `@import`s our exported primer), the inject DROPS the workspace tier (`adopted:true`),
-    // so the truncating render of the workspace-only inspector primer is empty — the workspace
-    // brain is instead "delivered via your @import, not our flag — de-duped". We surface that
-    // attribution note rather than a misleading empty/duplicated render.
-    const rendered = buildInjectedContext({ instructions, workspaceFindings, adopted }, { maxBytes })
-
-    const folderNote = folder
-      ? undefined
-      : "Folderless — only the Mission Control primer applies; machine-global tiers 0/1/2 still shown"
-    const adoptionNote = adopted
-      ? "Adopted — the workspace tier is delivered via your @import of the exported primer, not our " +
-        "injected flag (de-duped, loaded exactly once). Our inject carries only the per-session tier."
-      : undefined
-
-    if (!rendered) {
-      return {
-        tier: 10,
-        label: "Mission Control primer",
-        path: "(injected via --append-system-prompt-file)",
-        // When adopted, the workspace-only inject render is empty by design (the @import carries
-        // it) — that's not "missing", so mark it present with the attribution note.
-        exists: adopted,
-        content: "",
-        imports: [],
-        ...(combineNotes(adoptionNote, folderNote) ? { truncatedNote: combineNotes(adoptionNote, folderNote)! } : {}),
-      }
-    }
-    return {
-      tier: 10,
-      label: "Mission Control primer",
-      path: "(injected via --append-system-prompt-file)",
-      exists: true,
-      content: rendered,
-      imports: [],
-      ...(combineNotes(adoptionNote, folderNote) ? { truncatedNote: combineNotes(adoptionNote, folderNote)! } : {}),
-    }
   }
 }

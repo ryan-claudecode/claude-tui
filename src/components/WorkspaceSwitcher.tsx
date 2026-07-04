@@ -20,9 +20,6 @@ interface Props {
    *  folder. Only relevant when the active workspace HAS a folder (the button is
    *  hidden otherwise). */
   onRestoreConversation: () => void
-  /** CAPP-94 — open the workspace-memory editor (companion panel) for the active
-   *  workspace, or the untagged "All" bucket when none is selected. Always-visible. */
-  onOpenWorkspaceMemory: () => void
   /** CAPP-98 / I1 — open the READ-ONLY Context Inspector (companion panel) for the active
    *  workspace, or the untagged "All" bucket when none is selected. Always-visible. */
   onOpenContextInspector: () => void
@@ -75,7 +72,6 @@ export default function WorkspaceSwitcher({
   onDeleteWorkspace,
   onSetWorkspaceDir,
   onRestoreConversation,
-  onOpenWorkspaceMemory,
   onOpenContextInspector,
 }: Props) {
   const [open, setOpen] = useState(false)
@@ -302,19 +298,6 @@ export default function WorkspaceSwitcher({
               preserved; the handlers capture the workspaceId at click time).
             - "Rename" + "Delete" render only for a SPECIFIC active workspace. */}
       <div className="workspace-controls">
-        <button
-          type="button"
-          className="workspace-ctl-btn wsctl-memory"
-          title={
-            isAllActive
-              ? "Edit the shared (All workspaces) memory"
-              : `Edit ${active!.name} memory`
-          }
-          aria-label="Open workspace memory"
-          onClick={onOpenWorkspaceMemory}
-        >
-          Memory
-        </button>
         <button
           type="button"
           className="workspace-ctl-btn wsctl-context"

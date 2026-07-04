@@ -56,9 +56,6 @@ interface Props {
   /** CAPP-75 — open the restore-conversation picker for the active workspace's
    *  folder (from the switcher's always-visible "Restore a conversation" button). */
   onRestoreConversation: () => void
-  /** CAPP-94 — open the workspace-memory editor (companion panel) for the active
-   *  workspace, or the untagged "All" bucket when none is selected. */
-  onOpenWorkspaceMemory: () => void
   /** CAPP-98 / I1 — open the READ-ONLY Context Inspector (companion panel) for the active
    *  workspace, or the untagged "All" bucket when none is selected. */
   onOpenContextInspector: () => void
@@ -85,7 +82,7 @@ export default function Sidebar({
   resumingRows, onFocusResuming, onStopResuming, onDismissResuming,
   workspaces, activeWorkspace, workspaceScoped,
   onSelectAllWorkspaces, onSelectWorkspace, onNewWorkspace, onRenameWorkspace, onDeleteWorkspace,
-  onSetWorkspaceDir, onRestoreConversation, onOpenWorkspaceMemory, onOpenContextInspector,
+  onSetWorkspaceDir, onRestoreConversation, onOpenContextInspector,
 }: Props) {
   // CAPP-82 — inline rename of the session container row (mirrors TabBar's terminal
   // editor): double-click → controlled input, commit on Enter/blur, cancel on Escape.
@@ -167,7 +164,6 @@ export default function Sidebar({
         onDeleteWorkspace={onDeleteWorkspace}
         onSetWorkspaceDir={onSetWorkspaceDir}
         onRestoreConversation={onRestoreConversation}
-        onOpenWorkspaceMemory={onOpenWorkspaceMemory}
         onOpenContextInspector={onOpenContextInspector}
       />
 

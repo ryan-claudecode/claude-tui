@@ -1,6 +1,5 @@
 import { ipcMain, dialog, BrowserWindow } from "electron"
 import type { WorkspaceService } from "../services/workspaces"
-import type { WorkspaceMemoryService, PromoteEntry } from "../services/workspaceMemory"
 import type { ContextInspectorService } from "../services/contextInspector"
 
 /**
@@ -39,11 +38,10 @@ import type { ContextInspectorService } from "../services/contextInspector"
  */
 export function registerWorkspaceHandlers(deps: {
   workspaceService: WorkspaceService
-  workspaceMemoryService: WorkspaceMemoryService
   contextInspectorService: ContextInspectorService
   getScanPaths: () => string[]
 }) {
-  const { workspaceService, workspaceMemoryService, contextInspectorService, getScanPaths } = deps
+  const { workspaceService, contextInspectorService, getScanPaths } = deps
 
   // Re-project a single id through the public projection so a handler never has
   // to hand-build (and risk drifting from) the no-leak shape.
@@ -82,50 +80,11 @@ export function registerWorkspaceHandlers(deps: {
   // manifests, never duplicates a seeded workspace, never reverts user edits.
   ipcMain.handle("workspace:rescan", () => workspaceService.rescan(getScanPaths()))
 
-  // ── Workspace memory (CAPP-87 / U3) ──────────────────────────────────────────
-  // Thin wrappers over WorkspaceMemoryService — the durable, workspace-level
-  // knowledge tier. A `null` workspaceId addresses the untagged "All" bucket. Every
-  // mutator fires the service's `onMemoryChanged` seam (wired in ipc.ts to invalidate
-  // recall + push `workspace:memory-changed` to the renderer).
-  ipcMain.handle("workspace:get-memory", (_e, workspaceId: string | null) =>
-    workspaceMemoryService.getMemory(workspaceId),
-  )
-  ipcMain.handle("workspace:set-instructions", (_e, workspaceId: string | null, text: string) =>
-    workspaceMemoryService.setInstructions(workspaceId, text),
-  )
-  ipcMain.handle(
-    "workspace:add-finding",
-    (_e, workspaceId: string | null, text: string, source: "user" | "agent") =>
-      workspaceMemoryService.addFinding(workspaceId, text, source),
-  )
-  ipcMain.handle(
-    "workspace:edit-finding",
-    (_e, workspaceId: string | null, findingId: string, text: string) =>
-      workspaceMemoryService.editFinding(workspaceId, findingId, text),
-  )
-  ipcMain.handle(
-    "workspace:delete-finding",
-    (_e, workspaceId: string | null, findingId: string) =>
-      workspaceMemoryService.deleteFinding(workspaceId, findingId),
-  )
-  // CAPP-97 — pin/unpin a finding (surfacing CAPP-96's `pinned` field in the editor).
-  // A pinned finding is the only thing never evicted under the auto-load context cap.
-  ipcMain.handle(
-    "workspace:set-pinned",
-    (_e, workspaceId: string | null, findingId: string, pinned: boolean) =>
-      workspaceMemoryService.setPinned(workspaceId, findingId, pinned),
-  )
-  ipcMain.handle(
-    "workspace:promote-findings",
-    (_e, workspaceId: string | null, entries: PromoteEntry[]) =>
-      workspaceMemoryService.promoteFindings(workspaceId, entries),
-  )
-
   // ── Context Inspector (CAPP-98 / I1) ─────────────────────────────────────────
-  // READ-ONLY: enumerate the complete launch-time native context + our injected
-  // primer for a workspace, by precedence. A `null` workspaceId is the untagged
-  // "All" bucket (folderless — only #10 + machine-global tiers shown). Thin wrapper
-  // over the inspect-only service (existsSync/readFileSync only; no native writes).
+  // READ-ONLY: enumerate the complete launch-time NATIVE context for a workspace, by
+  // precedence. A `null` workspaceId is the untagged "All" bucket (folderless — only
+  // the machine-global tiers shown). Thin wrapper over the inspect-only service
+  // (existsSync/readFileSync only; no native writes).
   ipcMain.handle("context:inspect", (_e, workspaceId: string | null) =>
     contextInspectorService.inspectWorkspaceContext(workspaceId),
   )

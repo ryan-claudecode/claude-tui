@@ -28,19 +28,11 @@ const term = await connect(`${base}?sid=${encodeURIComponent(sid)}&tid=${encodeU
 log("=== set_terminal_activity (no ids) ===")
 log(await call(term, "set_terminal_activity", { activity: "running the test suite" }))
 
-log("=== session_note (no ids) ===")
-log(await call(term, "session_note", { text: "the bug is a boot race in spawnInto" }))
-
 // 3) Read back via work_session_status with NO id — should default to our session.
 log("=== work_session_status (no id) ===")
 const status = JSON.parse(await call(term, "work_session_status"))
 const ref = status.terminals.find((t) => t.id === tid)
 log("terminal activity bound correctly:", ref?.activity === "running the test suite", "->", ref?.activity)
-log("note recorded:", status.notes?.[0]?.text)
-
-// 4) get_session_context with NO id.
-log("=== get_session_context (no id) ===")
-log(await call(term, "get_session_context"))
 
 await admin.close()
 await term.close()

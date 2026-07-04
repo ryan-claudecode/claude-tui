@@ -13,11 +13,8 @@ import type { FileService } from "../services/files"
 import type { UiService } from "../services/ui"
 import type { SchedulerService } from "../services/scheduler"
 import type { SessionService } from "../services/sessions"
-import type { RecallService } from "../services/recall"
 import type { AttentionService } from "../services/attention"
-import type { WorkspaceMemoryService } from "../services/workspaceMemory"
 import type { ContextInspectorService } from "../services/contextInspector"
-import type { ExportService } from "../services/export"
 import { registerSessionTools } from "./tools/sessions"
 import { registerWorkSessionTools } from "./tools/worksessions"
 import { registerPanelTools } from "./tools/panels"
@@ -52,20 +49,17 @@ export function registerTools(
   files: FileService,
   ui: UiService,
   workSessions: SessionService,
-  recall: RecallService,
   attention: AttentionService,
-  workspaceMemory: WorkspaceMemoryService,
   contextInspector: ContextInspectorService,
-  exportService: ExportService,
   scheduler: SchedulerService,
   identity: TerminalIdentity = {},
 ) {
   registerSessionTools(server, sessions, attention, workSessions, workspaces, identity)
-  registerWorkSessionTools(server, workSessions, panels, recall, identity)
+  registerWorkSessionTools(server, workSessions, panels, identity)
   registerPanelTools(server, panels, notes, files, sessions, identity)
   registerPermissionTools(server, sessions, identity, (m, l, t) => notifications.notify(m, l, t))
   registerGitTools(server, git, sessions)
-  registerWorkspaceTools(server, workspaces, workSessions, workspaceMemory, contextInspector, exportService, identity)
+  registerWorkspaceTools(server, workspaces, workSessions, contextInspector, identity)
   registerScheduleTools(server, scheduler, workspaces, workSessions, identity)
   registerAppTools(
     server,

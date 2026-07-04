@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync
 import { join } from "path"
 import { tmpdir } from "os"
 import { SessionService } from "./sessions"
-import { computeContextStamp } from "./contextInject"
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "ctui-sess-")) })
@@ -15,9 +14,6 @@ describe("SessionService persistence", () => {
     const s = svc.create()
     expect(s.status).toBe("active")
     expect(s.terminals).toEqual([])
-    expect(s.notes).toEqual([])
-    expect(s.provisionalFindings).toEqual([])
-    expect(s.summary).toBe("")
     expect(s.createdAt).toBe(1000)
     // persisted to <dir>/<id>.json in the versioned envelope
     const file = join(dir, `${s.id}.json`)
@@ -45,9 +41,6 @@ describe("SessionService persistence", () => {
       id: "legacy-sess",
       name: "Old session",
       status: "active",
-      summary: "from before versioning",
-      notes: [],
-      provisionalFindings: [],
       terminals: [{ id: "t1", name: "x", cwd: "/r", lastState: "idle" }],
       createdAt: 1000,
       updatedAt: 1000,
@@ -60,7 +53,6 @@ describe("SessionService persistence", () => {
     // backward compat: the legacy file still loads
     const loaded = svc.get("legacy-sess")!
     expect(loaded.name).toBe("Old session")
-    expect(loaded.summary).toBe("from before versioning")
     // read-repair: file is rewritten in the v1 envelope on load
     const onDisk = JSON.parse(readFileSync(file, "utf-8"))
     expect(onDisk.schemaVersion).toBe(1)
@@ -122,9 +114,6 @@ describe("SessionService workspace scoping (WS-C)", () => {
       id: "legacy-no-ws",
       name: "Old session",
       status: "active",
-      summary: "",
-      notes: [],
-      provisionalFindings: [],
       terminals: [],
       createdAt: 1000,
       updatedAt: 1000,
@@ -295,259 +284,6 @@ describe("SessionService.deriveStatus", () => {
   })
 })
 
-describe("SessionService notes", () => {
-  it("addNote appends an active self-sourced note", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    const n = svc.addNote(s.id, "root cause is the N+1 query")
-    expect(n!.text).toBe("root cause is the N+1 query")
-    expect(n!.status).toBe("active")
-    expect(n!.source).toBe("self")
-    expect(svc.get(s.id)!.notes).toHaveLength(1)
-  })
-
-  it("addNote with corrects supersedes the referenced note and links it", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    const first = svc.addNote(s.id, "bug is in auth")!
-    const second = svc.addNote(s.id, "actually it's the list endpoint", { corrects: first.id })!
-    const notes = svc.get(s.id)!.notes
-    const stored = notes.find((x) => x.id === first.id)!
-    expect(stored.status).toBe("superseded")
-    expect(stored.supersededBy).toBe(second.id)
-    expect(notes.find((x) => x.id === second.id)!.status).toBe("active")
-  })
-
-  it("addNote emits worksession:updated so recall/KNOWS refresh live (CAPP-86 regression)", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const send = vi.fn()
-    svc.setMainWindow({ webContents: { send }, isDestroyed: () => false })
-    const s = svc.create()
-    send.mockClear() // ignore the create push — assert on the note push only
-    svc.addNote(s.id, "root cause is the N+1 query")
-    const call = send.mock.calls.find((c) => c[0] === "worksession:updated")
-    // Without the emit (the verified-missing bug) this is undefined → recall + the
-    // Rail KNOWS digest never refresh when a finding lands.
-    expect(call).toBeTruthy()
-    const snapshot = call![1] as { notes: Array<{ text: string }> }
-    expect(snapshot.notes.some((n) => n.text === "root cause is the N+1 query")).toBe(true)
-  })
-
-  it("setSummary emits worksession:updated so recall/KNOWS refresh live (CAPP-86 regression)", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const send = vi.fn()
-    svc.setMainWindow({ webContents: { send }, isDestroyed: () => false })
-    const s = svc.create()
-    send.mockClear()
-    svc.setSummary(s.id, "Goal: fix the auth race. Patching middleware.")
-    const call = send.mock.calls.find((c) => c[0] === "worksession:updated")
-    expect(call).toBeTruthy()
-    const snapshot = call![1] as { summary: string }
-    expect(snapshot.summary).toBe("Goal: fix the auth race. Patching middleware.")
-  })
-})
-
-describe("SessionService.getContext", () => {
-  it("orders summary first, then active notes, then a ruled-out section with corrections", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    svc.setSummary(s.id, "Goal: fix the auth race. Currently patching middleware.")
-    const wrong = svc.addNote(s.id, "bug is in auth")!
-    svc.addNote(s.id, "actually it's the list endpoint", { corrects: wrong.id })
-    svc.addNote(s.id, "tests live in auth.test.ts")
-    const ctx = svc.getContext(s.id)!
-    // summary leads
-    expect(ctx.indexOf("Goal: fix the auth race")).toBeGreaterThanOrEqual(0)
-    // active notes present
-    expect(ctx).toContain("actually it's the list endpoint")
-    expect(ctx).toContain("tests live in auth.test.ts")
-    // ruled-out section present and shows the superseded note with its correction
-    expect(ctx).toContain("Ruled out")
-    expect(ctx).toContain("bug is in auth")
-    // ordering: summary before active before ruled-out
-    expect(ctx.indexOf("Goal:")).toBeLessThan(ctx.indexOf("actually it's the list endpoint"))
-    expect(ctx.indexOf("actually it's the list endpoint")).toBeLessThan(ctx.indexOf("Ruled out"))
-  })
-
-  it("omits the ruled-out section when nothing is superseded", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    svc.addNote(s.id, "only a live note")
-    expect(svc.getContext(s.id)!).not.toContain("Ruled out")
-  })
-
-  // CAPP-86 — the GATED primer enrichment must be byte-identical by default (off),
-  // and only append the "## Related from other sessions" block when armed.
-  it("does NOT append the related block when no recall seam is wired (byte-identical default)", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    svc.setSummary(s.id, "Goal: thing")
-    svc.addNote(s.id, "a finding")
-    expect(svc.getContext(s.id)!).not.toContain("Related from other sessions")
-  })
-
-  it("does NOT append the related block when the recall seam is wired but the flag is OFF", () => {
-    let calls = 0
-    const svc = new SessionService({
-      dir,
-      now: () => 1000,
-      primerRecallEnabled: () => false, // OFF
-      recallRelated: () => { calls++; return [{ text: "x", sessionName: "Other", status: "active" as const }] },
-    })
-    const s = svc.create()
-    svc.setSummary(s.id, "Goal: thing")
-    const ctx = svc.getContext(s.id)!
-    expect(ctx).not.toContain("Related from other sessions")
-    // The seam isn't even consulted when the flag is off.
-    expect(calls).toBe(0)
-  })
-
-  it("appends a capped related block (with ruled-out correction-arrows) when the flag is ON", () => {
-    const svc = new SessionService({
-      dir,
-      now: () => 1000,
-      primerRecallEnabled: () => true, // ON
-      recallRelated: () => [
-        { text: "use the pooled client", sessionName: "DB work", status: "active" as const },
-        { text: "the cache is the bottleneck", sessionName: "Perf", status: "ruled-out" as const, correction: "it's the serializer" },
-      ],
-    })
-    const s = svc.create()
-    svc.setSummary(s.id, "Goal: speed up the API")
-    const ctx = svc.getContext(s.id)!
-    expect(ctx).toContain("## Related from other sessions")
-    expect(ctx).toContain("use the pooled client")
-    expect(ctx).toContain('_(from "DB work")_')
-    // ruled-out hit keeps the ~~old~~ → new correction-arrow rendering
-    expect(ctx).toContain("~~the cache is the bottleneck~~ → it's the serializer")
-  })
-})
-
-/**
- * CAPP-97 — get_session_context returns the DELTA vs the launch snapshot for a terminal
- * that has a recorded launch stamp (the curated brain was auto-loaded at spawn). A
- * terminal with NO stamp degrades to the FULL primer (byte-identical to pre-CAPP-97).
- */
-describe("SessionService.getContext — CAPP-97 launch-delta", () => {
-  /** Build a session with one registered terminal + the inject-input resolver wired off
-   *  the live session sections (no workspace tier, which is enough to exercise the delta). */
-  function setup() {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "idle" })
-    // The resolver re-assembles the CURRENT auto-load input from the live session sections.
-    svc.setInjectInputResolver((sessionId) => {
-      if (!sessionId) return undefined
-      const sections = svc.getSessionContextSections(sessionId)
-      return sections ? { instructions: "", workspaceFindings: [], session: sections } : undefined
-    })
-    return { svc, sessionId: s.id, terminalId: "t1" }
-  }
-
-  /** Compute + record the launch stamp from the CURRENT state (simulating spawn-time inject). */
-  function recordStampNow(svc: SessionService, sessionId: string, terminalId: string) {
-    const sections = svc.getSessionContextSections(sessionId)!
-    svc.recordLaunchStamp(
-      terminalId,
-      computeContextStamp({ instructions: "", workspaceFindings: [], session: sections }),
-    )
-  }
-
-  it("a terminal with NO launch stamp gets the FULL primer (byte-identical to today)", () => {
-    const { svc, sessionId, terminalId } = setup()
-    svc.setSummary(sessionId, "Goal: ship it")
-    svc.addNote(sessionId, "a finding")
-    // No stamp recorded → full primer, exactly equal to the no-terminalId call.
-    const full = svc.getContext(sessionId)!
-    const withTid = svc.getContext(sessionId, terminalId)!
-    expect(withTid).toBe(full)
-    expect(withTid).toContain("# Session:")
-    expect(withTid).toContain("a finding")
-  })
-
-  it("with a stamp + a NEW finding since launch, returns only the delta", () => {
-    const { svc, sessionId, terminalId } = setup()
-    svc.setSummary(sessionId, "Goal: ship it")
-    svc.addNote(sessionId, "finding at launch")
-    recordStampNow(svc, sessionId, terminalId)
-
-    // A new finding lands AFTER launch.
-    svc.addNote(sessionId, "discovered after launch")
-
-    const delta = svc.getContext(sessionId, terminalId)!
-    expect(delta).toContain("# Context updates since launch")
-    expect(delta).toContain("discovered after launch")
-    // The launch-time finding is NOT re-loaded.
-    expect(delta).not.toContain("finding at launch")
-  })
-
-  it("with a stamp and NOTHING changed since launch, returns the stable 'no changes' header", () => {
-    const { svc, sessionId, terminalId } = setup()
-    svc.setSummary(sessionId, "Goal: ship it")
-    svc.addNote(sessionId, "the only finding")
-    recordStampNow(svc, sessionId, terminalId)
-
-    const delta = svc.getContext(sessionId, terminalId)!
-    expect(delta).toContain("No durable changes since launch")
-    expect(delta).not.toContain("the only finding")
-  })
-
-  it("clearing the stamp (terminal removed) reverts to the FULL primer", () => {
-    const { svc, sessionId, terminalId } = setup()
-    svc.addNote(sessionId, "f1")
-    recordStampNow(svc, sessionId, terminalId)
-    svc.removeTerminal(sessionId, terminalId) // drops the stamp
-    const ctx = svc.getContext(sessionId, terminalId)!
-    expect(ctx).toContain("# Session:")
-    expect(ctx).toContain("f1")
-  })
-
-  it("closeTerminal clears the launch stamp (a REAL teardown path, not just removeTerminal)", () => {
-    const { svc, sessionId, terminalId } = setup()
-    svc.addNote(sessionId, "f1")
-    recordStampNow(svc, sessionId, terminalId)
-    expect(svc.hasLaunchStamp(terminalId)).toBe(true)
-    svc.closeTerminal(sessionId, terminalId)
-    expect(svc.hasLaunchStamp(terminalId)).toBe(false)
-  })
-
-  it("killSession clears every terminal's launch stamp (no map leak on the real teardown path)", () => {
-    const { svc, sessionId, terminalId } = setup()
-    svc.addNote(sessionId, "f1")
-    recordStampNow(svc, sessionId, terminalId)
-    expect(svc.hasLaunchStamp(terminalId)).toBe(true)
-    svc.killSession(sessionId)
-    expect(svc.hasLaunchStamp(terminalId)).toBe(false)
-  })
-
-  it("the delta path STILL appends the gated 'Related from other sessions' block (it is pull-only, never injected)", () => {
-    const svc = new SessionService({
-      dir,
-      now: () => 1000,
-      primerRecallEnabled: () => true,
-      recallRelated: () => [{ text: "cross-session insight", sessionName: "Other", status: "active" as const }],
-    })
-    const s = svc.create()
-    svc.addTerminal(s.id, { id: "t1", name: "x", cwd: "/r", lastState: "idle" })
-    svc.setInjectInputResolver((sessionId) => {
-      if (!sessionId) return undefined
-      const sections = svc.getSessionContextSections(sessionId)
-      return sections ? { instructions: "", workspaceFindings: [], session: sections } : undefined
-    })
-    svc.setSummary(s.id, "Goal: ship it")
-    svc.addNote(s.id, "the only finding")
-    // Stamp recorded with nothing changing after → the delta CORE is "no changes"…
-    const sections = svc.getSessionContextSections(s.id)!
-    svc.recordLaunchStamp("t1", computeContextStamp({ instructions: "", workspaceFindings: [], session: sections }))
-
-    const delta = svc.getContext(s.id, "t1")!
-    expect(delta).toContain("No durable changes since launch")
-    // …but the pull-only Related block must still ride on it (an opt-in user mustn't lose it).
-    expect(delta).toContain("## Related from other sessions")
-    expect(delta).toContain("cross-session insight")
-  })
-})
-
 describe("SessionService terminal activity & state", () => {
   it("setTerminalActivity sets the rich-presence line + timestamp and persists", () => {
     const svc = new SessionService({ dir, now: () => 1000 })
@@ -610,7 +346,7 @@ describe("SessionService.status", () => {
     const b = svc.create()
     // touch a so it becomes most-recent again
     t = 3000
-    svc.setSummary(a.id, "newer")
+    svc.renameSession(a.id, "newer")
     expect(svc.status()!.id).toBe(a.id)
     // stopping a should make b the most-recent active
     t = 4000
@@ -798,20 +534,6 @@ describe("SessionService orchestration", () => {
     expect(term.killed).toEqual(["live-1", "live-2"])
     expect(svc.get(session.id)).toBeUndefined()
     expect(existsSync(join(dir, `${session.id}.json`))).toBe(false)
-  })
-
-  it("killSession clears summaryDirty and lastFlushAt entries", () => {
-    const term = new FakeTerminals()
-    const svc = new SessionService({ dir, now: () => 1000 })
-    svc.attachTerminals(term as any)
-    const { session } = svc.openSession("/repo")
-    svc.addNote(session.id, "x") // sets summaryDirty
-    svc.__test_setLastFlushAt(session.id) // seed lastFlushAt as if a flush happened
-    expect(svc.__test_summaryDirtyHas(session.id)).toBe(true)
-    expect(svc.__test_lastFlushAtHas(session.id)).toBe(true)
-    svc.killSession(session.id)
-    expect(svc.__test_summaryDirtyHas(session.id)).toBe(false)
-    expect(svc.__test_lastFlushAtHas(session.id)).toBe(false)
   })
 
   it("reopenTerminal spawns a fresh PTY and updates the ref id in place (3a fresh-reopen)", () => {
@@ -1035,22 +757,22 @@ describe("SessionService effective activity", () => {
 })
 
 describe("SessionService.getOverview", () => {
-  it("returns structured summary, notes, ruled-out pairs, terminals", () => {
+  it("returns identity + status + terminals (the durable knowledge tier was removed in R3a)", () => {
     const term = new FakeTerminals()
     const svc = new SessionService({ dir, now: () => 1 })
     svc.attachTerminals(term as any)
     const { session } = svc.openSession("/repo")
-    svc.setSummary(session.id, "Fixing the auth race")
-    const n1 = svc.addNote(session.id, "race is in spawnInto")!
-    svc.addNote(session.id, "actually it's in reconcile", { corrects: n1.id })
 
     const ov = svc.getOverview(session.id)!
-    expect(ov.summary).toBe("Fixing the auth race")
-    expect(ov.notes.map((n) => n.text)).toContain("actually it's in reconcile")
-    expect(ov.ruledOut[0].text).toBe("race is in spawnInto")
-    expect(ov.ruledOut[0].correction).toBe("actually it's in reconcile")
+    expect(ov.id).toBe(session.id)
+    expect(ov.name).toBe(svc.get(session.id)!.name)
+    expect(ov.status).toBe("active")
     expect(ov.terminals.length).toBe(1)
-    expect(ov.provisionalFindings).toEqual([])
+  })
+
+  it("returns undefined for an unknown session", () => {
+    const svc = new SessionService({ dir, now: () => 1 })
+    expect(svc.getOverview("nope")).toBeUndefined()
   })
 })
 
@@ -1075,50 +797,6 @@ describe("SessionService.handoffTerminal", () => {
     const svc = new SessionService({ dir, now: () => 1 })
     svc.attachTerminals(new FakeTerminals() as any)
     expect(svc.handoffTerminal("nope", "nope")).toBeUndefined()
-  })
-
-  it("legacy xterm handoff force-flush uses the bracketed-paste keystroke (unchanged)", () => {
-    const term = new FakeTerminals()
-    const svc = new SessionService({ dir, now: () => 1 })
-    svc.attachTerminals(term as any)
-    const { session, terminalId } = svc.openSession("/repo") // create() → PTY (not headless)
-    svc.addNote(session.id, "found the bug") // marks dirty so a flush fires
-
-    svc.handoffTerminal(session.id, terminalId)
-
-    // The flush write is the PTY bracketed-paste idiom, and the replacement is a PTY.
-    const flush = term.writes.find((w) => w.id === terminalId)
-    expect(flush?.data).toContain("\x1b[200~")
-    expect(flush?.data.endsWith("\x1b[201~\r")).toBe(true)
-    expect(term.spawned.some((s) => s.headless)).toBe(false)
-  })
-
-  it("structured handoff: clean stdin flush + a fresh headless terminal, old retired", () => {
-    const term = new FakeTerminals()
-    const svc = new SessionService({ dir, now: () => 1 })
-    svc.attachTerminals(term as any)
-    // Register a HEADLESS terminal into a session by hand (BO-4 owns the prod switch).
-    const s = svc.create()
-    const head = term.createHeadless(undefined, "/repo", s.id)
-    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active" })
-    svc.addNote(s.id, "structured finding") // marks dirty
-
-    const r = svc.handoffTerminal(s.id, head.id)
-
-    // Force-flush went to the stdin sink as PLAIN text (no bracketed-paste, no CR).
-    const flush = term.writes.find((w) => w.id === head.id)
-    expect(flush).toBeDefined()
-    expect(flush!.data).not.toContain("\x1b[200~")
-    expect(flush!.data).not.toContain("\r")
-    expect(flush!.data).toContain("set_session_summary")
-
-    // The replacement is a HEADLESS terminal (structured engine preserved).
-    expect(r?.terminalId).toBeTruthy()
-    expect(term.isHeadless(r!.terminalId)).toBe(true)
-    // Old terminal retired (killed + ref dead), no /handoff PTY slash command anywhere.
-    expect(term.killed).toContain(head.id)
-    expect(svc.get(s.id)!.terminals.find((t) => t.id === head.id)?.lastState).toBe("dead")
-    expect(term.writes.every((w) => !w.data.includes("/handoff"))).toBe(true)
   })
 
   it("REFUSES handoff on a login terminal: no kill, no replacement spawn (CAPP-54 gate ② FIX B)", () => {
@@ -1702,77 +1380,8 @@ describe("SessionService model persistence (BO-6)", () => {
   })
 })
 
-const tick = () => new Promise((r) => setTimeout(r, 5))
-
-describe("SessionService idle-flush", () => {
-  it("injects a summary-refresh prompt when idle + dirty", async () => {
-    const term = new FakeTerminals()
-    const svc = new SessionService({ dir, now: () => 1, idleFlushGraceMs: 0 })
-    svc.attachTerminals(term as any)
-    const { session, terminalId } = svc.openSession("/repo")
-    svc.addNote(session.id, "found the bug") // marks dirty
-
-    term.emit({ type: "state", id: terminalId, state: "idle" }) // active -> idle
-    await tick()
-
-    const injected = term.writes.find((w) => w.id === terminalId)
-    expect(injected).toBeTruthy()
-    expect(injected!.data).toContain("set_session_summary")
-  })
-
-  it("does NOT inject when there are no new notes (clean)", async () => {
-    const term = new FakeTerminals()
-    const svc = new SessionService({ dir, now: () => 1, idleFlushGraceMs: 0 })
-    svc.attachTerminals(term as any)
-    const { terminalId } = svc.openSession("/repo")
-    term.emit({ type: "state", id: terminalId, state: "idle" })
-    await tick()
-    expect(term.writes.length).toBe(0)
-  })
-
-  it("CAPP-39 gate ②: NEVER idle-flushes a login terminal (no summary-refresh into the OAuth prompt)", async () => {
-    const term = new FakeTerminals()
-    const svc = new SessionService({ dir, now: () => 1, idleFlushGraceMs: 0 })
-    svc.attachTerminals(term as any)
-    // A session with a live agent terminal that has dirty findings…
-    const { session, terminalId } = svc.openSession("/repo")
-    svc.addNote(session.id, "found the bug") // marks the session dirty
-    // …plus a login terminal opened beside it.
-    const login = svc.startLogin(session.id)!
-    // The login terminal goes idle (the OAuth PTY quiets after rendering its prompt).
-    term.emit({ type: "state", id: login.terminalId, state: "idle" })
-    await tick()
-    // No bracketed-paste summary-refresh is injected into the login terminal.
-    expect(term.writes.some((w) => w.id === login.terminalId)).toBe(false)
-    // (Sanity) the SAME dirty session still flushes a NORMAL agent terminal on idle.
-    term.emit({ type: "state", id: terminalId, state: "idle" })
-    await tick()
-    const agentFlush = term.writes.find((w) => w.id === terminalId)
-    expect(agentFlush?.data).toContain("set_session_summary")
-  })
-
-  it("does not idle-flush at the old 8s grace; waits the full window", () => {
-    vi.useFakeTimers()
-    try {
-      const term = new FakeTerminals()
-      // no idleFlushGraceMs override → uses the default grace
-      const svc = new SessionService({ dir, now: () => 1 })
-      svc.attachTerminals(term as any)
-      const { session, terminalId } = svc.openSession("/repo")
-      svc.addNote(session.id, "found root cause") // marks summaryDirty
-      term.emit({ type: "state", id: terminalId, state: "idle" }) // schedules the flush
-      vi.advanceTimersByTime(8000)
-      expect(term.writes.some((w) => w.data.includes("set_session_summary"))).toBe(false)
-      vi.advanceTimersByTime(12001) // total > 20s
-      expect(term.writes.some((w) => w.data.includes("set_session_summary"))).toBe(true)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-})
-
 describe("SessionService.getSessionTimeline (ST-1)", () => {
-  it("appends events at spawn / note / correction / summary and returns them sorted by time", () => {
+  it("appends a spawn event at openSession and returns it", () => {
     const term = new FakeTerminals()
     let clock = 1000
     const svc = new SessionService({ dir, now: () => clock })
@@ -1780,22 +1389,11 @@ describe("SessionService.getSessionTimeline (ST-1)", () => {
 
     clock = 1000
     const { session } = svc.openSession("/repo") // spawn event
-    clock = 2000
-    const wrong = svc.addNote(session.id, "bug is in auth")! // note event
-    clock = 3000
-    svc.addNote(session.id, "actually it's the list endpoint", { corrects: wrong.id }) // correction event
-    clock = 4000
-    svc.setSummary(session.id, "fixing the auth race") // summary event
 
     const tl = svc.getSessionTimeline(session.id)
-    expect(tl.map((e) => e.kind)).toEqual(["spawn", "note", "correction", "summary"])
-    // sorted ascending by time
-    expect(tl.map((e) => e.time)).toEqual([1000, 2000, 3000, 4000])
-    // terse, human-readable
+    expect(tl.map((e) => e.kind)).toEqual(["spawn"])
+    expect(tl[0].time).toBe(1000)
     expect(tl[0].text).toContain("Spawned terminal")
-    expect(tl[1].text).toContain("bug is in auth")
-    expect(tl[2].text).toContain("Corrected")
-    expect(tl[3].text).toBe("Summary refreshed")
   })
 
   it("records retire on closeTerminal and handoff on handoffTerminal", () => {
@@ -1813,47 +1411,26 @@ describe("SessionService.getSessionTimeline (ST-1)", () => {
   })
 
   it("the durable eventLog is persisted inside the versioned envelope", () => {
+    const term = new FakeTerminals()
     const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    svc.addNote(s.id, "a finding")
-    const stored = JSON.parse(readFileSync(join(dir, `${s.id}.json`), "utf-8"))
+    svc.attachTerminals(term as any)
+    const { session } = svc.openSession("/repo") // spawn event
+    const stored = JSON.parse(readFileSync(join(dir, `${session.id}.json`), "utf-8"))
     expect(stored.schemaVersion).toBe(1)
-    expect(stored.data.eventLog.some((e: any) => e.kind === "note")).toBe(true)
+    expect(stored.data.eventLog.some((e: any) => e.kind === "spawn")).toBe(true)
   })
 
   it("caps the eventLog at ~500 entries (oldest dropped)", () => {
-    let clock = 0
-    const svc = new SessionService({ dir, now: () => clock })
+    const svc = new SessionService({ dir, now: () => 0 })
     const s = svc.create()
-    for (let i = 0; i < 600; i++) { clock = i + 1; svc.addNote(s.id, `note ${i}`) }
+    // Drive the private logEvent directly (the public spawn/handoff paths would each
+    // need a fresh PTY); the cap is a property of logEvent regardless of the kind.
+    for (let i = 0; i < 600; i++) (svc as any).logEvent(s, "spawn", `event ${i}`)
     const log = svc.get(s.id)!.eventLog!
     expect(log.length).toBe(500)
-    // oldest dropped: the surviving window is the last 500 notes
-    expect(log[0].text).toContain("note 100")
-    expect(log[log.length - 1].text).toContain("note 599")
-  })
-
-  it("backfills a best-effort timeline from createdAt + notes for a log-less session", () => {
-    let clock = 1000
-    const svc = new SessionService({ dir, now: () => clock })
-    const s = svc.create()
-    // simulate a session that predates the event log
-    clock = 2000
-    const wrong = svc.addNote(s.id, "first theory")!
-    clock = 3000
-    svc.addNote(s.id, "corrected theory", { corrects: wrong.id })
-    // wipe the durable log to force the backfill path
-    s.eventLog = undefined
-
-    const tl = svc.getSessionTimeline(s.id)
-    // a "created" event derived from createdAt + one event per note, sorted
-    expect(tl[0].kind).toBe("spawn")
-    expect(tl[0].time).toBe(1000)
-    expect(tl[0].text).toContain("created")
-    expect(tl.some((e) => e.kind === "note" && e.text.includes("corrected theory"))).toBe(true)
-    expect(tl.some((e) => e.kind === "correction" && e.text.includes("first theory"))).toBe(true)
-    // still sorted ascending
-    expect(tl.map((e) => e.time)).toEqual([...tl.map((e) => e.time)].sort((a, b) => a - b))
+    // oldest dropped: the surviving window is the last 500 events
+    expect(log[0].text).toContain("event 100")
+    expect(log[log.length - 1].text).toContain("event 599")
   })
 
   it("returns [] for an unknown session", () => {
@@ -1861,19 +1438,14 @@ describe("SessionService.getSessionTimeline (ST-1)", () => {
     expect(svc.getSessionTimeline("nope")).toEqual([])
   })
 
-  it("a LEGACY (no eventLog) persisted session loads and backfills (versioned-loader regression)", () => {
+  it("a LEGACY (no eventLog) persisted session loads and backfills a single 'created' event", () => {
     // A real on-disk file from before ST-1: a valid v1 envelope whose data has NO
     // eventLog field. It must load cleanly (additive optional field, no schema bump)
-    // and getSessionTimeline must backfill from createdAt + notes.
+    // and getSessionTimeline must backfill a single creation entry from createdAt.
     const legacyData = {
       id: "legacy-no-log",
       name: "Pre-ST-1 session",
       status: "active",
-      summary: "",
-      notes: [
-        { id: "n1", text: "an old finding", createdAt: 1500, source: "self", status: "active" },
-      ],
-      provisionalFindings: [],
       terminals: [],
       createdAt: 1000,
       updatedAt: 1500,
@@ -1889,9 +1461,10 @@ describe("SessionService.getSessionTimeline (ST-1)", () => {
     expect(loaded.eventLog).toBeUndefined() // field stays absent, nothing forged
 
     const tl = svc.getSessionTimeline("legacy-no-log")
+    expect(tl).toHaveLength(1)
     expect(tl[0].kind).toBe("spawn")
     expect(tl[0].time).toBe(1000)
-    expect(tl.some((e) => e.text.includes("an old finding"))).toBe(true)
+    expect(tl[0].text).toContain("created")
   })
 })
 
@@ -2099,259 +1672,6 @@ describe("SessionService.renameSession (CAPP-82 — container rename)", () => {
     expect(svc.renameSession("nope", "X")).toBe(false)
   })
 })
-
-describe("SessionService.getPromotableFindings (CAPP-90 / U2)", () => {
-  it("maps BOTH active and ruled-out notes into PromoteEntry[] with status + provenance + createdAt + source", () => {
-    let clock = 1000
-    const svc = new SessionService({ dir, now: () => clock })
-    const s = svc.create()
-    clock = 1100
-    const active = svc.addNote(s.id, "root cause is the N+1 query")! // self-sourced, active
-    clock = 1200
-    const wrong = svc.addNote(s.id, "bug is in auth")! // will be superseded below
-    clock = 1300
-    const corrector = svc.addNote(s.id, "actually it's the list endpoint", { corrects: wrong.id })!
-
-    const entries = svc.getPromotableFindings(s.id)
-    // ALL three confirmed notes are promotable (active + ruled-out), in note order.
-    expect(entries).toHaveLength(3)
-
-    const byOrigin = (id: string) => entries.find((e) => e.originNoteId === id)!
-
-    const a = byOrigin(active.id)
-    expect(a.text).toBe("root cause is the N+1 query")
-    expect(a.status).toBe("active")
-    expect(a.originSessionId).toBe(s.id)
-    expect(a.originNoteId).toBe(active.id)
-    expect(a.createdAt).toBe(1100)
-    expect(a.source).toBe("self")
-    expect(a.supersededBy).toBeUndefined()
-
-    // The superseded note carries the ruled-out status + the createdAt of its origin.
-    const w = byOrigin(wrong.id)
-    expect(w.status).toBe("superseded")
-    expect(w.createdAt).toBe(1200)
-    expect(w.source).toBe("self")
-
-    // The corrector itself is an ordinary active note, also promotable.
-    const c = byOrigin(corrector.id)
-    expect(c.status).toBe("active")
-    expect(c.createdAt).toBe(1300)
-  })
-
-  it("a superseded note carries supersededBy = its corrector's ORIGIN note id (not the workspace twin)", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    const wrong = svc.addNote(s.id, "first theory")!
-    const corrector = svc.addNote(s.id, "corrected theory", { corrects: wrong.id })!
-
-    const entry = svc.getPromotableFinding(s.id, wrong.id)!
-    expect(entry.status).toBe("superseded")
-    // The id rewrite to the workspace twin happens later in U1's promoteFindings; at
-    // this tier supersededBy is still the corrector's SESSION (origin) note id.
-    expect(entry.supersededBy).toBe(corrector.id)
-  })
-
-  it("EXCLUDES provisionalFindings (observer seam, unconfirmed) — only confirmed notes are promotable", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    const confirmed = svc.addNote(s.id, "a confirmed finding")!
-    // Seed an observer-seam provisional finding directly (no public mutator for it).
-    svc.get(s.id)!.provisionalFindings.push({
-      id: "prov-1",
-      text: "an unconfirmed observation",
-      createdAt: 1000,
-      source: "observer",
-      status: "active",
-    })
-
-    const entries = svc.getPromotableFindings(s.id)
-    expect(entries).toHaveLength(1)
-    expect(entries[0].originNoteId).toBe(confirmed.id)
-    expect(entries.some((e) => e.originNoteId === "prov-1")).toBe(false)
-    expect(entries.some((e) => e.text === "an unconfirmed observation")).toBe(false)
-  })
-
-  it("getPromotableFinding resolves a known note id and returns undefined for an unknown one", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    const s = svc.create()
-    const n = svc.addNote(s.id, "a finding")!
-    expect(svc.getPromotableFinding(s.id, n.id)?.text).toBe("a finding")
-    expect(svc.getPromotableFinding(s.id, "no-such-note")).toBeUndefined()
-  })
-
-  it("unknown sessionId → getPromotableFindings returns [] and getPromotableFinding returns undefined", () => {
-    const svc = new SessionService({ dir, now: () => 1000 })
-    expect(svc.getPromotableFindings("nope")).toEqual([])
-    expect(svc.getPromotableFinding("nope", "whatever")).toBeUndefined()
-  })
-})
-
-describe("SessionService CAPP-101 (P1) — propagation nudge: mark + re-prime", () => {
-  /** Helper: spin a service whose active-workspace getter is a mutable closure, so we can
-   *  stamp different sessions with different workspaceIds (mirroring the live getActiveId seam). */
-  function makeSvc(term: FakeTerminals) {
-    let activeWs: string | null | undefined = undefined
-    const svc = new SessionService({
-      dir,
-      now: () => 1000,
-      getActiveWorkspaceId: () => activeWs,
-    })
-    svc.attachTerminals(term as any)
-    return { svc, setActiveWs: (w: string | null | undefined) => (activeWs = w) }
-  }
-
-  it("marks ONLY in-W running terminals — a terminal in another workspace is NOT marked (workspaceId-scoped, never getActiveId)", () => {
-    const term = new FakeTerminals()
-    const { svc, setActiveWs } = makeSvc(term)
-
-    // Session A in ws-1, session B in ws-2 — each spawns a running (active) terminal.
-    setActiveWs("ws-1")
-    const a = svc.openSession("/a")
-    setActiveWs("ws-2")
-    const b = svc.openSession("/b")
-
-    // Flip the ACTIVE workspace to a THIRD, UNRELATED workspace to prove the mark does
-    // not consult getActiveId: a ws-1 memory change must still mark A (ws-1), never B.
-    setActiveWs("ws-999")
-    svc.markWorkspaceMemoryChanged("ws-1")
-
-    const aTerm = svc.get(a.session.id)!.terminals.find((t) => t.id === a.terminalId)!
-    const bTerm = svc.get(b.session.id)!.terminals.find((t) => t.id === b.terminalId)!
-    expect(aTerm.pendingMemoryDelta).toBe(true)
-    expect(bTerm.pendingMemoryDelta).toBeFalsy()
-  })
-
-  it("the untagged sentinel marks ONLY untagged sessions (a real-id session is untouched)", () => {
-    const term = new FakeTerminals()
-    const { svc, setActiveWs } = makeSvc(term)
-    setActiveWs(null) // untagged session
-    const untagged = svc.openSession("/u")
-    setActiveWs("ws-1")
-    const tagged = svc.openSession("/t")
-
-    svc.markWorkspaceMemoryChanged("__untagged__")
-
-    expect(svc.get(untagged.session.id)!.terminals[0].pendingMemoryDelta).toBe(true)
-    expect(svc.get(tagged.session.id)!.terminals[0].pendingMemoryDelta).toBeFalsy()
-  })
-
-  it("does NOT mark a dead/cold terminal (a reopened ref gets the current brain on spawn)", () => {
-    const term = new FakeTerminals()
-    const { svc, setActiveWs } = makeSvc(term)
-    setActiveWs("ws-1")
-    const a = svc.create()
-    svc.addTerminal(a.id, { id: "dead-1", name: "x", cwd: "/a", lastState: "dead" })
-
-    svc.markWorkspaceMemoryChanged("ws-1")
-    expect(svc.get(a.id)!.terminals[0].pendingMemoryDelta).toBeFalsy()
-  })
-
-  it("re-prime (xterm) writes the get_session_context PULL prompt via the bracketed-paste idiom + clears the mark", () => {
-    const term = new FakeTerminals()
-    const { svc, setActiveWs } = makeSvc(term)
-    setActiveWs("ws-1")
-    const a = svc.openSession("/a") // xterm (FakeTerminals.create default)
-    svc.markWorkspaceMemoryChanged("ws-1")
-    expect(svc.get(a.session.id)!.terminals[0].pendingMemoryDelta).toBe(true)
-
-    const ok = svc.reprimeTerminal(a.session.id, a.terminalId)
-    expect(ok).toBe(true)
-
-    const write = term.writes.find((w) => w.id === a.terminalId)!
-    // xterm idiom: bracketed-paste keystroke (same shape as the idle-flush path).
-    expect(write.data.startsWith("\x1b[200~")).toBe(true)
-    expect(write.data.endsWith("\x1b[201~\r")).toBe(true)
-    expect(write.data).toContain("get_session_context")
-    // The mark is cleared after re-prime.
-    expect(svc.get(a.session.id)!.terminals[0].pendingMemoryDelta).toBeFalsy()
-  })
-
-  it("re-prime (structured) writes the PULL prompt as a CLEAN stdin message (no bracketed-paste, no CR)", () => {
-    const term = new FakeTerminals()
-    const { svc } = makeSvc(term)
-    const s = svc.create() // untagged is fine here — we test the write idiom
-    const head = term.createHeadless(undefined, "/repo", s.id)
-    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "idle", engine: "structured" })
-
-    const ok = svc.reprimeTerminal(s.id, head.id)
-    expect(ok).toBe(true)
-
-    const write = term.writes.find((w) => w.id === head.id)!
-    expect(write.data).not.toContain("\x1b[200~")
-    expect(write.data).not.toContain("\r")
-    expect(write.data).toContain("get_session_context")
-  })
-
-  it("the mark clears after handoff and after reopen (a fresh terminal already has current context)", () => {
-    const term = new FakeTerminals()
-    const { svc, setActiveWs } = makeSvc(term)
-    setActiveWs("ws-1")
-
-    // HANDOFF: mark, then retire-&-continue — the dead ref is unmarked, the fresh ref unmarked.
-    const a = svc.openSession("/a")
-    svc.markWorkspaceMemoryChanged("ws-1")
-    const ho = svc.handoffTerminal(a.session.id, a.terminalId)!
-    const oldRef = svc.get(a.session.id)!.terminals.find((t) => t.id === a.terminalId)
-    const freshRef = svc.get(a.session.id)!.terminals.find((t) => t.id === ho.terminalId)
-    expect(oldRef?.pendingMemoryDelta).toBeFalsy()
-    expect(freshRef?.pendingMemoryDelta).toBeFalsy()
-
-    // REOPEN: a marked, then-dead ref that's reopened comes back unmarked.
-    const b = svc.create()
-    svc.addTerminal(b.id, { id: "t-b", name: "y", cwd: "/b", lastState: "active" })
-    // stamp the session into ws-1 so the mark applies
-    ;(svc.get(b.id) as any).workspaceId = "ws-1"
-    svc.markWorkspaceMemoryChanged("ws-1")
-    expect(svc.get(b.id)!.terminals[0].pendingMemoryDelta).toBe(true)
-    // Make the ref reopenable (a reopen needs a non-login ref; lastState irrelevant to reopen).
-    const re = svc.reopenTerminal(b.id, "t-b")!
-    const reRef = svc.get(b.id)!.terminals.find((t) => t.id === re.terminalId)
-    expect(reRef?.pendingMemoryDelta).toBeFalsy()
-  })
-
-  it("a marked terminal that DIES clears its pending nudge (no stale rail affordance on a dead ref)", () => {
-    const term = new FakeTerminals()
-    const { svc, setActiveWs } = makeSvc(term)
-    setActiveWs("ws-1")
-    const a = svc.openSession("/a")
-    svc.markWorkspaceMemoryChanged("ws-1")
-    expect(svc.get(a.session.id)!.terminals[0].pendingMemoryDelta).toBe(true)
-    // The terminal's process exits → it goes dead. The pending nudge must be dropped (a dead
-    // terminal can't pull a delta — keeping it would leave an inert "re-prime to pull" button).
-    svc.setTerminalState(a.session.id, a.terminalId, "dead")
-    expect(svc.get(a.session.id)!.terminals[0].pendingMemoryDelta).toBeFalsy()
-  })
-
-  it("re-prime is a no-op (false) for an unknown session/terminal and for a dead ref", () => {
-    const term = new FakeTerminals()
-    const { svc } = makeSvc(term)
-    const s = svc.create()
-    svc.addTerminal(s.id, { id: "dead-1", name: "x", cwd: "/a", lastState: "dead" })
-    expect(svc.reprimeTerminal("nope", "nope")).toBe(false)
-    expect(svc.reprimeTerminal(s.id, "ghost")).toBe(false)
-    expect(svc.reprimeTerminal(s.id, "dead-1")).toBe(false)
-    expect(term.writes.length).toBe(0)
-  })
-
-  it("marking is idempotent — re-running over an already-marked terminal does not re-emit", () => {
-    const term = new FakeTerminals()
-    const { svc, setActiveWs } = makeSvc(term)
-    setActiveWs("ws-1")
-    const a = svc.openSession("/a")
-    let emits = 0
-    svc.setMainWindow({
-      isDestroyed: () => false,
-      webContents: { send: (ch: string) => { if (ch === "worksession:updated") emits++ } },
-    } as any)
-    svc.markWorkspaceMemoryChanged("ws-1")
-    expect(emits).toBe(1)
-    svc.markWorkspaceMemoryChanged("ws-1") // already marked → no change → no emit
-    expect(emits).toBe(1)
-    void a
-  })
-})
-
 describe("SessionService CAPP-108 ultracode — model-switch + effort preservation (review fixes)", () => {
   function setup() {
     const term = new FakeTerminals()

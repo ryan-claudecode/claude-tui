@@ -5,8 +5,7 @@
  * preload boundary (untyped `any`). The canonical types live in
  * `electron/services/contextInspector.ts`, which pulls in `node:fs`/`node:child_process` —
  * so it CANNOT be imported into the node-free renderer build. This module is the
- * type-only mirror the renderer reads instead (same intentional pattern as
- * `src/lib/workspaceMemoryView.ts`).
+ * type-only mirror the renderer reads instead.
  *
  * A COMPILE-TIME PARITY PIN (`electron/services/contextInspectorViewSync.test.ts`) asserts
  * these are mutually assignable with the canonical service types, so any drift (a
@@ -31,7 +30,6 @@ export interface ContextSourceView {
 export interface InspectResultView {
   folder: string | null
   gitRoot: string | null
-  adopted: boolean
   sources: ContextSourceView[]
   effective?: string
 }

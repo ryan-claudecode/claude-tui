@@ -10,8 +10,8 @@ import type { PanelLike } from "./PanelContent"
  * `renderToStaticMarkup` is the established node-test render path here (see
  * MarkdownView.test.tsx) — the suite runs under the `node` vitest environment with no
  * jsdom. We render each behavior panel through the switch with a fully-stubbed `PanelApi`
- * and assert (a) it renders without throwing, (b) the right per-panel callbacks are wired
- * off `api`, and (c) RecallPanel's empty-`api` NEGATIVE CONTROL degrades to a disabled box.
+ * and assert (a) it renders without throwing and (b) the right per-panel callbacks are
+ * wired off `api`.
  */
 
 /** A complete, inert PanelApi — every method a no-op / resolved-empty so a static render
@@ -24,43 +24,9 @@ function mockApi(overrides: Partial<PanelApi> = {}): PanelApi {
     scheduleDelete: vi.fn(),
     scheduleEdit: vi.fn(),
     hidePanel: vi.fn(),
-    recall: vi.fn(async () => []),
     openSessionOverview: vi.fn(async () => undefined),
-    promoteSessionToWorkspace: vi.fn(async () => ({ ok: true, count: 0, workspaceId: null })),
-    getWorkspaceMemory: vi.fn(async () => ({
-      workspaceId: "w1", instructions: "", findings: [], createdAt: 0, updatedAt: 0,
-    })),
-    setWorkspaceInstructions: vi.fn(async () => ({
-      workspaceId: "w1", instructions: "", findings: [], createdAt: 0, updatedAt: 0,
-    })),
-    addWorkspaceFinding: vi.fn(async () => ({
-      id: "f1", text: "x", source: "user" as const, status: "active" as const, createdAt: 0, promotedAt: 0,
-    })),
-    editWorkspaceFinding: vi.fn(async () => true),
-    deleteWorkspaceFinding: vi.fn(async () => true),
-    setWorkspaceFindingPinned: vi.fn(async () => true),
-    onWorkspaceMemoryChanged: vi.fn(() => () => {}),
-    getExportState: vi.fn(async () => ({
-      workspaceId: "w1", mode: null, path: null, enabled: false, importLine: null, folderless: false,
-    })),
-    enableExport: vi.fn(async () => ({ ok: true })),
-    disableExport: vi.fn(async () => ({
-      workspaceId: "w1", mode: null, path: null, enabled: false, importLine: null, folderless: false,
-    })),
-    setUntaggedExportEnabled: vi.fn(async () => ({
-      workspaceId: "w1", mode: null, path: null, enabled: false, importLine: null, folderless: false,
-    })),
-    regenerateExport: vi.fn(async () => ({ ok: true })),
-    getAdoptionState: vi.fn(async () => ({
-      adopted: false, hostFile: null, canWire: false, selfWired: false, importLine: null,
-    })),
-    wireImportBlock: vi.fn(async () => ({ ok: true, status: "wired" as const })),
-    unwireImportBlock: vi.fn(async () => ({ ok: true, status: "removed" as const })),
-    setExportSelfWired: vi.fn(async () => ({
-      workspaceId: "w1", mode: null, path: null, enabled: false, importLine: null, folderless: false,
-    })),
     inspectWorkspaceContext: vi.fn(async () => ({
-      folder: "/x", gitRoot: "/x", adopted: false, sources: [],
+      folder: "/x", gitRoot: "/x", sources: [],
     })),
     ...overrides,
   }
@@ -73,13 +39,12 @@ const panel = (type: string, props: Record<string, any> = {}): PanelLike => ({
 describe("PanelContent — tabLabel / PANEL_LABELS (extracted)", () => {
   it("maps each panel type to a generic label", () => {
     expect(PANEL_LABELS["diff"]).toBe("Diff")
-    expect(PANEL_LABELS["workspace-memory"]).toBe("Memory")
     expect(PANEL_LABELS["context-inspector"]).toBe("Context")
+    expect(PANEL_LABELS["session-overview"]).toBe("Overview")
   })
 
-  it("specializes the label by props (overview→name, memory/context→workspace)", () => {
+  it("specializes the label by props (overview→name, context→workspace)", () => {
     expect(tabLabel(panel("session-overview", { name: "Refactor" }))).toBe("Refactor")
-    expect(tabLabel(panel("workspace-memory", { workspaceName: "App" }))).toBe("Memory: App")
     expect(tabLabel(panel("context-inspector", { workspaceName: "App" }))).toBe("Context: App")
   })
 
@@ -102,29 +67,17 @@ describe("PanelContent — renders behavior panels with a mock api", () => {
     expect(html).toContain("a.ts")
   })
 
-  it("renders the session-overview panel with the push button", () => {
+  it("renders the session-overview panel (terminals roster)", () => {
     const html = renderToStaticMarkup(
       <PanelContent
         panel={panel("session-overview", {
-          id: "s1", name: "Sess", status: "active", summary: "", notes: [], ruledOut: [],
-          provisionalFindings: [], terminals: [],
+          id: "s1", name: "Sess", status: "active", terminals: [],
         })}
         api={mockApi()}
       />,
     )
     expect(html).toContain("overview-panel")
-    expect(html).toContain("Push context to workspace")
-  })
-
-  it("renders the workspace-memory editor", () => {
-    const html = renderToStaticMarkup(
-      <PanelContent
-        panel={panel("workspace-memory", { workspaceId: "w1", workspaceName: "App", instructions: "", findings: [] })}
-        api={mockApi()}
-      />,
-    )
-    expect(html).toContain("workspace-memory-panel")
-    expect(html).toContain("Memory — App")
+    expect(html).toContain("Terminals")
   })
 
   it("renders the context-inspector with a Refresh button", () => {
@@ -132,7 +85,7 @@ describe("PanelContent — renders behavior panels with a mock api", () => {
       <PanelContent
         panel={panel("context-inspector", {
           workspaceId: "w1",
-          result: { folder: "/x", gitRoot: "/x", adopted: false, sources: [] },
+          result: { folder: "/x", gitRoot: "/x", sources: [] },
         })}
         api={mockApi()}
       />,
@@ -180,30 +133,5 @@ describe("PanelContent — renders behavior panels with a mock api", () => {
     )
     expect(html).toContain("panel-raw")
     expect(html).toContain("&quot;a&quot;: 1")
-  })
-})
-
-describe("PanelContent — RecallPanel renders results from a mock api", () => {
-  it("renders the recall search UI with a working api (search box + filter pills)", () => {
-    const api = mockApi({ recall: vi.fn(async () => []) })
-    const html = renderToStaticMarkup(
-      <PanelContent panel={panel("recall", { query: "" })} api={api} />,
-    )
-    expect(html).toContain("recall-panel")
-    expect(html).toContain("recall-search")
-    // The always-visible status/scope filter pills (no hover-reveal).
-    expect(html).toContain("recall-pill")
-  })
-
-  it("NEGATIVE CONTROL (A.4): an empty api still renders the box — never throws", () => {
-    // The whole point of A.4: RecallPanel's guard degrades to a blank/disabled box rather
-    // than crashing when no bridge is supplied. Rendering with api=undefined must succeed.
-    const render = () =>
-      renderToStaticMarkup(<PanelContent panel={panel("recall", { query: "" })} api={undefined} />)
-    expect(render).not.toThrow()
-    const html = render()
-    expect(html).toContain("recall-panel")
-    // The prompt copy for the initial (no-query / degraded) state is present.
-    expect(html).toContain("Type to search")
   })
 })

@@ -42,21 +42,12 @@ export interface Terminal {
    */
   ccConversationId?: string
   activity?: string
-  /**
-   * CAPP-101 (P1) — the propagation-nudge mark (from TerminalRef.pendingMemoryDelta).
-   * True when this terminal's owning session's WORKSPACE memory changed AFTER it spawned,
-   * so its frozen launch inject is stale. Drives the Agent Rail KNOWS "re-prime to pull"
-   * affordance. Rides along the `worksession:updated` snapshot. Cleared on re-prime /
-   * handoff / reopen. Undefined → not marked.
-   */
-  pendingMemoryDelta?: boolean
 }
 
 export interface WorkSession {
   id: string
   name: string
   status: "active" | "stopped"
-  summary: string
   terminals: Terminal[]
   /** WS-C — the workspace this session belongs to (stamped at create() time;
    *  undefined for untagged/legacy sessions → the "All" bucket). Rides along in
@@ -292,11 +283,10 @@ export function useSessions(
     }
   }, [activeSessionId, activeTerminalId])
 
-  // Kill a SPECIFIC session by id (the sidebar row ✕). CAPP-93 / U5: this no longer
-  // kills directly via window.confirm — it OPENS the KillSessionModal (Keep/trim/edit
-  // vs Delete-everything vs Cancel) by asking App to set `pendingKillId`. The modal
-  // owns the actual kill (window.api.killWorkSession / killWorkSessionWithPromote), so
-  // this is fire-and-forget (it merely raises UI). The signature stays `(id) => void`
+  // Kill a SPECIFIC session by id (the sidebar row ✕). This no longer kills directly
+  // via window.confirm — it OPENS the KillSessionModal (Delete vs Cancel) by asking App
+  // to set `pendingKillId`. The modal owns the actual kill (window.api.killWorkSession),
+  // so this is fire-and-forget (it merely raises UI). The signature stays `(id) => void`
   // so all callers (Ctrl+K, sidebar ✕, palette) are unaffected.
   const handleKillSessionById = useCallback((id: string) => {
     if (!id) return

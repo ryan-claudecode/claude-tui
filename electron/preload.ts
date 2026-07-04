@@ -44,11 +44,6 @@ const mainApi = {
     ipcRenderer.invoke("worksession:restore-conversation", folder, conversationId),
   reopenTerminal: (sessionId: string, terminalId: string) =>
     ipcRenderer.invoke("worksession:reopen-terminal", sessionId, terminalId),
-  // CAPP-101 (P1) — the propagation nudge re-prime: bracket-paste the get_session_context PULL
-  // prompt to a running terminal whose workspace memory changed since spawn, and clear its
-  // pending-delta mark. It PROMPTS the pull — it does NOT itself inject the finding.
-  reprimeTerminal: (sessionId: string, terminalId: string) =>
-    ipcRenderer.invoke("worksession:reprime", sessionId, terminalId),
   closeTerminal: (sessionId: string, terminalId: string) =>
     ipcRenderer.invoke("worksession:close-terminal", sessionId, terminalId),
   killWorkSession: (sessionId: string) => ipcRenderer.invoke("worksession:kill", sessionId),
@@ -57,29 +52,13 @@ const mainApi = {
   // (-> terminal:rename) despite its name. Returns whether the rename applied.
   renameWorkSession: (id: string, name: string) =>
     ipcRenderer.invoke("worksession:rename", id, name),
-  getWorkSessionContext: (sessionId: string) =>
-    ipcRenderer.invoke("worksession:context", sessionId),
-  // CAPP-86 — "The Lexicon": read-only cross-session recall. recall returns ranked
-  // hits for a query (scope defaults to the caller-session's workspace); recallSummary
-  // returns the cross-session count digest (+ most-recent ruled-out one-liner) for the
-  // Rail KNOWS section. Both are pure reads — they never mutate canonical session files.
-  recall: (query: string, scope?: "session" | "workspace" | "all", sessionId?: string) =>
-    ipcRenderer.invoke("worksession:recall", query, scope, sessionId),
-  recallSummary: (scope?: "session" | "workspace" | "all", sessionId?: string) =>
-    ipcRenderer.invoke("worksession:recall-summary", scope, sessionId),
   getSessionOverview: (sessionId: string) =>
     ipcRenderer.invoke("worksession:overview", sessionId),
-  // CAPP-106 / S1 (F1) — main-window parity for the two previously companion-ONLY
-  // PanelApi accessors. openSessionOverview fetches a session's overview and SHOWS it
-  // as a panel (recursive-by-design from the modal — RecallPanel's session-header click);
-  // promoteSessionToWorkspace promotes a session's findings into its OWNING workspace
-  // (resolved main-side from the bare sessionId — the SessionOverviewPanel "Push context
-  // to workspace" button). The parity GATE (src/lib/panelApiParity.test.ts) fails the
-  // build if either is missing from window.api.
+  // CAPP-106 / S1 (F1) — main-window parity for the companion-ONLY PanelApi accessor
+  // openSessionOverview: fetch a session's overview and SHOW it as a panel. The parity
+  // GATE (src/lib/panelApiParity.test.ts) fails the build if it's missing from window.api.
   openSessionOverview: (sessionId: string) =>
     ipcRenderer.invoke("worksession:open-overview", sessionId),
-  promoteSessionToWorkspace: (sessionId: string) =>
-    ipcRenderer.invoke("worksession:promote-to-workspace", sessionId),
   getSessionTimeline: (sessionId: string) =>
     ipcRenderer.invoke("worksession:timeline", sessionId),
   handoffTerminal: (sessionId: string, terminalId: string) =>
@@ -145,81 +124,11 @@ const mainApi = {
   onWorkspaceActiveChanged: (callback: (workspace: any | null) => void) =>
     ipcRenderer.on("workspace:active-changed", (_e, workspace) => callback(workspace)),
 
-  // CAPP-87 / U3 — workspace memory (the durable, workspace-level knowledge tier).
-  // A `null` workspaceId addresses the untagged "All" bucket. Every mutator triggers
-  // the main process's onMemoryChanged seam (invalidates recall + pushes
-  // `workspace:memory-changed`). getPromotableFindings + killWorkSessionWithPromote
-  // back the delete-time Keep flow (U5); the editor panel (U6) consumes the rest.
-  getWorkspaceMemory: (workspaceId: string | null) =>
-    ipcRenderer.invoke("workspace:get-memory", workspaceId),
-  setWorkspaceInstructions: (workspaceId: string | null, text: string) =>
-    ipcRenderer.invoke("workspace:set-instructions", workspaceId, text),
-  addWorkspaceFinding: (workspaceId: string | null, text: string, source: "user" | "agent") =>
-    ipcRenderer.invoke("workspace:add-finding", workspaceId, text, source),
-  editWorkspaceFinding: (workspaceId: string | null, findingId: string, text: string) =>
-    ipcRenderer.invoke("workspace:edit-finding", workspaceId, findingId, text),
-  deleteWorkspaceFinding: (workspaceId: string | null, findingId: string) =>
-    ipcRenderer.invoke("workspace:delete-finding", workspaceId, findingId),
-  // CAPP-97 — pin/unpin a finding (never evicted under the auto-load context cap).
-  setWorkspaceFindingPinned: (workspaceId: string | null, findingId: string, pinned: boolean) =>
-    ipcRenderer.invoke("workspace:set-pinned", workspaceId, findingId, pinned),
-  promoteWorkspaceFindings: (workspaceId: string | null, entries: any[]) =>
-    ipcRenderer.invoke("workspace:promote-findings", workspaceId, entries),
-  // CAPP-98 / I1 — the Context Inspector (READ-ONLY): enumerate the launch-time native
-  // context + our injected primer for a workspace, by precedence. A `null` workspaceId is
-  // the untagged "All" bucket. Consumed by the WorkspaceSwitcher "Context" open handler.
+  // CAPP-98 / I1 — the Context Inspector (READ-ONLY): enumerate the launch-time NATIVE
+  // context for a workspace, by precedence. A `null` workspaceId is the untagged "All"
+  // bucket. Consumed by the WorkspaceSwitcher "Context" open handler.
   inspectWorkspaceContext: (workspaceId: string | null) =>
     ipcRenderer.invoke("context:inspect", workspaceId),
-  // CAPP-99 / E1 — export accessors (also on the companion preload, where the export UI
-  // lives). STRICTLY one-directional (store → file): read state / trigger regen only — no
-  // file → store accessor exists. A `null` workspaceId is the untagged "All" bucket.
-  getExportState: (workspaceId: string | null) =>
-    ipcRenderer.invoke("export:get-state", workspaceId),
-  enableExport: (workspaceId: string | null, mode: "A" | "C", customPath?: string) =>
-    ipcRenderer.invoke("export:enable", workspaceId, mode, customPath),
-  disableExport: (workspaceId: string | null) =>
-    ipcRenderer.invoke("export:disable", workspaceId),
-  setUntaggedExportEnabled: (enabled: boolean) =>
-    ipcRenderer.invoke("export:set-untagged-enabled", enabled),
-  regenerateExport: (workspaceId: string | null) =>
-    ipcRenderer.invoke("export:regenerate", workspaceId),
-  // CAPP-100 / E2 — adoption: the reversible CLAUDE.local.md insert/Unwire (NON-MCP, user-driven
-  // only) + the read-only adoption probe. Appends/removes ONLY our delimited block; change-guarded;
-  // Unwire refuses when the user hand-edited inside the delimiters.
-  getAdoptionState: (workspaceId: string | null) =>
-    ipcRenderer.invoke("adoption:get-state", workspaceId),
-  wireImportBlock: (workspaceId: string | null) =>
-    ipcRenderer.invoke("adoption:wire", workspaceId),
-  unwireImportBlock: (workspaceId: string | null) =>
-    ipcRenderer.invoke("adoption:unwire", workspaceId),
-  setExportSelfWired: (workspaceId: string | null, selfWired: boolean) =>
-    ipcRenderer.invoke("adoption:set-self-wired", workspaceId, selfWired),
-  // The Keep modal's editable candidate list (the dying session's promotable notes).
-  getPromotableFindings: (sessionId: string) =>
-    ipcRenderer.invoke("worksession:promotable-findings", sessionId),
-  // Atomic promote-then-kill ("Keep & delete"): promotes the edited findings into the
-  // OWNING session's workspace FIRST, then kills the session (kill is skipped if
-  // promote throws). Distinct from `killWorkSession` (the "Delete everything" path).
-  killWorkSessionWithPromote: (sessionId: string, editedEntries: any[]) =>
-    ipcRenderer.invoke("worksession:kill-with-promote", sessionId, editedEntries),
-  // Memory-change push from main (payload = the changed workspaceId). The U6 editor
-  // panel live-refreshes on it. Per-instance unsubscribe (mirrors onStreamEvent) so a
-  // subscriber can tear down without a removeAllListeners clobbering siblings.
-  onWorkspaceMemoryChanged: (callback: (workspaceId: string) => void) => {
-    const handler = (_e: unknown, workspaceId: string) => callback(workspaceId)
-    ipcRenderer.on("workspace:memory-changed", handler)
-    return () => ipcRenderer.removeListener("workspace:memory-changed", handler)
-  },
-
-  // CAPP-95 / D1 — local-history net (the durable-brain data-loss recovery surface).
-  // `restore` takes a snapshot hash + an optional curated relPath (omit to restore the
-  // whole subset); `snapshot` takes an optional reason. The git work runs in the
-  // isolated ~/.claude-tui/.local-history repo only (never the project repo).
-  listLocalHistory: () => ipcRenderer.invoke("local-history:list"),
-  restoreLocalHistory: (hash: string, relPath?: string) =>
-    ipcRenderer.invoke("local-history:restore", hash, relPath),
-  snapshotLocalHistory: (reason?: string) => ipcRenderer.invoke("local-history:snapshot", reason),
-  revealLocalHistory: () => ipcRenderer.invoke("local-history:reveal"),
 
   // Session rename
   renameSession: (id: string, newName: string) => ipcRenderer.invoke("terminal:rename", id, newName),

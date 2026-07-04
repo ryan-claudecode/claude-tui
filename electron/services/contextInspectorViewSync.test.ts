@@ -19,8 +19,7 @@ import type {
  * pin a drift (a renamed/added/narrowed field on either side) would compile clean and
  * silently ship a wrong-shaped result into the panel. This test lives in the electron
  * project (which CAN import both); the bidirectional assignments fail `tsc -b` the moment
- * the shapes diverge. Type-only — no `node:fs` is dragged into the renderer bundle. Mirrors
- * the `workspaceMemoryViewSync.test.ts` pin.
+ * the shapes diverge. Type-only — no `node:fs` is dragged into the renderer bundle.
  *
  * NOTE: the SERVICE `tier` is a literal-union `ContextTier`, the VIEW `tier` is a widened
  * `number`. Service→View is therefore the meaningful direction (a view that's MISSING a
@@ -48,7 +47,6 @@ describe("ContextInspector view/service structural parity (CAPP-98)", () => {
     const result: ServiceResult = {
       folder: "/x",
       gitRoot: "/x",
-      adopted: false,
       sources: [source],
       effective: undefined,
     }
@@ -61,6 +59,6 @@ describe("ContextInspector view/service structural parity (CAPP-98)", () => {
     expect(asView.label).toBe("Project memory")
     expect(back.exists).toBe(true)
     expect(asViewResult.sources).toHaveLength(1)
-    expect(backResult.adopted).toBe(false)
+    expect(backResult.folder).toBe("/x")
   })
 })

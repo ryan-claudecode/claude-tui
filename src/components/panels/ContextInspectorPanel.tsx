@@ -11,10 +11,9 @@ type ContextInspectorApi = Pick<PanelApi, "inspectWorkspaceContext">
 /**
  * CAPP-98 / I1 — the Context Inspector panel (READ-ONLY).
  *
- * Renders, by precedence (top = highest), the complete launch-time native context a fresh
- * Claude session eats in a workspace PLUS our injected primer — modeled on
- * `SessionOverviewPanel` (read-only, collapsible sections), NOT the editable
- * `WorkspaceMemoryPanel`. This window NEVER mutates anything: the only call it makes is the
+ * Renders, by precedence (top = highest), the complete launch-time NATIVE context a fresh
+ * Claude session eats in a workspace — modeled on `SessionOverviewPanel` (read-only,
+ * collapsible sections). This window NEVER mutates anything: the only call it makes is the
  * read-only `inspectWorkspaceContext` (its Refresh button).
  *
  * The data arrives as STATIC seed props (fetched main-side at open time and passed via
@@ -143,12 +142,6 @@ export default function ContextInspectorPanel(props: ContextInspectorProps) {
         <div className="ctx-meta-row">
           <span className="ctx-meta-key">Git root</span>
           <span className="ctx-meta-val">{result.gitRoot ?? "(not in a git repo)"}</span>
-        </div>
-        <div className="ctx-meta-row">
-          <span className="ctx-meta-key">Adopted</span>
-          <span className="ctx-meta-val">
-            {result.adopted ? "yes (via your @import)" : "no"}
-          </span>
         </div>
       </div>
 

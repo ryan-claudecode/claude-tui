@@ -20,12 +20,12 @@ const tid = "term-resume-e2e"
 await call(admin, "register_terminal", { session_id: sid, terminal_id: tid, name: "e2e", cwd: "/repo" })
 
 const term = await connect(`${base}?sid=${encodeURIComponent(sid)}&tid=${encodeURIComponent(tid)}`)
-await call(term, "session_note", { text: "root cause is the boot race" })
-await call(term, "set_session_summary", { summary: "Fixing the boot race; root cause found." })
+await call(term, "set_terminal_activity", { activity: "fixing the boot race" })
 
-const ctx = await call(term, "get_session_context")
-console.log("context primer contains summary:", ctx.includes("boot race"))
-console.log("context primer contains finding:", ctx.includes("root cause"))
+const status = JSON.parse(await call(term, "work_session_status"))
+const ref = status.terminals.find((t) => t.id === tid)
+console.log("resume identity bound:", ref?.id === tid)
+console.log("terminal activity recorded:", ref?.activity)
 
 await admin.close()
 await term.close()

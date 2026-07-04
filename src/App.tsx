@@ -12,7 +12,6 @@ import type {
 import { MODEL_ALIASES, resolveModelOptions } from "../electron/services/streamProtocol"
 // CAPP-120 (STT-1) — dictation status/progress/transcription contract (zero-dep types).
 import type { SttStatusSnapshot, SttProgress, SttTranscription } from "../electron/stt/protocol"
-import type { PromoteEntry } from "./lib/killSessionPromote"
 import Sidebar from "./components/Sidebar"
 import TabBar from "./components/TabBar"
 import TerminalPane from "./components/TerminalPane"
@@ -50,7 +49,6 @@ import { useSplitView } from "./hooks/useSplitView"
 import { useOverlays } from "./hooks/useOverlays"
 import { useTheme } from "./hooks/useTheme"
 import { useAgentRail } from "./hooks/useAgentRail"
-import { useAgentRailKnows } from "./hooks/useAgentRailKnows"
 import { useAgentCost } from "./hooks/useAgentCost"
 import { usePanels, type PanelState } from "./hooks/usePanels"
 
@@ -117,68 +115,14 @@ declare global {
         conversationId: string,
       ) => Promise<{ session: any; terminalId: string } | undefined>
       reopenTerminal: (sessionId: string, terminalId: string) => Promise<{ terminalId: string } | undefined>
-      // CAPP-101 (P1) — re-prime a running terminal whose workspace memory changed since
-      // spawn: prompts it to pull the get_session_context delta + clears the pending mark.
-      reprimeTerminal: (sessionId: string, terminalId: string) => Promise<boolean>
       closeTerminal: (sessionId: string, terminalId: string) => Promise<void>
       killWorkSession: (sessionId: string) => Promise<void>
-      // CAPP-93 / U5 — delete-time Keep flow. getPromotableFindings returns the dying
-      // session's confirmed notes (active + ruled-out) mapped to PromoteEntry[] (the
-      // editable candidate list). killWorkSessionWithPromote promotes the edited
-      // findings into the OWNING session's workspace FIRST, then kills (atomic,
-      // handler-side; kill is skipped if promote throws). U3 added the preload
-      // accessors; these are their Window.api types.
-      getPromotableFindings: (sessionId: string) => Promise<PromoteEntry[]>
-      killWorkSessionWithPromote: (
-        sessionId: string,
-        editedEntries: PromoteEntry[],
-      ) => Promise<void>
-      // CAPP-94 / U6 — workspace-memory editor accessors (the main-window entry point
-      // opens the companion panel via showPanel; the panel itself uses companionApi).
-      // A `null` workspaceId addresses the untagged "All" bucket. `getWorkspaceMemory`
-      // is consumed by the WorkspaceSwitcher "Workspace memory" open handler.
-      getWorkspaceMemory: (
-        workspaceId: string | null,
-      ) => Promise<{
-        workspaceId: string
-        instructions: string
-        findings: Array<Record<string, unknown>>
-        createdAt: number
-        updatedAt: number
-      }>
-      setWorkspaceInstructions: (workspaceId: string | null, text: string) => Promise<unknown>
-      addWorkspaceFinding: (
-        workspaceId: string | null,
-        text: string,
-        source: "user" | "agent",
-      ) => Promise<unknown>
-      editWorkspaceFinding: (
-        workspaceId: string | null,
-        findingId: string,
-        text: string,
-      ) => Promise<boolean>
-      deleteWorkspaceFinding: (workspaceId: string | null, findingId: string) => Promise<boolean>
-      // CAPP-97 — pin/unpin a finding (never evicted under the auto-load context cap).
-      setWorkspaceFindingPinned: (
-        workspaceId: string | null,
-        findingId: string,
-        pinned: boolean,
-      ) => Promise<boolean>
-      promoteWorkspaceFindings: (
-        workspaceId: string | null,
-        entries: PromoteEntry[],
-      ) => Promise<unknown>
-      onWorkspaceMemoryChanged: (callback: (workspaceId: string) => void) => () => void
       // CAPP-98 / I1 — the READ-ONLY Context Inspector: enumerate the launch-time native
-      // context + our injected primer for a workspace (null = untagged "All"). Consumed by
-      // the WorkspaceSwitcher "Context" button. Pure read — no native-file write path.
+      // context for a workspace (null = untagged "All"). Consumed by the WorkspaceSwitcher
+      // "Context" button. Pure read — no native-file write path.
       inspectWorkspaceContext: (workspaceId: string | null) => Promise<any>
       // CAPP-82 — rename the durable work-session container (the sidebar row).
       renameWorkSession: (id: string, name: string) => Promise<boolean>
-      getWorkSessionContext: (sessionId: string) => Promise<string | undefined>
-      // CAPP-86 — "The Lexicon": read-only cross-session recall + count digest.
-      recall: (query: string, scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any[]>
-      recallSummary: (scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<{ sessions: number; findings: number; ruledOut: number; workspaceMemory: { findings: number; ruledOut: number }; recentRuledOut?: { text: string; correction?: string; sessionName: string; createdAt: number } }>
       onWorkSessionUpdated: (callback: (session: any) => void) => void
       onWorkSessionRemoved: (callback: (id: string) => void) => void
       // Workspaces / config
@@ -281,11 +225,6 @@ declare global {
       // CAPP-113 — push: the config models block changed (custom model persisted);
       // useSessions folds it into config state so the pickers refresh live.
       onConfigModelsChanged: (callback: (models: any) => void) => void
-      // CAPP-95 / D1 — local-history net (durable-brain data-loss recovery).
-      listLocalHistory: () => Promise<Array<{ hash: string; date: string; message: string }>>
-      restoreLocalHistory: (hash: string, relPath?: string) => Promise<{ restored: string[] }>
-      snapshotLocalHistory: (reason?: string) => Promise<string | null>
-      revealLocalHistory: () => Promise<{ ok: boolean }>
       // Agent Rail (v1) — persist the rail's open/collapsed pref (GLOBAL).
       setAgentRailOpen: (open: boolean) => Promise<void>
       // Window controls (frameless)
@@ -709,100 +648,8 @@ export default function App() {
     setModalActiveId((cur) => (cur === id ? null : cur))
   }, [])
 
-  // Agent Rail KNOWS (Phase 3 — CAPP-84 × CAPP-86 v1.5) — the two context digests
-  // (this-session overview + cross-session recall) for the rail's KNOWS section. A
-  // pure lens over the EXISTING getSessionOverview + recallSummary accessors; no new
-  // backend. It refreshes LIVE off the SAME `worksession:updated` push the rest of
-  // the app consumes (useSessions owns that listener and replaces `activeSession` on
-  // each push): rather than register a duplicate listener, we derive a `refreshKey`
-  // from the live session's note/summary signature so the digest re-fetches whenever
-  // a finding/summary lands — AND when the active session/workspace changes. The
-  // `notes`/`summary` ride the live payload (the service spreads the full WorkSession)
-  // even though the renderer's typed WorkSession declares only a subset.
-  const knowsRefreshKey = useMemo(() => {
-    const s = activeSession as
-      | { id?: string; summary?: string; notes?: Array<{ id: string; status: string }> }
-      | null
-    if (!s?.id) return ""
-    // Active-session signature: a per-note id:status fold + a CONTENT signature of the
-    // summary (not just length, so a same-length edit "cat"→"dog" still repaints).
-    const noteSig = (s.notes ?? []).map((n) => `${n.id}:${n.status}`).join(",")
-    const sum = s.summary ?? ""
-    const sumSig = `${sum.length}:${sum.slice(0, 12)}:${sum.slice(-12)}`
-    // Workspace-wide signature so a finding/summary landing in a SIBLING session
-    // refreshes the cross-session "Across sessions" digest (which aggregates the whole
-    // workspace), not only the active session's own changes. Cheap fold over a handful
-    // of sessions; the refetch is gated on the string VALUE, so unrelated pushes (e.g.
-    // terminal activity) that don't change notes/summary won't re-fetch.
-    const wsSig = (sessions as Array<{ id: string; workspaceId?: string; summary?: string; notes?: unknown[] }>)
-      .filter((x) => (x.workspaceId ?? null) === (activeWorkspaceId ?? null))
-      .map((x) => `${x.id}:${x.summary?.length ?? 0}:${x.notes?.length ?? 0}`)
-      .join(",")
-    return `${s.id}|${sumSig}|${noteSig}|${wsSig}`
-  }, [activeSession, sessions, activeWorkspaceId])
-
-  const railKnows = useAgentRailKnows({
-    sessionId: activeSessionId,
-    workspaceId: activeWorkspaceId ?? undefined,
-    refreshKey: knowsRefreshKey,
-  })
-
-  // KNOWS "Open context →" — reuse the EXISTING openOverview path (the ⊕ sidebar
-  // button → SessionOverview companion panel) for the active session.
-  const handleOpenRailContext = useCallback(() => {
-    if (activeSessionId) void openOverview(activeSessionId).catch(() => {})
-  }, [activeSessionId, openOverview])
-
-  // KNOWS "Open Recall →" — reuse the EXISTING `show_panel` "recall" type (CAPP-86
-  // v1 RecallPanel), scoped to the active session's workspace (the panel's read-side
-  // default). No new panel type, no new backend.
-  const handleOpenRailRecall = useCallback(() => {
-    void window.api
-      .showPanel("recall", { scope: "workspace", sessionId: activeSessionId ?? undefined }, "right")
-      .catch((err) => toast("error", `Couldn't open Recall: ${errMsg(err)}`))
-  }, [activeSessionId])
-
-  // CAPP-101 (P1) — the propagation-nudge re-prime. The active terminal's owning session's
-  // WORKSPACE memory changed since spawn, so its frozen launch inject is stale. Re-prime
-  // PROMPTS the running agent to pull the get_session_context delta (it does NOT itself inject
-  // the finding). Clears the pending mark backend-side (rides the worksession:updated snapshot).
-  const handleReprime = useCallback(() => {
-    if (!activeSessionId || !activeTerminalId) return
-    void window.api
-      .reprimeTerminal(activeSessionId, activeTerminalId)
-      .then((ok) => {
-        if (ok) toast("info", "Asked the agent to pull the latest workspace memory.")
-      })
-      .catch((err) => toast("error", `Couldn't re-prime: ${errMsg(err)}`))
-  }, [activeSessionId, activeTerminalId])
-
-  // CAPP-94 / U6 — open the workspace-memory editor for the ACTIVE workspace (or the
-  // untagged "All" bucket when none is selected). Fetch the
-  // record main-side, then show the companion panel pinned to that workspaceId so every
-  // edit targets it even if the active workspace changes while the editor is open. The
-  // record fields ride in as panel props (seed); the panel re-fetches live.
-  const handleOpenWorkspaceMemory = useCallback(() => {
-    void (async () => {
-      try {
-        const rec = await window.api.getWorkspaceMemory(activeWorkspaceId ?? null)
-        await window.api.showPanel(
-          "workspace-memory",
-          {
-            workspaceId: activeWorkspaceId ?? null,
-            workspaceName: activeWorkspace?.name,
-            instructions: rec?.instructions ?? "",
-            findings: rec?.findings ?? [],
-          },
-          "right",
-        )
-      } catch (err) {
-        toast("error", `Couldn't open workspace memory: ${errMsg(err)}`)
-      }
-    })()
-  }, [activeWorkspaceId, activeWorkspace])
-
   // CAPP-98 / I1 — open the READ-ONLY Context Inspector for the ACTIVE workspace (or the
-  // untagged "All" bucket when none is selected). Mirrors handleOpenWorkspaceMemory: fetch
+  // untagged "All" bucket when none is selected). Fetch
   // the inspection main-side (capturing the workspaceId at click time), then show the
   // companion panel seeded with the result + the captured workspaceId (so the panel's
   // Refresh re-inspects THAT workspace even if the active selection changes meanwhile).
@@ -994,42 +841,6 @@ export default function App() {
         run: async () => {
           await window.api.setRenderingEngine("xterm")
           toast("success", "New terminals will use the raw terminal (xterm).")
-        },
-      },
-      // CAPP-95 / D1 — the local-history net (durable-brain data-loss recovery). A
-      // separate local git repo snapshots workspace memory + sessions so a bad
-      // edit/delete is recoverable. Minimal surface: reveal, snapshot-now, and a
-      // palette-driven restore of the latest snapshot (a polished browser is deferred).
-      {
-        id: "local-history-reveal",
-        label: "Local history: reveal backup folder",
-        keywords: "backup recover snapshot git history workspace memory data loss reveal explorer",
-        run: () => { void window.api.revealLocalHistory() },
-      },
-      {
-        id: "local-history-snapshot",
-        label: "Local history: save a snapshot now",
-        keywords: "backup recover snapshot git history workspace memory commit save",
-        run: async () => {
-          const hash = await window.api.snapshotLocalHistory("manual snapshot")
-          toast(hash ? "success" : "info", hash ? "Saved a workspace-memory snapshot." : "No changes since the last snapshot.")
-        },
-      },
-      {
-        id: "local-history-restore",
-        label: "Local history: restore latest snapshot…",
-        keywords: "backup recover snapshot git history workspace memory restore undo revert data loss",
-        run: async () => {
-          const snaps = await window.api.listLocalHistory()
-          if (!snaps.length) { toast("info", "No snapshots yet."); return }
-          const latest = snaps[0]
-          const res = await window.api.restoreLocalHistory(latest.hash)
-          toast(
-            res.restored.length ? "success" : "warning",
-            res.restored.length
-              ? `Restored ${res.restored.length} file(s) from ${latest.date}.`
-              : "Nothing was restored.",
-          )
         },
       },
     ]
@@ -1295,7 +1106,6 @@ export default function App() {
         onDeleteWorkspace={(id) => deleteWorkspace_(id)}
         onSetWorkspaceDir={(id, dir) => setWorkspaceDir_(id, dir)}
         onRestoreConversation={() => setRestoreConvoOpen(true)}
-        onOpenWorkspaceMemory={handleOpenWorkspaceMemory}
         onOpenContextInspector={handleOpenContextInspector}
       />
       <div className="main-area">
@@ -1412,11 +1222,6 @@ export default function App() {
         busy={railBusy}
         activity={activeTerminalForRail?.activity}
         blocks={railBlocks}
-        knows={railKnows}
-        onOpenContext={activeSessionId ? handleOpenRailContext : undefined}
-        onOpenRecall={handleOpenRailRecall}
-        memoryUpdated={activeTerminalForRail?.pendingMemoryDelta === true}
-        onReprime={activeSessionId && activeTerminalId ? handleReprime : undefined}
       />
     </div>
   )

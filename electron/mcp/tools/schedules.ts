@@ -11,7 +11,7 @@ import type { TerminalIdentity } from "./shared"
  * runs headless on this machine at the set times (with the local filesystem, git,
  * gh, and the user's auth — the whole point of on-device vs cloud scheduling).
  *
- * IDENTITY-BINDING (matches the workspace-memory tools): `workspace_id` defaults to
+ * IDENTITY-BINDING (matches inspect_workspace_context): `workspace_id` defaults to
  * the CALLER's OWNING session's workspace (`workSessions.get(identity.sessionId)?.
  * workspaceId`) — NEVER the global active selection. An explicit `workspace_id` is
  * validated against the registry and an unknown id is rejected. Undefined workspace
