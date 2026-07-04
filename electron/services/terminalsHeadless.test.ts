@@ -19,7 +19,6 @@ import {
 import { AttentionService, type AttentionDeps } from "./attention"
 import type { PanelService } from "./panels"
 import type { NotificationService } from "./notifications"
-import type { MissionService } from "./mission"
 import { HEADLESS_FLAGS, DEFAULT_MODEL, EFFORT_LEVELS, ULTRACODE_SETTINGS, modelSupportsXhigh, PERMISSION_PROMPT_TOOL, userMessage, type StreamEvent } from "./streamProtocol"
 import * as fx from "./streamEvents.fixtures"
 
@@ -499,7 +498,6 @@ describe("BO-5 activity line — the sidebar fallback parses the projected ● t
 function makeAttention(svc: TerminalService) {
   const noop = { onEvent: () => () => {} }
   const notif = { onNotification: () => () => {} }
-  const missions = { onEvent: () => () => {} }
   const queue: AttentionEntrySnap[][] = []
   const deps: AttentionDeps = {
     sendToRenderer: (channel, ...args) => {
@@ -514,7 +512,6 @@ function makeAttention(svc: TerminalService) {
     noop as unknown as PanelService,
     svc,
     notif as unknown as NotificationService,
-    missions as unknown as MissionService,
     deps,
   )
   return attn
@@ -569,7 +566,7 @@ describe("BO-5 input routing — write()/waitForIdle reach the stdin sink, not a
   it("write() to a structured terminal routes a clean user message to stdin", () => {
     const { svc, spawned } = makeHeadlessService()
     const info = svc.createHeadless("t", process.cwd())
-    // legacy write() callers (mission dispatch, panel input) pass "text" + a submit CR
+    // legacy write() callers (panel input) pass "text" + a submit CR
     // (and sometimes bracketed-paste). The structured route strips those PTY idioms.
     svc.write(info.id, "\x1b[200~run the tests\x1b[201~\r")
     expect(spawned[0].written).toHaveLength(1)

@@ -37,8 +37,8 @@ import {
  *     hand-authored file) and the change-guard (only-rewrite-if-changed) — neither feeds the store.
  *   • GITIGNORE-FIRST for Mode A: the `/.claude-tui/` entry is written to `<F>/.gitignore` BEFORE
  *     the export file lands. If the gitignore write can't happen, we DO NOT export (never leave
- *     the file untracked — an untracked file gets grabbed by `git add -A` and collides with
- *     worktree workers). The gitignore edit is CRLF-aware, idempotent, and preserves all content.
+ *     the file untracked — an untracked file gets grabbed by a `git add -A`). The gitignore
+ *     edit is CRLF-aware, idempotent, and preserves all content.
  *   • Atomic writes: temp-file-then-rename, with a Windows retry-on-EPERM backoff. Only rewrite
  *     when the body actually changed. The regen listener CATCHES ITS OWN ERRORS (a bad export
  *     must never crash the memory-mutation path).
@@ -311,7 +311,7 @@ export class ExportService {
           ok: false,
           error:
             "Could not write the `/.claude-tui/` entry to .gitignore, so the export was NOT created " +
-            "(an untracked export file would be grabbed by `git add -A` and collide with worktree workers).",
+            "(an untracked export file would be grabbed by a `git add -A`).",
         }
       }
 

@@ -88,7 +88,7 @@ export function registerWorkspaceTools(
 
   server.tool(
     "get_active_workspace",
-    "Get the currently active ClaudeTUI workspace (the one sessions/missions are scoped to by default), or null when no workspace is active (the 'All' bucket). Returns the public workspace projection.",
+    "Get the currently active ClaudeTUI workspace (the one sessions are scoped to by default), or null when no workspace is active (the 'All' bucket). Returns the public workspace projection.",
     {},
     async () => {
       return json(workspaces.getActivePublic())
@@ -167,7 +167,7 @@ export function registerWorkspaceTools(
 
   server.tool(
     "set_active_workspace",
-    "Set the active ClaudeTUI workspace by its registry id, or clear the selection (pass null to fall back to the 'All' bucket). SELECTION-ONLY: this marks the active workspace so sessions/missions scope to it — it does NOT open editors or spawn sessions (use launch_workspace for that). Returns whether the selection was applied (false for an unknown id).",
+    "Set the active ClaudeTUI workspace by its registry id, or clear the selection (pass null to fall back to the 'All' bucket). SELECTION-ONLY: this marks the active workspace so sessions scope to it — it does NOT open editors or spawn sessions (use launch_workspace for that). Returns whether the selection was applied (false for an unknown id).",
     {
       id: z
         .string()

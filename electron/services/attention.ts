@@ -1,7 +1,6 @@
 import type { PanelService, PanelEvent } from "./panels"
 import type { TerminalService, TerminalEvent } from "./terminals"
 import type { NotificationService, NotificationState } from "./notifications"
-import type { MissionService, MissionServiceEvent, MissionStatus, MissionTask } from "./mission"
 
 /**
  * One thing that wants the user's attention. Ordered tier-ascending then
@@ -12,37 +11,15 @@ export interface AttentionEntry {
    *  on their panel id instead, e.g. "blocked:panel-7". */
   id: string
   tier: 1 | 2 | 3
-  kind: "blocked" | "asked" | "error" | "finished" | "mission"
+  kind: "blocked" | "asked" | "error" | "finished"
   /** Owning work-session (may be empty for an unattributed form). */
   sessionId: string
   terminalId?: string
-  /** Set on mission entries (keyed `mission:<id>`, session-less). Lets the
-   *  renderer route the jump to the dashboard panel instead of a terminal. */
-  missionId?: string
-  /** Set on worktree-review entries (keyed `review:<missionId>:<taskId>`). Lets
-   *  WW-2b route the jump to the worktree-review panel for that task. */
-  taskId?: string
   /** Display reason: "form waiting", "asked you", an error excerpt, etc. */
   reason: string
   /** Epoch ms the entry first appeared; wait time derives from this. Preserved
    *  across higher-tier upgrades so the wait clock stays honest. */
   since: number
-}
-
-/**
- * Tier of each kind. For the fixed-tier kinds this is authoritative and each
- * entry's `tier` field mirrors it. `mission` is the exception — a mission entry
- * carries tier 2 (paused/blocked) OR 3 (done) depending on the transition, so
- * the replacement policy compares each entry's own `tier` field (which always
- * equals the value here for fixed-tier kinds) rather than re-deriving from kind.
- * The `2` below is just the floor for a mission entry.
- */
-const KIND_TIER: Record<AttentionEntry["kind"], 1 | 2 | 3> = {
-  blocked: 1,
-  asked: 2,
-  error: 2,
-  finished: 3,
-  mission: 2,
 }
 
 /**
@@ -94,10 +71,6 @@ export class AttentionService {
   /** Map an open form's panel id → the blocked entry it created, so a resolve
    *  event clears exactly that entry. */
   private blockedByPanel = new Map<string, string>()
-  /** Last status seen per mission. Drives the transition detection: the FIRST
-   *  sight of any mission (including every mission loaded at app start) seeds
-   *  this SILENTLY — only a later status change enqueues. */
-  private missionStatus = new Map<string, MissionStatus>()
   private deps: AttentionDeps
   private now: () => number
 
@@ -105,7 +78,6 @@ export class AttentionService {
     panels: PanelService,
     terminals: TerminalService,
     notifications: NotificationService,
-    missions: MissionService,
     deps: AttentionDeps,
     opts: { now?: () => number } = {},
   ) {
@@ -115,7 +87,6 @@ export class AttentionService {
     panels.onEvent((e) => this.onPanelEvent(e))
     terminals.onEvent((e) => this.onTerminalEvent(e))
     notifications.onNotification((n) => this.onNotification(n))
-    missions.onEvent((e) => this.onMissionEvent(e))
   }
 
   // ---- Public API ---------------------------------------------------------
@@ -151,15 +122,6 @@ export class AttentionService {
       }
     }
     if (changed) this.publish()
-  }
-
-  /**
-   * The mission dashboard was opened for `missionId` — clear its tier-2/3 entry
-   * (the mission analogue of `seen`). Mission entries are session-less and keyed
-   * `mission:<id>`, so this targets that key directly.
-   */
-  seenMission(missionId: string): void {
-    if (this.entries.delete(`mission:${missionId}`)) this.publish()
   }
 
   /**
@@ -290,130 +252,6 @@ export class AttentionService {
     this.publish()
   }
 
-  /**
-   * Mission status changes feed the queue, but only TRANSITIONS observed live —
-   * never the state a mission was already in. The first `updated` for any mission
-   * (including every mission loaded at app start, whose first event arrives once
-   * the supervisor tick persists it, or whose status we record on first sight
-   * here) seeds the tracker SILENTLY: no enqueue for state that predates this app
-   * session. Stale "finished 3 days ago" noise on every launch would be worse
-   * than missing old news (spec — Error handling).
-   *
-   * Transition matrix (tier-2/3 only — checkpoint forms cover tier-1 already):
-   *   → paused  : tier 2  "Mission paused — waiting"
-   *   → blocked : tier 2  "Mission blocked — tasks failed"
-   *   → done    : tier 3  "Mission finished"
-   *   → running : clears any existing entry (a resume).
-   * Mission entries are tier-2/3, so they NEVER hit `fireTier1` — no OS
-   * notification, per existing policy.
-   */
-  private onMissionEvent(e: MissionServiceEvent): void {
-    if (e.type === "removed") {
-      // The durable delete path now EXISTS (MissionService.deleteMission, fired by
-      // the sidebar ✕). This is the live, correct handler for it: clear the
-      // mission's status entry, drop any review entries for its tasks, and forget
-      // its status tracker so the queue holds nothing for a deleted mission.
-      let changed = this.entries.delete(`mission:${e.id}`)
-      // Also drop any review entries for that mission's tasks.
-      for (const [id, entry] of this.entries) {
-        if (entry.kind === "mission" && entry.taskId && entry.missionId === e.id) {
-          this.entries.delete(id)
-          changed = true
-        }
-      }
-      if (changed) this.publish()
-      this.missionStatus.delete(e.id)
-      return
-    }
-    const m = e.mission
-    // A status TRANSITION may enqueue/clear a mission-status entry. Separately —
-    // and on EVERY mission `updated`, transition or not — reconcile the
-    // worktree-review entries against the mission's current awaiting-review tasks.
-    // A task can flip to awaiting-review while the mission stays `running`, so the
-    // review signal can't ride the status path. Both publish at most once.
-    const statusChanged = this.handleMissionStatus(m)
-    const reviewChanged = this.reconcileReviewEntries(m)
-    if (statusChanged || reviewChanged) this.publish()
-  }
-
-  /**
-   * Mission-status transition handling. Mutates `this.entries`; returns whether
-   * a change was made (the caller publishes once). First sight seeds silently;
-   * a no-op persist (same status) does nothing.
-   */
-  private handleMissionStatus(m: { id: string; status: MissionStatus }): boolean {
-    const prev = this.missionStatus.get(m.id)
-    this.missionStatus.set(m.id, m.status)
-    // First sight: seed silently. No prior status means we can't know whether
-    // this is a fresh transition or pre-existing state — assume the latter.
-    if (prev === undefined) return false
-    // Not a transition (a persist that didn't change status — e.g. a logEvent, a
-    // tick re-save, or a task flipping to awaiting-review): nothing to enqueue here.
-    if (prev === m.status) return false
-
-    const id = `mission:${m.id}`
-    if (m.status === "running") {
-      // Resumed — clear any lingering paused/blocked/done entry for this mission.
-      return this.entries.delete(id)
-    }
-    if (m.status === "paused") {
-      this.upsert({ id, tier: 2, kind: "mission", sessionId: "", missionId: m.id, reason: "Mission paused — waiting", since: this.now() })
-      return true
-    } else if (m.status === "blocked") {
-      this.upsert({ id, tier: 2, kind: "mission", sessionId: "", missionId: m.id, reason: "Mission blocked — tasks failed", since: this.now() })
-      return true
-    } else if (m.status === "done") {
-      this.upsert({ id, tier: 3, kind: "mission", sessionId: "", missionId: m.id, reason: "Mission finished", since: this.now() })
-      return true
-    }
-    // Other statuses (planning, stopped) carry no entry.
-    return false
-  }
-
-  /**
-   * Reconcile this mission's worktree-review entries against its CURRENT set of
-   * awaiting-review tasks — the pure-subscriber review signal (WW-2). For each
-   * task in `awaiting-review`, ensure a tier-1 `review:<missionId>:<taskId>`
-   * entry exists; for each existing review entry whose task is no longer
-   * awaiting-review (approved/rejected/gone), drop it. MissionService never calls
-   * AttentionService — this derives everything from the mission snapshot it
-   * already publishes. Returns whether anything changed.
-   */
-  private reconcileReviewEntries(m: { id: string; tasks?: MissionTask[] }): boolean {
-    // The mission snapshot always carries its full task list (it serializes to
-    // disk). Guard `tasks` defensively for minimal test stubs.
-    const tasks = m.tasks ?? []
-    const wanted = new Map<string, MissionTask>()
-    for (const t of tasks) {
-      if (t.status === "awaiting-review") wanted.set(`review:${m.id}:${t.id}`, t)
-    }
-    let changed = false
-    // Drop review entries for this mission whose task is no longer awaiting-review.
-    for (const [id, entry] of this.entries) {
-      if (entry.kind !== "mission" || !entry.taskId || entry.missionId !== m.id) continue
-      if (!wanted.has(id)) {
-        this.entries.delete(id)
-        changed = true
-      }
-    }
-    // Add a review entry for each awaiting-review task that doesn't have one yet.
-    for (const [id, t] of wanted) {
-      if (this.entries.has(id)) continue
-      this.entries.set(id, {
-        id,
-        tier: 1,
-        kind: "mission",
-        sessionId: "",
-        missionId: m.id,
-        taskId: t.id,
-        reason: `Review: ${excerpt(t.title)}`,
-        since: this.now(),
-      })
-      changed = true
-    }
-    return changed
-  }
-
   // ---- Policy + plumbing --------------------------------------------------
 
   /**
@@ -437,9 +275,7 @@ export class AttentionService {
       return
     }
 
-    // Compare each entry's own `tier` (not KIND_TIER[kind]) so a `mission` entry,
-    // whose tier varies with the transition (paused/blocked → 2, done → 3), is
-    // ranked correctly. For fixed-tier kinds these are identical by construction.
+    // Compare each entry's own `tier` field so ranking is correct.
     const nextTier = next.tier
     const existingTier = existing.tier
 

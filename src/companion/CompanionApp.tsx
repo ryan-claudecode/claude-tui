@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react"
 import PanelContent, { tabLabel } from "../components/panels/PanelContent"
-import { type ReviewActionResult } from "../components/panels/WorktreeReviewPanel"
 import { type InspectResultView } from "../components/panels/ContextInspectorPanel"
 import type { PanelApi } from "../lib/panelApi"
 import type {
@@ -26,16 +25,12 @@ declare global {
       onPanelHideAll: (cb: () => void) => void
       submitForm: (id: string, data: Record<string, any>) => void
       sendToSession: (text: string) => void
-      missionStop: (id: string) => void
-      missionPause: (id: string) => void
       // CAPP-115 (SCHED-2) — schedule detail-panel controls from a popped-out companion.
       scheduleRunNow: (id: string) => Promise<boolean>
       scheduleSetEnabled: (id: string, enabled: boolean) => Promise<any>
       scheduleDelete: (id: string) => Promise<boolean>
       requestScheduleEdit: (id: string) => Promise<void>
       hidePanel: (panelId: string) => Promise<boolean>
-      approveWorktreeTask: (missionId: string, taskId: string) => Promise<ReviewActionResult | null>
-      rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) => Promise<ReviewActionResult | null>
       // CAPP-86 — read-only cross-session recall + click-to-open SessionOverview.
       recall: (query: string, scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any[]>
       recallSummary: (scope?: "session" | "workspace" | "all", sessionId?: string) => Promise<any>
@@ -180,8 +175,6 @@ export default function CompanionApp() {
     const c = window.companionApi
     return {
       sendToSession: (text) => { c.sendToSession(text); return true },
-      missionStop: (id) => c.missionStop(id),
-      missionPause: (id) => c.missionPause(id),
       // CAPP-115 — schedule detail-panel controls from a popped-out companion. Edit
       // routes through requestScheduleEdit → the MAIN window's ScheduleForm overlay.
       scheduleRunNow: (id) => { void c.scheduleRunNow(id) },
@@ -191,8 +184,6 @@ export default function CompanionApp() {
       // PanelService.hide routes panel:hide back to THIS window too (onPanelHide
       // drops it locally and closes the window when empty) — no local-only close.
       hidePanel: (panelId) => { void c.hidePanel(panelId) },
-      approveWorktreeTask: (m, t) => c.approveWorktreeTask(m, t),
-      rejectWorktreeTask: (m, t, reason) => c.rejectWorktreeTask(m, t, reason),
       recall: (query, scope, sessionId) => c.recall(query, scope, sessionId),
       openSessionOverview: (sessionId) => c.openSessionOverview(sessionId),
       promoteSessionToWorkspace: (sessionId) => c.promoteSessionToWorkspace(sessionId),

@@ -16,7 +16,7 @@ interface Props {
 
 /**
  * WS-D/H — the create-workspace modal in the MAIN window (not the companion).
- * Mirrors MissionPrompt's overlay/focus-trap pattern: a name input, a single
+ * A focus-trapped overlay: a name input, a single
  * "Choose folder" picker that opens the NATIVE folder dialog (single-select), the
  * chosen folder shown as its parent-folder NAME (clearable), and Create/Cancel.
  * Esc / click-outside cancel; Create is disabled until the name is non-empty. The

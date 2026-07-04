@@ -4,7 +4,7 @@
  * (recolor is a deferred follow-up), we cycle a small WARM palette on CREATE so
  * the dots are colorful without the user choosing.
  *
- * Kept a pure, React-free helper (mirrors `sessionRow.ts` / `missionRow.ts`) so
+ * Kept a pure, React-free helper (mirrors `sessionRow.ts`) so
  * the cycle is unit-testable in vitest's node env.
  *
  * PALETTE NOTE: these are the ONLY hardcoded colors WS-D introduces (the prompt

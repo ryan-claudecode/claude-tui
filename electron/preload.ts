@@ -141,7 +141,7 @@ const mainApi = {
   // path(s) (0 or 1 entries), or [] on cancel.
   openDirectoryDialog: (): Promise<string[]> => ipcRenderer.invoke("dialog:open-directory"),
   // WS-B — active-workspace change events from main (payload = public workspace
-  // or null). Mirrors onMissionUpdated; WS-D consumes it for the sidebar switcher.
+  // or null). WS-D consumes it for the sidebar switcher.
   onWorkspaceActiveChanged: (callback: (workspace: any | null) => void) =>
     ipcRenderer.on("workspace:active-changed", (_e, workspace) => callback(workspace)),
 
@@ -285,23 +285,11 @@ const mainApi = {
   popOutPanel: (id: string) => ipcRenderer.invoke("panel:pop-out", id),
   submitForm: (id: string, data: Record<string, any>) =>
     ipcRenderer.send("panel:form-submit", id, data),
-  // CAPP-109 / S2 — the diff / worktree-review "send review to the active session" sink,
-  // used by the main-window ModalHost's PanelApi.sendToSession wrapper. Fire-and-forget
+  // CAPP-109 / S2 — the diff "send review to the active session" sink, used by the
+  // main-window ModalHost's PanelApi.sendToSession wrapper. Fire-and-forget
   // (mirrors the companion's `companion:send-to-session`); the handler writes to the
   // active terminal. The ModalHost wraps this to return `true` to match the PanelApi shape.
   sendToSession: (text: string) => ipcRenderer.send("companion:send-to-session", text),
-
-  // Mission orchestration
-  createMission: (goal: string, cwd: string, autonomy?: string) =>
-    ipcRenderer.invoke("mission:create", goal, cwd, autonomy),
-  listMissions: () => ipcRenderer.invoke("mission:list"),
-  getMissionStatus: (id?: string) => ipcRenderer.invoke("mission:status", id),
-  stopMission: (id: string) => ipcRenderer.invoke("mission:stop", id),
-  pauseMission: (id: string) => ipcRenderer.invoke("mission:pause", id),
-  resumeMission: (id: string) => ipcRenderer.invoke("mission:resume", id),
-  // Durable delete (sidebar ✕) — terminal-state only; main process emits
-  // mission:removed so useMissions drops the row (no renderer-only Set).
-  deleteMission: (id: string) => ipcRenderer.invoke("mission:delete", id),
 
   // CAPP-114 (SCHED-1) — on-device scheduler CRUD + run-now. Push events
   // (schedule:updated / schedule:removed) drive useSchedules without polling.
@@ -320,17 +308,6 @@ const mainApi = {
   onScheduleEdit: (callback: (id: string) => void) =>
     ipcRenderer.on("schedule:edit", (_e, id) => callback(id)),
 
-  // WW-2b — worktree review: approve merges the worker's branch, reject discards
-  // it (back to pending). Both return the resulting task state ({ status,
-  // reviewReason } | null). getReviewTask fetches the latest captured diff so the
-  // review panel always has fresh content when opened from an attention jump.
-  approveWorktreeTask: (missionId: string, taskId: string) =>
-    ipcRenderer.invoke("worktree:approve", missionId, taskId),
-  rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) =>
-    ipcRenderer.invoke("worktree:reject", missionId, taskId, reason),
-  getReviewTask: (missionId: string, taskId: string) =>
-    ipcRenderer.invoke("worktree:get-review-task", missionId, taskId),
-
   // Notifications
   listNotifications: () => ipcRenderer.invoke("notification:list"),
   dismissNotification: (id: string) => ipcRenderer.invoke("notification:dismiss", id),
@@ -341,18 +318,11 @@ const mainApi = {
 
   // Attention queue (AQ-2) — "who needs me?" the renderer is a thin view
   attentionSeen: (terminalId: string) => ipcRenderer.invoke("attention:seen", terminalId),
-  attentionSeenMission: (missionId: string) => ipcRenderer.invoke("attention:seen-mission", missionId),
   attentionDismiss: (id: string) => ipcRenderer.invoke("attention:dismiss", id),
   onAttentionUpdated: (callback: (entries: any[]) => void) =>
     ipcRenderer.on("attention:updated", (_e, entries) => callback(entries)),
   onAttentionJump: (callback: (id: string) => void) =>
     ipcRenderer.on("attention:jump", (_e, id) => callback(id)),
-
-  // Mission push events from main (MS-2 — replaces polling in usePanels)
-  onMissionUpdated: (callback: (mission: any) => void) =>
-    ipcRenderer.on("mission:updated", (_e, mission) => callback(mission)),
-  onMissionRemoved: (callback: (id: string) => void) =>
-    ipcRenderer.on("mission:removed", (_e, id) => callback(id)),
 
   // Events from main -> renderer
   onSessionData: (callback: (id: string, data: string) => void) =>

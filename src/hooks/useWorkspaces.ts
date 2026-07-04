@@ -22,7 +22,7 @@ function errMsg(err: unknown): string {
 
 /**
  * The renderer half of the workspaces surface (P1-4 hook pattern, mirroring
- * useMissions/useSessions). Seeds list + active on mount via `getWorkspaces()` +
+ * useSessions). Seeds list + active on mount via `getWorkspaces()` +
  * `getActiveWorkspace()`, then tracks the active selection REACTIVELY off the
  * `workspace:active-changed` push (selection is separate from launch, WS-B) so a
  * `setActive` from any path — the dropdown, a delete-of-active, or an MCP/agent

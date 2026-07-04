@@ -1,7 +1,7 @@
 /**
  * Pure view-model helpers for the SCHEDULED sidebar rows (CAPP-114 / SCHED-1).
  * Kept separate from the hook/component so they unit-test in vitest's node env
- * (no React, no DOM) — mirrors `missionRow.ts` / `sessionRow.ts`. Reuses the pure
+ * (no React, no DOM) — mirrors `sessionRow.ts`. Reuses the pure
  * `scheduleMath` countdown so the row text can never drift from the ticker.
  */
 import { describeNext, type Recurrence, type SchedulableView } from "../../electron/services/scheduleMath"

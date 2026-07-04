@@ -38,8 +38,8 @@ import { logWarn } from "../log"
  * snapshot failure logs a warning and returns, it never takes the app down.
  *
  * Mirrors the surrounding services' patterns: an injected `{ rootDir, now }` for
- * hermetic tests (like `SessionService` / `WorkspaceMemoryService`), and the same
- * `spawnSync("git", …)` runner shape as `WorktreeService`.
+ * hermetic tests (like `SessionService` / `WorkspaceMemoryService`), and a hardened
+ * `spawnSync("git", …)` runner shape.
  */
 
 /** The curated subset D1 snapshots — workspace memory + the per-session store ONLY.
@@ -135,8 +135,8 @@ export class LocalHistoryService {
     "commit.gpgsign=false",
   ]
 
-  /** A real synchronous git invocation in the history repo. Mirrors
-   *  `WorktreeService`'s defaultRunGit (never throws — a spawn failure → code 1), with
+  /** A real synchronous git invocation in the history repo (never throws — a
+   *  spawn failure → code 1), with
    *  the global-config-hardening flags so the internal repo can't be broken by a user's
    *  global git settings. */
   private git(args: string[]): GitResult {

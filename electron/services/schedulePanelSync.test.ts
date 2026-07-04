@@ -4,9 +4,9 @@ import { syncWindowSchedulePanels, type SyncPanelLike, type SchedulePanelBridge 
 /**
  * CAPP-115 review (MINOR 4 / MAJOR 2) — the service/ipc seam that keeps POPPED-OUT
  * (`surface:"window"`) schedule panels live, driven with a FAKE PanelService bridge:
- * `updated` routes panelService.update to the matching window panel (the CAPP-110 M4
- * mission pattern); `removed` routes panelService.hide (no zombie panel in the
- * companion). Modal-surface panels are the renderer mirror's job — untouched here.
+ * `updated` routes panelService.update to the matching window panel; `removed` routes
+ * panelService.hide (no zombie panel in the companion). Modal-surface panels are the
+ * renderer mirror's job — untouched here.
  */
 
 interface Calls {
@@ -40,7 +40,7 @@ describe("syncWindowSchedulePanels", () => {
         p("panel-1", "schedule", "window", "s1"), // the popped-out target
         p("panel-2", "schedule", "window", "s2"), // different schedule
         p("panel-3", "schedule", "modal", "s1"), // modal — the renderer mirror's job
-        p("panel-4", "mission", "window", "s1"), // wrong type
+        p("panel-4", "markdown", "window", "s1"), // wrong type
       ],
       bridge,
     )

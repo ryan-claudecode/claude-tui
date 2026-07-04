@@ -19,15 +19,11 @@ import type { PanelLike } from "./PanelContent"
 function mockApi(overrides: Partial<PanelApi> = {}): PanelApi {
   return {
     sendToSession: vi.fn(() => true),
-    missionStop: vi.fn(),
-    missionPause: vi.fn(),
     scheduleRunNow: vi.fn(),
     scheduleSetEnabled: vi.fn(),
     scheduleDelete: vi.fn(),
     scheduleEdit: vi.fn(),
     hidePanel: vi.fn(),
-    approveWorktreeTask: vi.fn(async () => null),
-    rejectWorktreeTask: vi.fn(async () => null),
     recall: vi.fn(async () => []),
     openSessionOverview: vi.fn(async () => undefined),
     promoteSessionToWorkspace: vi.fn(async () => ({ ok: true, count: 0, workspaceId: null })),
@@ -81,16 +77,14 @@ describe("PanelContent — tabLabel / PANEL_LABELS (extracted)", () => {
     expect(PANEL_LABELS["context-inspector"]).toBe("Context")
   })
 
-  it("specializes the label by props (overview→name, review→title, memory/context→workspace)", () => {
+  it("specializes the label by props (overview→name, memory/context→workspace)", () => {
     expect(tabLabel(panel("session-overview", { name: "Refactor" }))).toBe("Refactor")
-    expect(tabLabel(panel("worktree-review", { title: "Task 3" }))).toBe("Review: Task 3")
     expect(tabLabel(panel("workspace-memory", { workspaceName: "App" }))).toBe("Memory: App")
     expect(tabLabel(panel("context-inspector", { workspaceName: "App" }))).toBe("Context: App")
   })
 
   it("falls back to the generic label when the specializing prop is absent", () => {
     expect(tabLabel(panel("session-overview", {}))).toBe("Overview")
-    expect(tabLabel(panel("mission", {}))).toBe("Mission")
     expect(tabLabel(panel("totally-unknown", {}))).toBe("totally-unknown")
   })
 })
@@ -106,28 +100,6 @@ describe("PanelContent — renders behavior panels with a mock api", () => {
     )
     expect(html).toContain("diff-panel")
     expect(html).toContain("a.ts")
-  })
-
-  it("renders the mission panel with Stop/Pause controls", () => {
-    const html = renderToStaticMarkup(
-      <PanelContent panel={panel("mission", { id: "m1", goal: "Ship it", tasks: [] })} api={mockApi()} />,
-    )
-    expect(html).toContain("mission-panel")
-    expect(html).toContain("Ship it")
-    expect(html).toContain("Stop")
-    expect(html).toContain("Pause")
-  })
-
-  it("renders the worktree-review panel (approve/reject wired)", () => {
-    const html = renderToStaticMarkup(
-      <PanelContent
-        panel={panel("worktree-review", { missionId: "m1", taskId: "t1", title: "T1", status: "awaiting-review" })}
-        api={mockApi()}
-      />,
-    )
-    expect(html).toContain("worktree-review-panel")
-    expect(html).toContain("Approve &amp; merge")
-    expect(html).toContain("Reject")
   })
 
   it("renders the session-overview panel with the push button", () => {

@@ -6,8 +6,8 @@ import { join } from "node:path"
 /**
  * Electron smoke test — hermetic via a temp USERPROFILE.
  *
- * The app reads all of its persisted state (config, sessions, missions,
- * layouts, notes, logs) from `os.homedir()/.claude-tui`, which on Windows is
+ * The app reads all of its persisted state (config, sessions, notes, logs)
+ * from `os.homedir()/.claude-tui`, which on Windows is
  * driven by the `USERPROFILE` env var. By launching the test's Electron
  * instance with `USERPROFILE` pointed at a fresh empty temp dir, `~/.claude-tui`
  * is empty → there are no persisted sessions/terminals to auto-restore → NO real
@@ -65,9 +65,9 @@ test("built app boots and renders the empty-state shell", async () => {
   await expect(brand).toContainText("ClaudeTUI", { timeout: 30_000 })
 
   // Empty-state affordances prove the renderer actually mounted the shell
-  // (and that a hermetic home produced an empty app): the MISSIONS section
+  // (and that a hermetic home produced an empty app): the SESSIONS section
   // header and the "+ New session" action are always present.
-  await expect(win.locator(".missions-header")).toContainText("MISSIONS")
+  await expect(win.locator(".sessions-section .sidebar-header")).toContainText("SESSIONS")
   await expect(win.locator(".sidebar-action", { hasText: "+ New session" })).toBeVisible()
 
   // WS-D — the workspace switcher pill renders below the brand and, with a

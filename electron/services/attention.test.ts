@@ -3,7 +3,6 @@ import { AttentionService, type AttentionDeps } from "./attention"
 import type { PanelService, PanelEvent } from "./panels"
 import type { TerminalService, TerminalEvent } from "./terminals"
 import type { NotificationService, NotificationState } from "./notifications"
-import type { MissionService, MissionServiceEvent, Mission, MissionStatus, MissionTask } from "./mission"
 
 /**
  * Minimal fake emitters: expose the exact `onEvent`/`onNotification` surface
@@ -43,31 +42,11 @@ class FakeNotifications {
   }
 }
 
-class FakeMissions {
-  private cbs = new Set<(e: MissionServiceEvent) => void>()
-  onEvent(cb: (e: MissionServiceEvent) => void) {
-    this.cbs.add(cb)
-    return () => this.cbs.delete(cb)
-  }
-  emit(e: MissionServiceEvent) {
-    for (const cb of this.cbs) cb(e)
-  }
-  /** Drive a status `updated` event with just the fields the seam reads. */
-  setStatus(id: string, status: MissionStatus) {
-    this.emit({ type: "updated", mission: { id, status } as Mission })
-  }
-  /** Drive an `updated` event carrying a task list (for the review-entry seam). */
-  setMission(id: string, status: MissionStatus, tasks: Array<Partial<MissionTask>>) {
-    this.emit({ type: "updated", mission: { id, status, tasks } as Mission })
-  }
-}
-
 interface Harness {
   svc: AttentionService
   panels: FakePanels
   terminals: FakeTerminals
   notifications: FakeNotifications
-  missions: FakeMissions
   snapshots: any[][]
   toasts: Array<{ message: string; level: string }>
   osNotifications: Array<{ title: string; body: string; onClick: () => void }>
@@ -83,7 +62,6 @@ function makeHarness(opts: { focused?: boolean; osEnabled?: boolean } = {}): Har
   const panels = new FakePanels()
   const terminals = new FakeTerminals()
   const notifications = new FakeNotifications()
-  const missions = new FakeMissions()
   const snapshots: any[][] = []
   const toasts: Array<{ message: string; level: string }> = []
   const osNotifications: Array<{ title: string; body: string; onClick: () => void }> = []
@@ -110,7 +88,6 @@ function makeHarness(opts: { focused?: boolean; osEnabled?: boolean } = {}): Har
     panels as unknown as PanelService,
     terminals as unknown as TerminalService,
     notifications as unknown as NotificationService,
-    missions as unknown as MissionService,
     deps,
     { now: () => clock },
   )
@@ -120,7 +97,6 @@ function makeHarness(opts: { focused?: boolean; osEnabled?: boolean } = {}): Har
     panels,
     terminals,
     notifications,
-    missions,
     snapshots,
     toasts,
     osNotifications,
@@ -393,215 +369,5 @@ describe("AttentionService — tier-1 toast carries no sessionId (no error loop)
     // toast captured but it never round-trips through onNotification in the real
     // wiring because the injected notify here is a stub — assert intent via deps.
     expect(h.toasts).toHaveLength(1)
-  })
-})
-
-describe("AttentionService — mission transitions", () => {
-  it("seeds SILENTLY on first sight of a mission (no enqueue), incl. terminal states", () => {
-    const h = makeHarness()
-    // First time we ever see m1 — even though it's already 'done', that state
-    // predates this app session, so it must NOT enqueue.
-    h.missions.setStatus("m1", "done")
-    expect(h.svc.list()).toHaveLength(0)
-    // A second mission seen as 'paused' on first sight — also silent.
-    h.missions.setStatus("m2", "paused")
-    expect(h.svc.list()).toHaveLength(0)
-  })
-
-  it("→ paused enqueues a tier-2 mission entry keyed mission:<id> with missionId set", () => {
-    const h = makeHarness()
-    h.missions.setStatus("m1", "running") // seed
-    h.missions.setStatus("m1", "paused")
-    expect(h.svc.list()).toHaveLength(1)
-    expect(h.svc.list()[0]).toMatchObject({
-      id: "mission:m1",
-      tier: 2,
-      kind: "mission",
-      missionId: "m1",
-      sessionId: "",
-    })
-    expect(h.svc.list()[0].reason).toBe("Mission paused — waiting")
-  })
-
-  it("→ blocked enqueues tier-2 'tasks failed'", () => {
-    const h = makeHarness()
-    h.missions.setStatus("m1", "running")
-    h.missions.setStatus("m1", "blocked")
-    expect(h.svc.list()[0]).toMatchObject({ tier: 2, kind: "mission", missionId: "m1" })
-    expect(h.svc.list()[0].reason).toBe("Mission blocked — tasks failed")
-  })
-
-  it("→ done enqueues a tier-3 'Mission finished'", () => {
-    const h = makeHarness()
-    h.missions.setStatus("m1", "running")
-    h.missions.setStatus("m1", "done")
-    expect(h.svc.list()[0]).toMatchObject({ tier: 3, kind: "mission", missionId: "m1" })
-    expect(h.svc.list()[0].reason).toBe("Mission finished")
-  })
-
-  it("→ running (resume) clears a paused mission entry", () => {
-    const h = makeHarness()
-    h.missions.setStatus("m1", "running") // seed
-    h.missions.setStatus("m1", "paused")
-    expect(h.svc.list()).toHaveLength(1)
-    h.missions.setStatus("m1", "running")
-    expect(h.svc.list()).toHaveLength(0)
-  })
-
-  it("does NOT re-enqueue on a repeated persist of the SAME status (no transition)", () => {
-    const h = makeHarness()
-    h.missions.setStatus("m1", "running") // seed
-    h.missions.setStatus("m1", "paused")
-    expect(h.snapshots.length).toBe(1)
-    // A tick re-save or a logEvent persist re-emits 'updated' with status
-    // unchanged — must NOT enqueue again or publish again.
-    h.missions.setStatus("m1", "paused")
-    expect(h.svc.list()).toHaveLength(1)
-    expect(h.snapshots.length).toBe(1)
-  })
-
-  it("one entry per mission: a later done replaces the paused entry's key", () => {
-    const h = makeHarness()
-    h.missions.setStatus("m1", "running")
-    h.missions.setStatus("m1", "paused")
-    // resume → running clears, then a fresh done enqueues (the realistic path).
-    h.missions.setStatus("m1", "running")
-    h.missions.setStatus("m1", "done")
-    expect(h.svc.list()).toHaveLength(1)
-    expect(h.svc.list()[0]).toMatchObject({ id: "mission:m1", tier: 3 })
-  })
-
-  it("seenMission() clears that mission's entry", () => {
-    const h = makeHarness()
-    h.missions.setStatus("m1", "running")
-    h.missions.setStatus("m1", "done")
-    expect(h.svc.list()).toHaveLength(1)
-    h.svc.seenMission("m1")
-    expect(h.svc.list()).toHaveLength(0)
-  })
-
-  it("dismiss() drops a mission entry by its mission:<id> key", () => {
-    const h = makeHarness()
-    h.missions.setStatus("m1", "running")
-    h.missions.setStatus("m1", "paused")
-    expect(h.svc.dismiss("mission:m1")).toBe(true)
-    expect(h.svc.list()).toHaveLength(0)
-  })
-
-  it("a mission entry NEVER fires an OS notification or a tier-1 toast", () => {
-    // tier-2/3 policy: only blocked (tier-1) form entries fire fireTier1. Even
-    // unfocused + osEnabled, a mission transition raises neither a toast nor an
-    // OS notification.
-    const h = makeHarness({ focused: false, osEnabled: true })
-    h.missions.setStatus("m1", "running")
-    h.missions.setStatus("m1", "paused")
-    h.missions.setStatus("m2", "running")
-    h.missions.setStatus("m2", "done")
-    expect(h.svc.list()).toHaveLength(2)
-    expect(h.toasts).toHaveLength(0)
-    expect(h.osNotifications).toHaveLength(0)
-  })
-
-  it("missions are independent — a transition on m1 leaves m2's seeding intact", () => {
-    const h = makeHarness()
-    h.missions.setStatus("m1", "running") // seed m1
-    h.missions.setStatus("m2", "running") // seed m2
-    h.missions.setStatus("m1", "done")    // m1 transitions
-    expect(h.svc.list().map((e) => e.missionId)).toEqual(["m1"])
-    // m2 was only seeded; its first real transition still enqueues.
-    h.missions.setStatus("m2", "paused")
-    expect(h.svc.list().map((e) => e.missionId).sort()).toEqual(["m1", "m2"])
-  })
-})
-
-describe("AttentionService — worktree-review entries (WW-2, pure subscriber)", () => {
-  it("an awaiting-review task enqueues a tier-1 review:<m>:<t> entry routed to review (taskId set)", () => {
-    const h = makeHarness()
-    h.missions.setMission("m1", "running", []) // seed
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "fix the parser", status: "awaiting-review" }])
-    expect(h.svc.list()).toHaveLength(1)
-    const [e] = h.svc.list()
-    expect(e).toMatchObject({
-      id: "review:m1:tA",
-      tier: 1,
-      kind: "mission",
-      missionId: "m1",
-      taskId: "tA",
-      sessionId: "",
-    })
-    expect(e.reason).toBe("Review: fix the parser")
-  })
-
-  it("a review entry is derived even when the mission status DIDN'T change (rides every persist)", () => {
-    const h = makeHarness()
-    // First sight already carries an awaiting-review task: status is seeded
-    // silently, but the review entry still appears (it's not on the status path).
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "t", status: "awaiting-review" }])
-    expect(h.svc.list().map((e) => e.id)).toEqual(["review:m1:tA"])
-  })
-
-  it("leaving awaiting-review (approved/done) clears the review entry", () => {
-    const h = makeHarness()
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "t", status: "awaiting-review" }])
-    expect(h.svc.list()).toHaveLength(1)
-    // Task approved → done; the next snapshot has no awaiting-review task.
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "t", status: "done" }])
-    expect(h.svc.list()).toHaveLength(0)
-  })
-
-  it("rejected (back to pending) also clears the review entry", () => {
-    const h = makeHarness()
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "t", status: "awaiting-review" }])
-    expect(h.svc.list()).toHaveLength(1)
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "t", status: "pending" }])
-    expect(h.svc.list()).toHaveLength(0)
-  })
-
-  it("multiple awaiting-review tasks → multiple distinct review entries", () => {
-    const h = makeHarness()
-    h.missions.setMission("m1", "running", [
-      { id: "tA", title: "a", status: "awaiting-review" },
-      { id: "tB", title: "b", status: "awaiting-review" },
-      { id: "tC", title: "c", status: "in-progress" },
-    ])
-    const ids = h.svc.list().map((e) => e.id).sort()
-    expect(ids).toEqual(["review:m1:tA", "review:m1:tB"])
-  })
-
-  it("review entries coexist with a mission-status entry (e.g. a paused mission with a pending review)", () => {
-    const h = makeHarness()
-    h.missions.setMission("m1", "running", []) // seed
-    // Mission pauses AND a task is awaiting review in the same snapshot.
-    h.missions.setMission("m1", "paused", [{ id: "tA", title: "t", status: "awaiting-review" }])
-    const entries = h.svc.list()
-    // tier-1 review sorts before the tier-2 mission-status entry.
-    expect(entries.map((e) => e.id)).toEqual(["review:m1:tA", "mission:m1"])
-  })
-
-  it("a review entry NEVER fires a tier-1 toast or OS notification (mission entries don't, even at tier 1)", () => {
-    const h = makeHarness({ focused: false, osEnabled: true })
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "t", status: "awaiting-review" }])
-    expect(h.svc.list()).toHaveLength(1)
-    expect(h.toasts).toHaveLength(0)
-    expect(h.osNotifications).toHaveLength(0)
-  })
-
-  it("a no-op re-persist with the same awaiting-review task does NOT re-publish", () => {
-    const h = makeHarness()
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "t", status: "awaiting-review" }])
-    const n = h.snapshots.length
-    // Identical snapshot again — entry already exists, nothing changes.
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "t", status: "awaiting-review" }])
-    expect(h.snapshots.length).toBe(n)
-  })
-
-  it("review entries are per-mission — reconciling m1 never drops m2's review entry", () => {
-    const h = makeHarness()
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "a", status: "awaiting-review" }])
-    h.missions.setMission("m2", "running", [{ id: "tB", title: "b", status: "awaiting-review" }])
-    expect(h.svc.list().map((e) => e.id).sort()).toEqual(["review:m1:tA", "review:m2:tB"])
-    // m1 resolves its review; m2's must survive.
-    h.missions.setMission("m1", "running", [{ id: "tA", title: "a", status: "done" }])
-    expect(h.svc.list().map((e) => e.id)).toEqual(["review:m2:tB"])
   })
 })

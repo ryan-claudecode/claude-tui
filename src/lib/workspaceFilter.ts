@@ -1,10 +1,10 @@
 /**
  * WS-C — the pure workspace data-scoping helper. Kept separate from any
  * hook/component so it can be unit-tested in vitest's node environment (no React,
- * no DOM) — mirrors `missionRow.ts` / `attentionRow.ts` / `sessionRow.ts`.
+ * no DOM) — mirrors `attentionRow.ts` / `sessionRow.ts`.
  *
- * The renderer consumes this in WS-D to scope the sidebar's NEEDS YOU / MISSIONS /
- * SESSIONS sections to the active workspace. It is NOT wired into the sidebar
+ * The renderer consumes this in WS-D to scope the sidebar's NEEDS YOU / SESSIONS
+ * sections to the active workspace. It is NOT wired into the sidebar
  * here (WS-C is backend data-scoping + this filter only).
  *
  * "All" bucket semantics (the design's escape hatch):
@@ -15,7 +15,7 @@
  *    they are HIDDEN under a specific workspace (never leak into a scoped view).
  */
 
-/** The minimal shape the filter needs — works for both WorkSessions and Missions
+/** The minimal shape the filter needs — works for WorkSessions
  *  (and anything else carrying an optional `workspaceId`). */
 export interface WorkspaceScoped {
   workspaceId?: string

@@ -9,16 +9,9 @@ import { toast } from "../lib/toast"
 export interface AttentionEntry {
   id: string
   tier: 1 | 2 | 3
-  kind: "blocked" | "asked" | "error" | "finished" | "mission"
+  kind: "blocked" | "asked" | "error" | "finished"
   sessionId: string
   terminalId?: string
-  /** Set on mission entries — lets the renderer route the jump to the dashboard
-   *  panel instead of a terminal (MS-2). */
-  missionId?: string
-  /** Set on worktree-review entries (keyed `review:<missionId>:<taskId>`, WW-2b).
-   *  Carries `missionId` too; the jump routes to the worktree-review panel, NOT
-   *  the dashboard. */
-  taskId?: string
   reason: string
   since: number
 }
@@ -45,20 +38,9 @@ const WAIT_TICK_MS = 30_000
  * select-session / select-terminal paths in `useSessions` — the hook doesn't own
  * that state, so jumping is delegated. It's passed as a ref so the mount-once
  * effect (which `attention:jump` lands in) always calls the latest closure.
- *
- * `jumpToMissionRef` (MS-2): an optional ref to a callback that opens the mission
- * dashboard panel given a missionId. When an attention entry carries `missionId`
- * (but no `taskId`) the jump routes there instead of to a terminal.
- *
- * `jumpToReviewRef` (WW-2b): an optional ref to a callback that opens the
- * worktree-review panel given a missionId+taskId. When an attention entry carries
- * a `taskId` (a review entry) the jump routes there — checked BEFORE the mission
- * branch, since review entries carry both ids.
  */
 export function useAttention(
   focusRef: MutableRefObject<(sessionId: string, terminalId?: string) => void>,
-  jumpToMissionRef?: MutableRefObject<((missionId: string) => void) | null>,
-  jumpToReviewRef?: MutableRefObject<((missionId: string, taskId: string) => void) | null>,
 ) {
   const [entries, setEntries] = useState<AttentionEntry[]>([])
   // Bumped on the wait-time interval; consumers read it so wait labels re-derive.
@@ -73,22 +55,6 @@ export function useAttention(
 
   const jumpTo = useCallback(
     (entry: AttentionEntry) => {
-      // WW-2b: review entries (taskId set) open the worktree-review panel. Checked
-      // FIRST because a review entry carries missionId too. No explicit seen-call:
-      // the entry auto-clears when the task leaves awaiting-review (approve/reject),
-      // reconciled by AttentionService from the next mission snapshot.
-      if (entry.taskId && entry.missionId) {
-        jumpToReviewRef?.current?.(entry.missionId, entry.taskId)
-        return
-      }
-      // MS-2: mission entries route to the dashboard panel, not a terminal.
-      if (entry.missionId) {
-        jumpToMissionRef?.current?.(entry.missionId)
-        Promise.resolve(window.api.attentionSeenMission(entry.missionId)).catch((err) =>
-          toast("error", `Couldn't clear the mission attention entry: ${errMsg(err)}`),
-        )
-        return
-      }
       focusRef.current(entry.sessionId, entry.terminalId)
       // Focusing a terminal clears its tier-2/3 entries server-side; the snapshot
       // push reflects it. Tier-1 (blocked) persists until the form resolves.
@@ -98,7 +64,7 @@ export function useAttention(
         )
       }
     },
-    [focusRef, jumpToMissionRef, jumpToReviewRef],
+    [focusRef],
   )
 
   const dismiss = useCallback((id: string) => {

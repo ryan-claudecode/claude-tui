@@ -10,9 +10,9 @@ import type { PanelApi } from "../../lib/panelApi"
 /**
  * CAPP-94 / U6 — the workspace-memory EDITOR: a companion-window panel to view and
  * edit one workspace's durable memory (standing instructions + promoted/authored
- * findings). Modeled on SessionOverviewPanel's sectioned read layout but EDITABLE,
- * and on WorktreeReviewPanel's pattern (it calls `companionApi` accessors, reflects
- * results inline, and live-refreshes on its own props).
+ * findings). Modeled on SessionOverviewPanel's sectioned read layout but EDITABLE
+ * (it calls `companionApi` accessors, reflects results inline, and live-refreshes
+ * on its own props).
  *
  * THE PINNED-TARGET WRITE PATH (the load-bearing correctness rule): the panel
  * captures the concrete `workspaceId` (a real id, or `null` for the untagged "All"

@@ -13,8 +13,8 @@ interface Props {
 }
 
 /**
- * CAPP-114 (SCHED-1) — the SCHEDULED sidebar section. Clones the MISSIONS MS-2 row
- * pattern: two-line rows (name + enabled/paused chip; `next in 14m · last ok`) with
+ * CAPP-114 (SCHED-1) — the SCHEDULED sidebar section. Two-line rows (name +
+ * enabled/paused chip; `next in 14m · last ok`) with
  * STATICALLY-VISIBLE per-row controls (no hover-reveal): pause/resume + run-now.
  * The countdown re-derives on a 30s interval from `nextRunAt`.
  */

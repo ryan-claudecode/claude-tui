@@ -13,7 +13,6 @@ import { ShellService } from "./services/shell"
 import { NotesService } from "./services/notes"
 import { FileService } from "./services/files"
 import { UiService } from "./services/ui"
-import { MissionService } from "./services/mission"
 import { SchedulerService } from "./services/scheduler"
 import { userMessage, MODEL_ALIASES, EFFORT_LEVELS, HEADLESS_FLAGS } from "./services/streamProtocol"
 import { SessionService } from "./services/sessions"
@@ -41,7 +40,6 @@ import { startMcpServer } from "./mcp/server"
 import { registerTerminalHandlers } from "./ipc/terminal-handlers"
 import { registerWorkSessionHandlers } from "./ipc/worksession-handlers"
 import { registerPanelHandlers } from "./ipc/panel-handlers"
-import { registerMissionHandlers } from "./ipc/mission-handlers"
 import { registerScheduleHandlers } from "./ipc/schedule-handlers"
 import { registerAppHandlers } from "./ipc/app-handlers"
 import { registerAttentionHandlers } from "./ipc/attention-handlers"
@@ -80,13 +78,6 @@ export const workspaceMemoryService = new WorkspaceMemoryService()
 // separation: git over a snapshot COPY, never the live dir, never the sync repo,
 // NEVER pushed (no remote ever added). init()/wiring happen in setupIpc below.
 export const localHistoryService = new LocalHistoryService()
-export const missionService = new MissionService(sessionService, {
-  notify: (text, level) => notificationService.notify(text, level as any),
-  // WS-C — stamp the active workspace onto each freshly-minted mission. A getter
-  // (not the WorkspaceService itself) keeps MissionService decoupled + testable.
-  // workspaceService is constructed above, so this closure is safe.
-  getActiveWorkspaceId: () => workspaceService.getActiveId(),
-})
 // CAPP-86 — "The Lexicon": read-only cross-session recall over the per-session
 // knowledge ledger. Declared with a forward `let` so the SessionService primer-
 // enrichment closure below can reference it (the two are mutually referential:
@@ -96,7 +87,7 @@ export let recallService: RecallService
 
 // WS-C — scope work sessions to the active workspace: the durable container is
 // stamped at create() time via this getter (undefined in "All" mode). Same
-// callback-injection posture as missionService above.
+// callback-injection posture as the other services.
 // WS-G (G1) — and resolve the active workspace's primary dir as the spawn cwd for
 // a NEW session's first terminal (null in "All" mode / no dir → default cwd).
 // CAPP-86 — the OPTIONAL gated primer-enrichment seam: getContext appends a capped
@@ -261,7 +252,6 @@ export async function setupIpc(win: BrowserWindow) {
     panelService,
     sessionService,
     notificationService,
-    missionService,
     {
       sendToRenderer: (channel, ...args) => {
         if (!win.isDestroyed()) win.webContents.send(channel, ...args)
@@ -297,50 +287,20 @@ export async function setupIpc(win: BrowserWindow) {
     },
   )
 
-  // Push mission mutations to the main renderer (MS-2's useMissions consumes
-  // these instead of polling). The full Mission rides along — the sidebar +
-  // dashboard panel need tasks/workers/eventLog. A `removed` event (from
-  // deleteMission, the durable sidebar ✕) is forwarded as `mission:removed`.
-  missionService.onEvent((e) => {
-    if (win.isDestroyed()) return
-    if (e.type === "updated") {
-      win.webContents.send("mission:updated", e.mission)
-      // CAPP-110 / S3 (M4) — keep a POPPED-OUT mission dashboard live. usePanels'
-      // mission live-refresh is main-side-only (local setPanels) and stops driving the
-      // panel once it leaves the main mirror on pop-out; the companion has no
-      // mission:updated listener of its own. So re-emit the fresh mission to any
-      // surface:"window" mission panel via panelService.update, which routes
-      // panel:update to the companion. Matched on props.id (the mission id) — panels
-      // carry auto-generated panel-N ids, so the mission object's id is the key.
-      // Guarded by isOpen() so a background tick NEVER spawns a closed companion via
-      // update→route→sendToCompanion→getOrCreate (the ipc.ts:293 precedent). After a
-      // companion close, dismissWindowPanels has already dropped these — belt + braces.
-      if (companionService.isOpen()) {
-        for (const p of panelService.list()) {
-          if (p.surface === "window" && p.type === "mission" && p.props?.id === e.mission.id) {
-            panelService.update(p.id, e.mission)
-          }
-        }
-      }
-    } else {
-      win.webContents.send("mission:removed", e.id)
-    }
-  })
-
   // CAPP-114 (SCHED-1) — push schedule mutations to the main renderer (useSchedules
   // consumes these instead of polling). The full Schedule rides along (runHistory +
-  // nextRunAt), same seam as mission:updated. A `removed` event (delete) → schedule:removed.
+  // nextRunAt). A `removed` event (delete) → schedule:removed.
   schedulerService.onEvent((e) => {
     if (win.isDestroyed()) return
     if (e.type === "updated") win.webContents.send("schedule:updated", e.schedule)
     else win.webContents.send("schedule:removed", e.id)
     // CAPP-115 review (MINOR 4 / MAJOR 2) — keep POPPED-OUT (`surface:"window"`)
     // schedule detail panels live: updated → panelService.update (routes panel:update
-    // to the companion, the CAPP-110 M4 mission pattern); removed → panelService.hide
+    // to the companion, the CAPP-110 M4 pattern); removed → panelService.hide
     // (a deleted schedule must never leave a zombie panel there — the renderer-side
     // stale-close only reaches the MAIN mirror). Guarded by isOpen() so a background
     // tick can never resurrect a closed companion (dismissWindowPanels already dropped
-    // these on close — belt + braces, exactly like the mission block above).
+    // these on close — belt + braces).
     if (companionService.isOpen()) {
       syncWindowSchedulePanels(e, panelService.list(), panelService)
     }
@@ -348,10 +308,9 @@ export async function setupIpc(win: BrowserWindow) {
 
   // WS-B — push active-workspace changes to the main renderer (selection is now
   // separate from launch; the renderer reacts to the active selection instead of
-  // polling). Mirrors the missionService.onEvent push above EXACTLY: the service
-  // stays decoupled from BrowserWindow (no setMainWindow), and this callback
-  // forwards each event over the `workspace:active-changed` channel. Payload is
-  // the new active workspace's PUBLIC projection, or null when cleared.
+  // polling). The service stays decoupled from BrowserWindow (no setMainWindow),
+  // and this callback forwards each event over the `workspace:active-changed`
+  // channel. Payload is the new active workspace's PUBLIC projection, or null when cleared.
   workspaceService.onActiveChanged((e) => {
     // CAPP-121 (STT-2) — re-derive the dictation hotword vocabulary for the newly-active
     // workspace (immediate: a switch is a deliberate, low-frequency user action).
@@ -665,7 +624,6 @@ export async function setupIpc(win: BrowserWindow) {
       notesService,
       fileService,
       uiService,
-      missionService,
       workSessionService,
       recallService,
       attentionService,
@@ -684,7 +642,6 @@ export async function setupIpc(win: BrowserWindow) {
     )
   }
 
-  missionService.start()
   // CAPP-114 (SCHED-1) — start the scheduler's single 30s tick (+ launch catch-up).
   // CAPP-115 (SCHED-2) — apply the config `scheduler.maxConcurrent` override BEFORE the
   // first tick (tolerant-parsed; absent → the service keeps its built-in default of 2).
@@ -721,10 +678,8 @@ export async function setupIpc(win: BrowserWindow) {
     panelService,
     notificationService,
     companionService,
-    missionService,
     sessionService,
   })
-  registerMissionHandlers({ missionService })
   registerScheduleHandlers({ schedulerService, win })
   // CAPP-120 (STT-1) — push acquisition progress to the renderer's inline download flow
   // (the composer's mic overlay listens on `stt:progress`). Mirrors schedule:updated.

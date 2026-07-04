@@ -1,6 +1,4 @@
 import { useState, useEffect, useCallback, useRef, type MutableRefObject } from "react"
-import type { Autonomy } from "../components/MissionPrompt"
-import type { WorkSession } from "./useSessions"
 import { refreshSchedulePanels, staleSchedulePanelIds } from "../lib/schedulePanels"
 
 // PanelState — panels now render in the companion window, but the main window
@@ -17,10 +15,7 @@ export interface PanelState {
 
 // Owns the main window's companion-panel bookkeeping: the locally-mirrored panel
 // list, the panel:* IPC listeners, the M5 Session Overview live-refresh, and the
-// show-panel helpers (mission / overview / create mission). Mission list state has
-// moved to useMissions (MS-2 — push, not poll). The live missions list is passed
-// in so open mission panels stay fresh reactively without a second listener on
-// mission:updated (which useMissions already owns).
+// show-panel helpers (overview / schedule).
 //
 // This is panel-meta tracking — explicitly allowed to live outside the
 // terminal/session core — pulled out of App.tsx so the root stays a composition
@@ -35,9 +30,6 @@ export interface PanelState {
 // ~1.2s) that drives the presence-indicator pulse in the TabBar.
 export function usePanels(
   refreshOverviewsRef: MutableRefObject<(() => void) | null>,
-  activeSession: WorkSession | null,
-  _missionsListOpen: boolean,
-  liveMissions?: Array<{ id: string; [key: string]: any }>,
   liveSchedules?: Array<{ id: string; [key: string]: any }>,
   /** CAPP-115 review — whether the schedules list has been SEEDED (listSchedules
    *  resolved). Gates the stale-schedule-panel removal: an un-seeded empty list must
@@ -92,29 +84,10 @@ export function usePanels(
     }
   }, [triggerPulse])
 
-  // MS-2: keep open mission dashboard panels fresh from the live missions list.
-  // useMissions owns the mission:updated listener; we react to the derived state
-  // (liveMissions) rather than registering a second listener on the same channel.
-  //
-  // PP fix: match by props identity (`props.id === mission.id`) rather than
-  // panel-id string `mission-${x.id}` — panels use auto-generated `panel-N` ids,
-  // so the old string match never fired. A mission panel's props IS the mission
-  // object, so props.id is the stable identifier.
-  useEffect(() => {
-    if (!liveMissions || liveMissions.length === 0) return
-    setPanels((prev) =>
-      prev.map((p) => {
-        if (p.type !== "mission") return p
-        const m = liveMissions.find((x) => x.id === (p.props as { id?: string })?.id)
-        return m ? { ...p, props: m } : p
-      }),
-    )
-  }, [liveMissions])
-
   // CAPP-115 (SCHED-2): keep an open `schedule` detail panel fresh from the live
   // schedules list. useSchedules owns the `schedule:updated` listener; we react to the
-  // derived state here (same pattern as the mission live-refresh above), matching on
-  // props.id (the schedule id) because panels carry auto-generated panel-N ids.
+  // derived state here, matching on props.id (the schedule id) because panels carry
+  // auto-generated panel-N ids.
   //
   // CAPP-115 review (MAJOR 2): ALSO close any schedule panel whose schedule no longer
   // exists (deleted from the sidebar / by an agent / another window) — a deleted
@@ -204,11 +177,6 @@ export function usePanels(
     }
   }, [panels, refreshOverviewsRef])
 
-  // Open (or refresh) a mission's dashboard panel.
-  const openMission = useCallback(async (m: { id: string }) => {
-    await window.api.showPanel("mission", m, "right")
-  }, [])
-
   // CAPP-115 (SCHED-2): open (or refresh) a schedule's detail panel. The full
   // ScheduleSummary snapshot rides as the panel props; the live-refresh effect above
   // keeps it current off `schedule:updated`.
@@ -240,24 +208,12 @@ export function usePanels(
     await window.api.showPanel("timeline", { title: `Timeline — ${sessionName ?? sessionId}`, steps }, "right")
   }, [])
 
-  // Create a mission from the prompt overlay, then open its dashboard panel.
-  const createMission = useCallback(
-    async (goal: string, autonomy: Autonomy) => {
-      const cwd = activeSession?.terminals[0]?.cwd ?? ""
-      const m = await window.api.createMission(goal, cwd, autonomy)
-      openMission(m)
-    },
-    [activeSession, openMission],
-  )
-
   return {
     panels,
     recentlyChanged,
     setPanels,
-    openMission,
     openSchedule,
     openOverview,
     openTimeline,
-    createMission,
   }
 }

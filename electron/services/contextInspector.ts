@@ -98,7 +98,7 @@ const EXCERPT_CHAR_CAP = 4000
 const AUTO_MEMORY_CAP_NOTE = "cap: 200 lines / 25 KB"
 
 /** A real synchronous `git` invocation, hardened against the user's global config the
- *  same way LocalHistoryService/WorktreeService are (a global hooks/excludes/autocrlf
+ *  same way LocalHistoryService is (a global hooks/excludes/autocrlf
  *  setting must not perturb a plain `rev-parse`). Never throws — a spawn failure yields a
  *  non-zero code and the caller treats it as "no git root". */
 function gitToplevel(cwd: string): string | null {

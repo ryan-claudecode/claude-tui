@@ -70,9 +70,9 @@ interface Props {
  * (this-session overview + cross-session recall) slotted into the placeholder below,
  * rendered ONLY when there's content so the empty rail stays byte-identical/calm.
  *
- * The WORKING (mission lighthouse) and AWAITING (tier-2/3 signals + inline answer)
- * sections remain LATER phases — their slot stays a clearly-commented placeholder so
- * the next phase drops in without re-laying out the column.
+ * The AWAITING (tier-2/3 signals + inline answer) section remains a LATER phase —
+ * its slot stays a clearly-commented placeholder so the next phase drops in without
+ * re-laying out the column.
  */
 export default function AgentRail({
   open,
@@ -312,10 +312,6 @@ export default function AgentRail({
         )}
 
         {/* ── LATER-PHASE SEAMS (docs/roadmap/agent-rail-design.md §3) ──────────────
-            Phase 2 — WORKING (mission lighthouse): goal excerpt + progress bar +
-              status chip + worker count + "View board →" (window.api.showPanel
-              'mission'), sourced from useMissions / mission:updated. Present only
-              when a mission is active in the focused session.
             Phase 4 — AWAITING (tier-2/3 only): tier-tinted dismissable rows scoped
               to the active terminal (tier-1 filtered out), with an inline mini-
               composer on an `asked` entry wired to sendAgentInput.

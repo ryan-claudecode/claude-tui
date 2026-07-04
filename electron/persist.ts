@@ -8,7 +8,7 @@ import { logWarn } from "./log"
  * Every file is wrapped in an envelope `{ schemaVersion, data }`. A file WITHOUT
  * that envelope is the pre-versioning ("version 0") format produced by older
  * builds — it is read as-is and run through the migration chain so users never
- * lose their sessions/missions/config on upgrade. Loading a versioned file
+ * lose their sessions/config on upgrade. Loading a versioned file
  * always rewrites it in the latest format (read-repair), so a file is upgraded
  * exactly once and is in the new format ever after.
  *

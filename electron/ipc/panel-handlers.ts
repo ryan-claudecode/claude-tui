@@ -2,17 +2,15 @@ import { ipcMain, BrowserWindow } from "electron"
 import type { PanelService } from "../services/panels"
 import type { NotificationService } from "../services/notifications"
 import type { CompanionService } from "../services/companion"
-import type { MissionService } from "../services/mission"
 import type { TerminalService } from "../services/terminals"
 
 export function registerPanelHandlers(deps: {
   panelService: PanelService
   notificationService: NotificationService
   companionService: CompanionService
-  missionService: MissionService
   sessionService: TerminalService
 }) {
-  const { panelService, notificationService, companionService, missionService, sessionService } =
+  const { panelService, notificationService, companionService, sessionService } =
     deps
 
   // Panel IPC
@@ -47,8 +45,6 @@ export function registerPanelHandlers(deps: {
     const active = terminals.find((t) => t.state === "active")
     if (active) sessionService.write(active.id, text + "\n")
   })
-  ipcMain.on("companion:mission-stop", (_e, id: string) => missionService.stop(id))
-  ipcMain.on("companion:mission-pause", (_e, id: string) => missionService.pause(id))
 
   // Notification IPC
   ipcMain.handle("notification:list", () => notificationService.list())

@@ -3,7 +3,7 @@
  * structured stream. Side-effect-free fold of an ordered `StreamEvent[]` (the
  * BO-1 transport's output) into render BLOCKS the AgentView renders. Zero React
  * / Electron imports — this is the unit-test seam (cf. src/lib/sessionRow.ts →
- * Sidebar, src/lib/missionRow.ts → MissionsList).
+ * Sidebar).
  *
  * Responsibilities (each acceptance-bearing):
  *  - coalesce consecutive `assistant_delta` into one growing text block, with a

@@ -1,11 +1,9 @@
 import { useState, useCallback, type CSSProperties } from "react"
 import { deriveSessionRow } from "../lib/sessionRow"
 import { formatWaitTime } from "../lib/attentionRow"
-import { goalExcerpt, missionProgress, isMissionDismissable } from "../lib/missionRow"
 import { commitRenameValue } from "../lib/renameValue"
 import type { ResumingRow } from "../lib/resumingList"
 import type { AttentionEntry } from "../hooks/useAttention"
-import type { MissionSummary } from "../hooks/useMissions"
 import type { ScheduleSummary } from "../hooks/useSchedules"
 import type { WorkspaceSummary } from "../hooks/useWorkspaces"
 import WorkspaceSwitcher from "./WorkspaceSwitcher"
@@ -21,11 +19,6 @@ interface Props {
   attentionNow: number
   onJumpAttention: (entry: AttentionEntry) => void
   onDismissAttention: (id: string) => void
-  missions: MissionSummary[]
-  onOpenMission: (m: MissionSummary) => void
-  onDismissMission: (id: string) => void
-  onNewMission: () => void
-  onFocusConductor: (sessionId: string) => void
   // CAPP-114 (SCHED-1) — the SCHEDULED section (pre-filtered to the active workspace).
   schedules: ScheduleSummary[]
   onNewSchedule: () => void
@@ -45,8 +38,8 @@ interface Props {
   onStopResuming: (key: string, sessionId: string, terminalId: string) => void
   onDismissResuming: (key: string) => void
   // WS-D/H — the workspace area (header + pill dropdown + active-workspace
-  // controls, top of the sidebar). The sections above (NEEDS YOU / MISSIONS /
-  // SESSIONS) are pre-filtered to the active workspace by App.tsx; `workspaceScoped`
+  // controls, top of the sidebar). The sections above (NEEDS YOU / SESSIONS) are
+  // pre-filtered to the active workspace by App.tsx; `workspaceScoped`
   // tells us a SPECIFIC workspace is active so a filtered-empty section can show a
   // quiet hint instead of the bare "(none)" empty state.
   workspaces: WorkspaceSummary[]
@@ -87,7 +80,6 @@ function entryLabel(entry: AttentionEntry, sessions: SessionRow[]): string {
 export default function Sidebar({
   sessions, activeSessionId,
   attentionEntries, attentionNow, onJumpAttention, onDismissAttention,
-  missions, onOpenMission, onDismissMission, onNewMission, onFocusConductor,
   schedules, onNewSchedule, onOpenSchedule, onToggleSchedule, onRunSchedule,
   onNewSession, onKillSession, onKillSessionById, onSelectSession, onRenameSession,
   resumingRows, onFocusResuming, onStopResuming, onDismissResuming,
@@ -188,7 +180,7 @@ export default function Sidebar({
               className={`attention-item tier-${entry.tier}`}
               style={{ "--i": i } as CSSProperties}
               onClick={() => onJumpAttention(entry)}
-              title={entry.missionId ? "Open mission dashboard" : "Jump to this terminal"}
+              title="Jump to this terminal"
             >
               <div className="attention-item-line1">
                 <span className="attention-dot" />
@@ -209,84 +201,6 @@ export default function Sidebar({
           ))}
         </div>
       )}
-
-      <div className="sidebar-section missions-section">
-        <div className="sidebar-header missions-header">
-          <span>{missions.length > 0 ? `MISSIONS (${missions.length})` : "MISSIONS"}</span>
-          <button
-            className="missions-new-btn"
-            title="Start a new mission"
-            aria-label="Start a new mission"
-            onClick={(e) => { e.stopPropagation(); onNewMission() }}
-          >
-            +
-          </button>
-        </div>
-        {missions.length === 0 && (
-          workspaceScoped ? (
-            <div className="sidebar-scoped-empty">Nothing in this workspace</div>
-          ) : (
-            <div className="mission-empty-row" onClick={onNewMission}>
-              No missions — start one
-            </div>
-          )
-        )}
-        {missions.map((m, i) => {
-            const { done, total, pct } = missionProgress(m.tasks)
-            const workerCount = m.workers?.length ?? 0
-            const dismissable = isMissionDismissable(m.status as any)
-            return (
-              <div
-                key={m.id}
-                className="mission-item"
-                style={{ "--i": i } as CSSProperties}
-                onClick={() => onOpenMission(m)}
-                title="Open mission dashboard"
-              >
-                <div className="mission-item-line1">
-                  <span className={`mission-status-chip chip-${m.status}`}>{m.status}</span>
-                  <span className="mission-goal">{goalExcerpt(m.goal)}</span>
-                  {m.conductorSessionId && (
-                    <button
-                      className="mission-conductor-btn"
-                      title="Focus Conductor session"
-                      aria-label="Focus Conductor session"
-                      onClick={(e) => { e.stopPropagation(); onFocusConductor(m.conductorSessionId!) }}
-                    >
-                      ⟳
-                    </button>
-                  )}
-                  {dismissable && (
-                    <button
-                      className="mission-dismiss-btn"
-                      title="Dismiss mission"
-                      aria-label="Dismiss mission"
-                      onClick={(e) => { e.stopPropagation(); onDismissMission(m.id) }}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-                <div className="mission-item-line2">
-                  <span className="mission-progress-text">
-                    {total > 0 ? `${done}/${total} tasks` : "no tasks yet"}
-                  </span>
-                  {total > 0 && (
-                    <span className="mission-progress-bar">
-                      <span
-                        className="mission-progress-fill"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </span>
-                  )}
-                  {workerCount > 0 && (
-                    <span className="mission-worker-count">· {workerCount}w</span>
-                  )}
-                </div>
-              </div>
-            )
-        })}
-      </div>
 
       <SchedulesList
         schedules={schedules}

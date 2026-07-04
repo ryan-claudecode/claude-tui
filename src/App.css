@@ -105,10 +105,9 @@
      fall back inline elsewhere but declaring them keeps the look consistent. */
   --radius-1: 6px;
   --radius-2: 8px;
-  /* WS2 — `--accent-fg` (text on an accent-filled control, e.g. the worktree-review
-     Approve button) + `--slow` (a slow transition duration, e.g. the progress-bar
-     fill) were referenced-but-undeclared, relying on inline fallbacks. Declared here
-     for completeness so the tokens are real. */
+  /* WS2 — `--accent-fg` (text on an accent-filled control) + `--slow` (a slow
+     transition duration, e.g. the progress-bar fill) were referenced-but-undeclared,
+     relying on inline fallbacks. Declared here for completeness so the tokens are real. */
   --accent-fg: #fff;
   --slow: 360ms;
 
@@ -329,11 +328,7 @@ body {
 .stat-title,
 .log-title,
 .progress-title,
-.heatmap-title,
-.mission-task-title,
-.wtr-title,
-.mission-prompt-title,
-.missions-list-title {
+.heatmap-title {
   font-family: var(--font-display);
   letter-spacing: -0.2px;
 }
@@ -383,10 +378,6 @@ body {
   .cmdk-panel,
   .shortcuts-overlay,
   .shortcuts-panel,
-  .mission-prompt-overlay,
-  .mission-prompt-panel,
-  .missions-list-overlay,
-  .missions-list-panel,
   .workspace-create-overlay,
   .workspace-create-panel,
   .restore-convo-overlay,
@@ -425,7 +416,6 @@ body {
 
   /* M1 — sidebar row entrance stagger: no rise, no per-row delay. */
   .attention-item,
-  .mission-item,
   .sessions-section .session-item {
     animation: none;
     animation-delay: 0ms;
@@ -442,8 +432,6 @@ body {
 /* Sidebar interactive rows and action links */
 .sidebar-action:focus-visible,
 .attention-item:focus-visible,
-.mission-item:focus-visible,
-.mission-empty-row:focus-visible,
 .session-item:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -452,9 +440,6 @@ body {
 
 /* Icon-only sidebar buttons */
 .attention-dismiss:focus-visible,
-.missions-new-btn:focus-visible,
-.mission-conductor-btn:focus-visible,
-.mission-dismiss-btn:focus-visible,
 .resuming-stop:focus-visible,
 .resuming-dismiss:focus-visible,
 .session-kill-btn:focus-visible {
@@ -485,24 +470,6 @@ body {
 
 /* ShortcutsHelp close */
 .shortcuts-close:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  border-radius: var(--r-sm);
-}
-
-/* MissionPrompt / MissionsList overlay buttons */
-.mission-prompt-close:focus-visible,
-.missions-list-close:focus-visible,
-.mission-prompt-opt:focus-visible,
-.mission-prompt-cancel:focus-visible,
-.mission-prompt-start:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  border-radius: var(--r-sm);
-}
-
-/* MissionsList action buttons */
-.missions-list-actions button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-radius: var(--r-sm);
@@ -1037,14 +1004,13 @@ body {
    never stacks a long wait. Quick (0.2s) + small (30ms steps), restraint over
    flash. Suppressed under reduced-motion (below). */
 .attention-item,
-.mission-item,
 .sessions-section .session-item {
   animation: block-rise 0.2s var(--ease-out) both;
   animation-delay: calc(min(var(--i, 0), 7) * 30ms);
 }
 
 /* "NEEDS YOU" attention queue — pinned at the top of the sidebar (below the
-   workspace switcher pill, above MISSIONS), absent when empty. Quiet by design:
+   workspace switcher pill), absent when empty. Quiet by design:
    tier-tinted rows, a left accent edge, hover reveals dismiss. */
 .attention-section {
   flex-shrink: 0;
@@ -1108,153 +1074,6 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* "MISSIONS (n)" section — between NEEDS YOU and SESSIONS.
-   Status chip colors reuse --attn-* tokens (no new palette entries):
-     running → accent, paused/blocked → attn-2 gold, done → attn-3 sage,
-     planning/stopped → text-3 muted. Hover reveals secondary icons. */
-.missions-section { flex-shrink: 0; }
-
-.missions-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--s-1) var(--s-4) var(--s-2);
-  font-family: var(--font-display);
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text-3);
-  letter-spacing: 0.9px;
-  text-transform: uppercase;
-}
-
-.missions-new-btn {
-  background: none;
-  border: none;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 15px;
-  line-height: 1;
-  padding: 0 2px;
-  transition: color var(--fast) var(--ease);
-  -webkit-app-region: no-drag;
-}
-.missions-new-btn:hover { color: var(--accent-bright); }
-
-.mission-item {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin: 2px var(--s-2);
-  padding: 7px 10px;
-  cursor: pointer;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
-}
-.mission-item:hover { background: var(--bg-4); }
-
-.mission-item-line1 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.mission-goal {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  color: var(--text-1);
-}
-
-/* Status chip — small pill with tier-colored fill */
-.mission-status-chip {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--bg-4);
-  color: var(--text-3);
-}
-.mission-status-chip.chip-running  { background: var(--accent-soft); color: var(--accent); }
-.mission-status-chip.chip-planning { background: var(--bg-4); color: var(--text-3); }
-.mission-status-chip.chip-paused   { background: var(--attn-2-soft); color: var(--attn-2); }
-.mission-status-chip.chip-blocked  { background: var(--attn-2-soft); color: var(--attn-2); }
-.mission-status-chip.chip-done     { background: var(--attn-3-soft); color: var(--attn-3); }
-.mission-status-chip.chip-stopped  { background: var(--bg-4); color: var(--text-4); }
-
-/* Hover-revealed secondary icons */
-.mission-conductor-btn,
-.mission-dismiss-btn {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  opacity: 0;
-  transition: opacity var(--fast) var(--ease), color var(--fast) var(--ease);
-  flex-shrink: 0;
-}
-.mission-item:hover .mission-conductor-btn,
-.mission-item:hover .mission-dismiss-btn { opacity: 1; }
-.mission-conductor-btn:hover { color: var(--accent); }
-.mission-dismiss-btn:hover   { color: var(--text-1); }
-/* When both are present, dismiss should appear to the right of conductor */
-.mission-conductor-btn { margin-left: auto; }
-.mission-dismiss-btn   { margin-left: 2px; }
-
-.mission-empty-row {
-  padding: var(--s-1) var(--s-4);
-  color: var(--text-4);
-  font-size: 12px;
-  font-style: italic;
-  cursor: pointer;
-}
-.mission-empty-row:hover { background: var(--bg-4); }
-
-.mission-item-line2 {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding-left: 2px;
-}
-
-.mission-progress-text {
-  font-size: 11px;
-  color: var(--text-3);
-  white-space: nowrap;
-}
-
-.mission-worker-count {
-  font-size: 11px;
-  color: var(--text-4);
-  white-space: nowrap;
-}
-
-/* Thin progress bar (matches the two-line row design) */
-.mission-progress-bar {
-  flex: 1;
-  height: 3px;
-  background: var(--bg-4);
-  border-radius: 2px;
-  overflow: hidden;
-  min-width: 24px;
-  max-width: 72px;
-}
-.mission-progress-fill {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-  border-radius: 2px;
-  transition: width var(--med) var(--ease);
 }
 
 .sidebar-section {
@@ -1362,9 +1181,8 @@ body {
   background: currentColor; flex-shrink: 0;
 }
 
-/* Hover-revealed ✕ on a session row — mirrors the mission-dismiss ✕, but goes to
-   the kill-red on hover since it destroys the session (same affordance as the
-   "Kill session" action's red). */
+/* Hover-revealed ✕ on a session row — goes to the kill-red on hover since it
+   destroys the session (same affordance as the "Kill session" action's red). */
 .session-kill-btn {
   margin-left: auto;
   background: none;
@@ -5688,285 +5506,6 @@ body {
   );
 }
 
-/* Mission orchestration dashboard panel */
-.mission-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-}
-.mission-header {
-  padding: var(--s-4);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.mission-goal {
-  font-size: 14px;
-  font-weight: 650;
-  color: var(--text-0);
-  margin-bottom: var(--s-2);
-}
-.mission-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  font-size: 11px;
-  margin-bottom: var(--s-3);
-}
-.mission-status {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: var(--r-sm, 4px);
-  background: var(--bg-4);
-  color: var(--text-2);
-}
-.mission-status-running { background: var(--green-soft); color: var(--green); }
-.mission-status-paused { background: var(--accent-soft); color: var(--yellow); }
-.mission-status-blocked,
-.mission-status-stopped { background: var(--red-soft); color: var(--red); }
-.mission-status-done { background: var(--green-soft); color: var(--green); }
-.mission-autonomy { color: var(--text-3); }
-.mission-progress { color: var(--text-2); margin-left: auto; font-variant-numeric: tabular-nums; }
-.mission-controls { display: flex; gap: var(--s-2); }
-.mission-controls button {
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: var(--r-sm, 4px);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-3);
-  color: var(--text-1);
-  cursor: pointer;
-}
-.mission-controls button:hover { background: var(--bg-4); }
-.mission-tasks {
-  flex-shrink: 0;
-  max-height: 40%;
-  overflow-y: auto;
-  padding: var(--s-2) 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.mission-task {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-2);
-  padding: 3px var(--s-4);
-}
-.mission-task-dot {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  align-self: center;
-}
-.mission-task-body { flex: 1; min-width: 0; }
-.mission-task-title { font-size: 12px; color: var(--text-1); }
-.mission-task-result { font-size: 11px; color: var(--text-3); }
-.mission-task-status {
-  flex-shrink: 0;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-4);
-}
-/* WW-2b — distinct chips for isolated-worker review states. Amber for
-   "review needed", red-tinted for an unresolved merge conflict. */
-.mission-task-status-awaiting-review {
-  color: var(--attn-1);
-  background: var(--attn-1-soft);
-  padding: 1px 6px;
-  border-radius: var(--r-sm, 4px);
-  font-weight: 700;
-}
-.mission-task-status-merge-conflict {
-  color: var(--red);
-  background: var(--red-soft);
-  padding: 1px 6px;
-  border-radius: var(--r-sm, 4px);
-  font-weight: 700;
-}
-.mission-task-conflict {
-  font-size: 11px;
-  color: var(--red);
-  margin-top: 2px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.mission-workers {
-  flex-shrink: 0;
-  padding: var(--s-2) var(--s-4);
-  font-size: 11px;
-  color: var(--text-3);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.mission-log {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--s-2) 0;
-  font-family: var(--mono, "Cascadia Code", monospace);
-  font-size: 11px;
-  line-height: 1.5;
-}
-.mission-log-line {
-  padding: 1px var(--s-4);
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-2);
-  border-left: 2px solid transparent;
-}
-.mission-log-time { color: var(--text-4); font-variant-numeric: tabular-nums; }
-.mission-log-error { border-left-color: var(--red); color: var(--red); }
-.mission-log-review { border-left-color: var(--yellow); }
-.mission-log-worker { border-left-color: var(--accent-bright); }
-.mission-log-commit { border-left-color: var(--green); }
-.mission-log-pause { border-left-color: var(--yellow); }
-
-/* WW-2b — Worktree review panel (isolated-worker diff + approve/reject) */
-.worktree-review-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-.wtr-header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-3);
-  padding: var(--s-3) var(--s-4);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.wtr-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-1);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wtr-status {
-  flex-shrink: 0;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: var(--r-sm, 4px);
-  background: var(--attn-1-soft);
-  color: var(--attn-1);
-}
-.wtr-status-merge-conflict { background: var(--red-soft); color: var(--red); }
-.wtr-status-done { background: var(--green-soft); color: var(--green); }
-.wtr-status-pending { background: var(--bg-4); color: var(--text-3); }
-.wtr-conflict {
-  flex-shrink: 0;
-  padding: var(--s-3) var(--s-4);
-  background: var(--red-soft);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.wtr-conflict-head {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--red);
-  margin-bottom: var(--s-2);
-}
-.wtr-conflict-detail {
-  margin: 0;
-  font-family: var(--mono, "Cascadia Code", monospace);
-  font-size: 11px;
-  color: var(--text-2);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 160px;
-  overflow-y: auto;
-}
-.wtr-conflict-note {
-  margin-top: var(--s-2);
-  font-size: 11px;
-  color: var(--text-3);
-}
-.wtr-diff {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.wtr-error {
-  flex-shrink: 0;
-  padding: var(--s-2) var(--s-4);
-  font-size: 12px;
-  color: var(--red);
-  background: var(--red-soft);
-  border-top: 1px solid var(--border-subtle);
-}
-.wtr-actions {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-3) var(--s-4);
-  border-top: 1px solid var(--border-subtle);
-}
-.wtr-reject-form {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  width: 100%;
-}
-.wtr-reject-reason {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--text-1);
-  background: var(--bg-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm, 4px);
-}
-.wtr-reject-reason:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.wtr-btn {
-  flex-shrink: 0;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 14px;
-  border-radius: var(--r-sm, 4px);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-3);
-  color: var(--text-1);
-  cursor: pointer;
-  transition: background var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
-}
-.wtr-btn:hover:not(:disabled) { background: var(--bg-4); }
-.wtr-btn:disabled { opacity: 0.55; cursor: default; }
-.wtr-btn-approve {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-fg, #fff);
-}
-.wtr-btn-approve:hover:not(:disabled) {
-  background: var(--accent-bright);
-  box-shadow: 0 0 12px var(--accent-glow);
-}
-.wtr-btn-reject {
-  color: var(--red);
-  border-color: var(--red);
-}
-.wtr-btn-reject:hover:not(:disabled) { background: var(--red-soft); }
-.wtr-resolved {
-  flex-shrink: 0;
-  padding: var(--s-3) var(--s-4);
-  font-size: 12px;
-  color: var(--text-2);
-  border-top: 1px solid var(--border-subtle);
-}
-
 /* CAPP-94 / U6 — the workspace-memory EDITOR panel (companion window). Sectioned,
    editable; modeled on .overview-panel + .recall-panel. Sand & Stone tokens; every
    control statically visible (no hover-reveal). */
@@ -6241,158 +5780,9 @@ body {
 .overview-push-status { font-size: 11.5px; color: var(--green); }
 .overview-push-status.error { color: var(--red); }
 
-/* Mission start prompt overlay */
-.mission-prompt-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 2000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--s-5);
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  animation: drop-fade 0.12s var(--ease-out);
-}
-
-.mission-prompt-panel {
-  width: 520px;
-  max-width: calc(100vw - 48px);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-  padding: var(--s-4);
-  background: var(--bg-1);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-3), 0 0 0 1px var(--accent-soft);
-  animation: cmdk-pop 0.16s var(--ease-out);
-}
-
-.mission-prompt-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.mission-prompt-title {
-  font-size: 14px;
-  font-weight: 650;
-  color: var(--text-0);
-  letter-spacing: 0.01em;
-}
-
-.mission-prompt-close {
-  background: transparent;
-  border: none;
-  color: var(--text-3);
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 4px;
-  transition: color var(--fast) var(--ease);
-}
-.mission-prompt-close:hover { color: var(--text-0); }
-
-.mission-prompt-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
-  font-weight: 650;
-  margin-top: var(--s-2);
-}
-
-.mission-prompt-input {
-  width: 100%;
-  resize: vertical;
-  padding: var(--s-2);
-  font: inherit;
-  font-size: 13px;
-  color: var(--text-0);
-  background: var(--bg-1);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
-  outline: none;
-  transition: border-color var(--fast) var(--ease);
-}
-.mission-prompt-input:focus { border-color: var(--accent); }
-
-.mission-prompt-autonomy {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-1);
-}
-
-.mission-prompt-opt {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: var(--s-2);
-  text-align: left;
-  background: var(--bg-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  cursor: pointer;
-  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
-}
-.mission-prompt-opt:hover { border-color: var(--border-strong); }
-.mission-prompt-opt.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.mission-prompt-opt-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-0);
-}
-.mission-prompt-opt-hint {
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-.mission-prompt-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--s-2);
-  margin-top: var(--s-3);
-}
-
-.mission-prompt-cancel,
-.mission-prompt-start {
-  padding: var(--s-2) var(--s-4);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  border-radius: var(--r-md);
-  cursor: pointer;
-  border: 1px solid var(--border-strong);
-  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
-}
-.mission-prompt-cancel {
-  background: transparent;
-  color: var(--text-2);
-}
-.mission-prompt-cancel:hover { color: var(--text-0); border-color: var(--text-3); }
-.mission-prompt-start {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg-0);
-}
-.mission-prompt-start:hover { filter: brightness(1.08); }
-.mission-prompt-start:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  filter: none;
-}
-
 /* ============================================================
    CAPP-114 (SCHED-1) — SCHEDULED sidebar section + create/edit overlay.
-   Clones the MISSIONS row + mission-prompt overlay patterns. Every per-row
-   control is STATICALLY VISIBLE (opacity 1, no hover-reveal).
+   Every per-row control is STATICALLY VISIBLE (opacity 1, no hover-reveal).
    ============================================================ */
 .schedules-section { flex-shrink: 0; }
 
@@ -6626,7 +6016,7 @@ body {
 .sched-run-dur { font-size: 11px; color: var(--text-4); margin-left: auto; font-variant-numeric: tabular-nums; }
 .sched-run-note { font-size: 11px; color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
 
-/* --- create/edit overlay (clones the mission-prompt overlay) --- */
+/* --- create/edit overlay --- */
 .schedule-form-overlay {
   position: fixed;
   inset: 0;
@@ -6801,11 +6191,10 @@ body {
 
 /* ============================================================
    CAPP-93 / U5 — Delete-time Keep/trim/edit modal (main window)
-   Blocking tier-1 gate. Clones the mission-prompt full-screen overlay
-   idiom: dimmed backdrop, centered warm card. The editable findings
-   list models WorktreeReviewPanel's captured-list + per-row controls;
-   every control (checkbox, edit input, Remove, footer buttons) is
-   STATICALLY visible — no hover-reveal (hard project UI rule).
+   Blocking tier-1 gate: dimmed backdrop, centered warm card. The editable
+   findings list has per-row controls; every control (checkbox, edit input,
+   Remove, footer buttons) is STATICALLY visible — no hover-reveal (hard
+   project UI rule).
    ============================================================ */
 .kill-modal-overlay {
   position: fixed;
@@ -7010,7 +6399,7 @@ body {
   position: fixed;
   inset: 0;
   /* z-index 2100 (matching .kill-modal-overlay) so a panel/form modal wins over the
-     z-2000 overlays (command palette, shortcuts, mission prompt) — equal z-index let
+     z-2000 overlays (command palette, shortcuts) — equal z-index let
      their focus traps fight (CAPP-109 review). */
   z-index: 2100;
   display: flex;
@@ -7147,8 +6536,8 @@ body {
 
 /* ============================================================
    WS-D — Create-workspace modal (main window)
-   Mirrors the mission-prompt overlay idiom: dimmed backdrop, warm
-   rounded soft-shadowed panel, name input + folder chips + actions.
+   Dimmed backdrop, warm rounded soft-shadowed panel, name input + folder
+   chips + actions.
    ============================================================ */
 .workspace-create-overlay {
   position: fixed;
@@ -7483,132 +6872,6 @@ body {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
-
-/* Missions list overlay — browse all missions */
-.missions-list-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 2000;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 10vh var(--s-5) var(--s-5);
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  animation: drop-fade 0.12s var(--ease-out);
-}
-
-.missions-list-panel {
-  width: 620px;
-  max-width: calc(100vw - 48px);
-  max-height: 70vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-1);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-3), 0 0 0 1px var(--accent-soft);
-  overflow: hidden;
-}
-
-.missions-list-header {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-3) var(--s-4);
-  border-bottom: 1px solid var(--border);
-}
-
-.missions-list-title { font-weight: 600; color: var(--text-1); }
-.missions-list-count {
-  font-size: 11px;
-  color: var(--text-2);
-  background: var(--bg-3);
-  border-radius: 999px;
-  padding: 1px 8px;
-  font-variant-numeric: tabular-nums;
-}
-.missions-list-close {
-  margin-left: auto;
-  border: none;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-}
-.missions-list-close:hover { color: var(--text-1); }
-
-.missions-list-empty {
-  padding: var(--s-5);
-  text-align: center;
-  color: var(--text-3);
-  font-size: 13px;
-}
-
-.missions-list-rows { overflow-y: auto; }
-
-.missions-list-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  padding: var(--s-3) var(--s-4);
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-}
-.missions-list-row:last-child { border-bottom: none; }
-.missions-list-row:hover { background: var(--accent-soft); }
-
-.missions-list-status {
-  flex-shrink: 0;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--bg-3);
-  color: var(--text-2);
-}
-.missions-list-status-planning { background: var(--accent-soft); color: var(--accent-bright); }
-.missions-list-status-running { background: var(--green-soft); color: var(--green); }
-.missions-list-status-paused { background: var(--accent-soft); color: var(--yellow); }
-.missions-list-status-blocked,
-.missions-list-status-stopped,
-.missions-list-status-failed { background: var(--red-soft); color: var(--red); }
-.missions-list-status-done { background: var(--green-soft); color: var(--green); }
-
-.missions-list-body { flex: 1; min-width: 0; }
-.missions-list-goal {
-  color: var(--text-1);
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.missions-list-sub {
-  display: flex;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-3);
-  margin-top: 2px;
-}
-
-.missions-list-actions {
-  display: flex;
-  gap: var(--s-1);
-  flex-shrink: 0;
-}
-.missions-list-actions button {
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: var(--r-sm, 4px);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-3);
-  color: var(--text-1);
-  cursor: pointer;
-}
-.missions-list-actions button:hover { background: var(--bg-2); }
 
 /* ============================================================
    Companion window

@@ -71,8 +71,7 @@ export interface PublicWorkspace {
 
 /**
  * WS-B — the service-level event seam for active-workspace changes. Callback-set
- * style, mirroring {@link MissionService.onEvent} (the `mission:updated` push):
- * `ipc.ts` registers a callback that forwards each event to the renderer over the
+ * style: `ipc.ts` registers a callback that forwards each event to the renderer over the
  * `workspace:active-changed` IPC channel. Keeping `BrowserWindow` out of this
  * service (no `setMainWindow`) keeps it testable — a test asserts the event by
  * subscribing directly, with no Electron window.
@@ -178,7 +177,7 @@ export class WorkspaceService {
   private workspaces = new Map<string, Workspace>()
   private activeWorkspaceId: string | null = null
   private sessionService: TerminalService
-  /** WS-B — active-changed subscribers (callback-set, like MissionService). */
+  /** WS-B — active-changed subscribers (callback-set). */
   private activeListeners = new Set<(e: WorkspaceActiveChangedEvent) => void>()
   /**
    * WS-G (G3) — a user-visible notification seam (set in ipc.ts to
@@ -260,8 +259,7 @@ export class WorkspaceService {
     saveVersioned(this.file, SCHEMA_VERSION, reg)
   }
 
-  /** Reuse the same id-minting scheme as MissionService — time + random suffix.
-   *  No uuid dependency is added. */
+  /** Time + random suffix id-minting. No uuid dependency is added. */
   private mintId(): string {
     return `ws-${this.now()}-${Math.random().toString(36).slice(2, 8)}`
   }
@@ -292,8 +290,8 @@ export class WorkspaceService {
 
   /**
    * WS-B — subscribe to active-workspace changes. Returns an unsubscribe fn.
-   * Mirrors {@link MissionService.onEvent}: `ipc.ts` registers one callback that
-   * forwards every event to the renderer over `workspace:active-changed`.
+   * `ipc.ts` registers one callback that forwards every event to the renderer
+   * over `workspace:active-changed`.
    */
   onActiveChanged(cb: (e: WorkspaceActiveChangedEvent) => void): () => void {
     this.activeListeners.add(cb)

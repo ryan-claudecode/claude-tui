@@ -18,7 +18,7 @@ interface Props {
 
 /**
  * CAPP-93 / U5 — the delete-time Keep/trim/edit gate. A MAIN-window BLOCKING modal
- * (clones the mission-prompt full-screen overlay: dimmed backdrop, centered card,
+ * (a full-screen overlay: dimmed backdrop, centered card,
  * role="dialog" aria-modal, Esc = Cancel, focus-trapped) raised when the user kills a
  * session (Ctrl+K / sidebar ✕ / palette). It replaces the old `window.confirm`.
  *

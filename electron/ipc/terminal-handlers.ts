@@ -88,8 +88,8 @@ export function registerTerminalHandlers(deps: {
       // QUEUED unread — so a "sent" message would silently buffer and look lost
       // (the dogfooding bug). The renderer disables Send on the same busy signal
       // and keeps the text in the composer; this is the backend safety net. (Only
-      // the COMPOSER path is gated — mission/handoff inject via
-      // TerminalService.write/sendAgentMessage directly and are unaffected.)
+      // the COMPOSER path is gated — handoff injects via
+      // TerminalService.write/sendAgentMessage directly and is unaffected.)
       if (sessionService.hasPendingPermission(terminalId)) return
       sessionService.sendAgentMessage(terminalId, agentMessageFromInput(msg ?? {}))
     },

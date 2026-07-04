@@ -16,7 +16,7 @@ import type { ShellService } from "../services/shell"
  *   • `local-history:reveal`   → reveal `<rootDir>/.local-history` in Explorer/Finder.
  *
  * The snapshot/restore git work runs in the isolated `.local-history` repo ONLY —
- * never the project repo or any worktree (path-separation invariant).
+ * never the project repo (path-separation invariant).
  */
 export function registerLocalHistoryHandlers(deps: {
   localHistoryService: LocalHistoryService

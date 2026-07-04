@@ -34,7 +34,7 @@ function toLocalInput(iso: string | undefined): string {
 
 /**
  * CAPP-114 (SCHED-1) — the renderer-local create/edit overlay for a scheduled run.
- * Cloned from the MissionPrompt overlay pattern (NOT PanelService show_form, which
+ * A focus-trapped full-screen overlay (NOT PanelService show_form, which
  * is agent-driven and holds an MCP promise). Every control is statically visible.
  */
 export default function ScheduleForm({ open, editing, onClose, onSubmit, onDelete }: Props) {

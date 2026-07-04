@@ -15,10 +15,8 @@ import LogPanel from "./LogPanel"
 import ProgressPanel from "./ProgressPanel"
 import CodePanel from "./CodePanel"
 import HeatmapPanel from "./HeatmapPanel"
-import MissionPanel from "./MissionPanel"
 import SessionOverviewPanel from "./SessionOverviewPanel"
 import RecallPanel from "./RecallPanel"
-import WorktreeReviewPanel from "./WorktreeReviewPanel"
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel"
 import ContextInspectorPanel from "./ContextInspectorPanel"
 import SchedulePanel from "./SchedulePanel"
@@ -31,10 +29,9 @@ import type { PanelApi } from "../../lib/panelApi"
  * since-retired PanelDrawer (removed in CAPP-112), and the would-be modal.
  *
  * The contract is `(panel, api)` where `api: PanelApi` is ONE behavior object the
- * switch derives EVERY callback it threads from (this folds the six callbacks the
- * companion used to thread inline — onSendToSession / onMissionStop / onMissionPause
- * / onApproveWorktree / onRejectWorktree, plus the #19-23 panel-internal accessors —
- * into `api`, dropping NONE of them). Each caller builds a `PanelApi` over its native
+ * switch derives EVERY callback it threads from (this folds the callbacks the
+ * companion used to thread inline — onSendToSession, plus the panel-internal
+ * accessors — into `api`, dropping NONE of them). Each caller builds a `PanelApi` over its native
  * bridge (companion → window.companionApi; modal → window.api). `api` is optional so a
  * harness can render a static panel without a bridge; the behavior panels degrade
  * gracefully when it's absent (e.g. RecallPanel's A.4 negative control).
@@ -54,8 +51,8 @@ export const PANEL_LABELS: Record<string, string> = {
   table: "Table", test: "Tests", chart: "Chart", tree: "Tree",
   timeline: "Timeline", git: "Git", kanban: "Kanban", notes: "Notes",
   stat: "Stats", log: "Log", progress: "Progress", code: "Code",
-  heatmap: "Heatmap", mission: "Mission", "session-overview": "Overview",
-  "worktree-review": "Review", recall: "Recall", "workspace-memory": "Memory",
+  heatmap: "Heatmap", "session-overview": "Overview",
+  recall: "Recall", "workspace-memory": "Memory",
   "context-inspector": "Context", schedule: "Schedule",
 }
 
@@ -67,9 +64,6 @@ export function tabLabel(p: PanelLike): string {
   const base = PANEL_LABELS[p.type] ?? p.type
   if (p.type === "session-overview" && typeof p.props?.name === "string" && p.props.name) {
     return p.props.name
-  }
-  if (p.type === "worktree-review" && typeof p.props?.title === "string" && p.props.title) {
-    return `Review: ${p.props.title}`
   }
   if (p.type === "workspace-memory" && typeof p.props?.workspaceName === "string" && p.props.workspaceName) {
     return `Memory: ${p.props.workspaceName}`
@@ -126,14 +120,6 @@ export default function PanelContent({ panel, api }: PanelContentProps) {
       return <CodePanel {...panel.props} />
     case "heatmap":
       return <HeatmapPanel {...(panel.props as any)} />
-    case "mission":
-      return (
-        <MissionPanel
-          {...panel.props}
-          onStop={api?.missionStop}
-          onPause={api?.missionPause}
-        />
-      )
     case "session-overview":
       return <SessionOverviewPanel {...(panel.props as any)} api={api} />
     case "recall":
@@ -153,25 +139,6 @@ export default function PanelContent({ panel, api }: PanelContentProps) {
           // A confirmed delete closes THIS panel (by its PANEL id, not the schedule
           // id) — never a zombie panel over a dead schedule's stale snapshot.
           onClosePanel={api ? () => api.hidePanel(panel.id) : undefined}
-        />
-      )
-    case "worktree-review":
-      return (
-        <WorktreeReviewPanel
-          {...panel.props}
-          onSend={api?.sendToSession}
-          // Swallow IPC failures to null so the panel shows its inline error state
-          // rather than rejecting the click handler (P0-5 — never silent).
-          onApprove={
-            api
-              ? (m, t) => api.approveWorktreeTask(m, t).catch(() => null)
-              : undefined
-          }
-          onReject={
-            api
-              ? (m, t, reason) => api.rejectWorktreeTask(m, t, reason).catch(() => null)
-              : undefined
-          }
         />
       )
     default:

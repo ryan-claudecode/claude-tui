@@ -302,7 +302,7 @@ export interface TerminalInfo {
    * async config load and left structured sessions blank). The backend is the
    * source of truth — see `create()` vs `createHeadless()`.
    *
-   * Optional so test mocks of the mission SessionDriver (which returns TerminalInfo
+   * Optional so test mocks of the SessionDriver (which returns TerminalInfo
    * and never reads engine) need no churn; the REAL producers — create(),
    * createHeadless(), list() — always set it, and an absent value resolves to the
    * "xterm" default in the renderer.
@@ -1665,8 +1665,8 @@ export class TerminalService {
     entry.proc.write(JSON.stringify(msg) + "\n")
     // BO-4b — echo the user's own message onto the SAME stream seam so AgentView
     // renders a two-sided conversation (Claude never echoes the user turn back as
-    // text). Emitted for EVERY input path (composer, broadcast, mission, waitForIdle
-    // inject) since they all funnel through here. Empty/whitespace-only messages
+    // text). Emitted for EVERY input path (composer, waitForIdle inject,
+    // scheduler) since they all funnel through here. Empty/whitespace-only messages
     // (e.g. an attachment-only send) don't add a blank bubble.
     const text = msg.message.content
       .map((c) => (c.type === "text" ? c.text : ""))
@@ -2282,9 +2282,8 @@ export class TerminalService {
     const now = Date.now()
     // BO-4a — structured terminals run the SAME active/idle machine (event-driven
     // instead of output-quiet), so they belong in the activity snapshot too. This
-    // is the big BO-5 review item: get_session_activity AND MissionService's
-    // reapStalledWorkers read getActivity(), so a healthy headless worker would be
-    // seen as "absent => stalled" and reaped without this inclusion.
+    // is the big BO-5 review item: get_session_activity reads getActivity(), so a
+    // healthy headless worker would be seen as "absent => stalled" without this inclusion.
     const ptys = Array.from(this.terminals.values()).map((s) => ({
       id: s.id,
       name: s.name,
@@ -2428,8 +2427,8 @@ export class TerminalService {
 
   write(id: string, data: string): void {
     // BO-5: a structured terminal has no interactive PTY — its stdin is the
-    // stream-json user-message sink. Route legacy write() callers (mission
-    // dispatch, panel input, handoff force-flush) there instead
+    // stream-json user-message sink. Route legacy write() callers (panel
+    // input, handoff force-flush) there instead
     // of a dead PTY. Strip the PTY-only idioms (bracketed-paste markers + a trailing
     // submit CR) so the agent receives clean prompt text. (BO-3 owns the richer
     // user composer on sendAgentMessage; this is the LEGACY write() path only.)

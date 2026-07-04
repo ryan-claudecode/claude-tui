@@ -8,9 +8,8 @@ import { computeNextRun, isDue, type Recurrence } from "./scheduleMath"
 export type { Recurrence } from "./scheduleMath"
 
 /**
- * SCHED-1 (CAPP-114) — the on-device scheduler. Mirrors the MissionService /
- * Supervisor shape: durable one-file-per-schedule state at
- * `~/.claude-tui/schedules/<id>.json`, a single 30s `setInterval` tick, every
+ * SCHED-1 (CAPP-114) — the on-device scheduler: durable one-file-per-schedule
+ * state at `~/.claude-tui/schedules/<id>.json`, a single 30s `setInterval` tick, every
  * mutation routed through `persist()` → one `schedule:updated` event.
  *
  * ALL external effects are behind the injected {@link SchedulerDeps} (terminals,
@@ -242,7 +241,7 @@ export class SchedulerService {
   /** The choke point every mutation routes through: persist + emit exactly once. */
   private persist(s: Schedule): void {
     // Guard against resurrecting a deleted schedule (a late async op capturing a
-    // now-removed `s`). Mirrors MissionService.persist.
+    // now-removed `s`).
     if (!this.schedules.has(s.id)) return
     saveVersioned(join(this.dir, `${s.id}.json`), SCHEMA_VERSION, s)
     this.emitEvent({ type: "updated", schedule: s })

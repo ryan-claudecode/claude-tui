@@ -357,7 +357,7 @@ export default function WorkspaceSwitcher({
               onClick={() => {
                 if (
                   window.confirm(
-                    `Delete the workspace "${active!.name}"? Its sessions and missions are kept (they fall back to All).`,
+                    `Delete the workspace "${active!.name}"? Its sessions are kept (they fall back to All).`,
                   )
                 ) {
                   onDeleteWorkspace(active!.id)

@@ -196,7 +196,7 @@ export interface SessionServiceOpts {
    * (or null/undefined when "All" mode), so a session minted while a workspace is
    * active is stamped with it. Injected as a callback (not the WorkspaceService
    * itself) to keep this service decoupled + testable — the same posture
-   * MissionService/AttentionService use for their cross-service deps. `ipc.ts`
+   * AttentionService uses for its cross-service deps. `ipc.ts`
    * wires it to `workspaceService.getActiveId()`. Absent → every session is
    * untagged (the "All" bucket), so existing call sites/tests are unaffected.
    */
@@ -262,7 +262,7 @@ export interface SessionServiceOpts {
 const SCHEMA_VERSION = 1
 const MIGRATIONS: Migration[] = []
 
-/** Cap on a session's durable eventLog (mirrors MissionService's audit-trail cap). */
+/** Cap on a session's durable eventLog audit trail. */
 const MAX_EVENTS = 500
 
 /** The slice of TerminalService the container drives. */

@@ -1,10 +1,9 @@
 import { useState, useEffect } from "react"
 
 // Owns the renderer-only overlay/view toggles (command palette, shortcuts help,
-// history search, mission prompt, missions list, focus/zen mode) and the ui:*
-// IPC listeners that MCP tools use to drive them. Owns the cleanup for exactly the
-// listeners it registers: ui:focus-mode, ui:command-palette, ui:shortcuts-help,
-// ui:history-search.
+// history search, focus/zen mode) and the ui:* IPC listeners that MCP tools use
+// to drive them. Owns the cleanup for exactly the listeners it registers:
+// ui:focus-mode, ui:command-palette, ui:shortcuts-help, ui:history-search.
 //
 // ui:export-log stays in App.tsx with the export-log handler (it closes over the
 // active terminal + session list via a ref), so it is deliberately NOT registered
@@ -13,8 +12,6 @@ export function useOverlays() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [missionPromptOpen, setMissionPromptOpen] = useState(false)
-  const [missionsListOpen, setMissionsListOpen] = useState(false)
   const [zenMode, setZenMode] = useState(false)
 
   // UI control events from MCP tools. A boolean payload sets the state explicitly;
@@ -45,10 +42,6 @@ export function useOverlays() {
     setHelpOpen,
     historyOpen,
     setHistoryOpen,
-    missionPromptOpen,
-    setMissionPromptOpen,
-    missionsListOpen,
-    setMissionsListOpen,
     zenMode,
     setZenMode,
   }

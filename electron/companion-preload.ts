@@ -16,10 +16,6 @@ const companionApi = {
     ipcRenderer.send("panel:form-submit", id, data),
   sendToSession: (text: string) =>
     ipcRenderer.send("companion:send-to-session", text),
-  missionStop: (id: string) =>
-    ipcRenderer.send("companion:mission-stop", id),
-  missionPause: (id: string) =>
-    ipcRenderer.send("companion:mission-pause", id),
   // CAPP-115 (SCHED-2) — schedule detail-panel controls from a POPPED-OUT companion.
   // These invoke the SAME `schedule:*` handlers the main window uses (they're
   // `ipcMain.handle`, so a companion `invoke` reaches them). Edit routes through
@@ -33,13 +29,6 @@ const companionApi = {
   // `panel:hide` invoke the main window uses). PanelService routes panel:hide back to
   // every surface the panel lives on, so the companion's own onPanelHide drops it.
   hidePanel: (panelId: string) => ipcRenderer.invoke("panel:hide", panelId),
-  // WW-2b — worktree review approve/reject. `invoke` (not the fire-and-forget
-  // `send` the mission controls use) so the review panel can reflect the result
-  // (merged → close; conflict → show the preserved-branch conflict state).
-  approveWorktreeTask: (missionId: string, taskId: string) =>
-    ipcRenderer.invoke("worktree:approve", missionId, taskId),
-  rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) =>
-    ipcRenderer.invoke("worktree:reject", missionId, taskId, reason),
   // CAPP-86 — "The Lexicon": read-only cross-session recall, so the RecallPanel
   // (which lives in THIS companion window) can search every finding + summary. Pure
   // reads — they cannot mutate any canonical session file.
@@ -56,8 +45,7 @@ const companionApi = {
     return ipcRenderer.invoke("panel:show", "session-overview", ov, "right")
   },
   // CAPP-94 / U6 — workspace-memory editor accessors. The WorkspaceMemoryPanel lives
-  // in THIS companion window, so it edits via companionApi (mirroring how the WW-2b
-  // approve/reject accessors live here). U3 added these to the MAIN preload only.
+  // in THIS companion window, so it edits via companionApi. U3 added these to the MAIN preload only.
   // A `null` workspaceId addresses the untagged "All" bucket. Every mutator fires the
   // main process's onMemoryChanged seam (invalidates recall + pushes
   // `workspace:memory-changed`), which the panel + CompanionApp live-refresh on.

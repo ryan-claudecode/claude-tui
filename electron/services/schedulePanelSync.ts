@@ -3,7 +3,7 @@
  * detail panels in sync with scheduler mutations, SERVICE-side. After a pop-out the
  * panel leaves the main-window mirror, so usePanels' renderer live-refresh stops
  * driving it and the companion has no `schedule:updated` listener of its own — the
- * same ownership split the CAPP-110 M4 mission block solved. So on each scheduler
+ * same ownership split the CAPP-110 M4 block solved. So on each scheduler
  * event, any tracked window-surface `schedule` panel matching the schedule id (on
  * props.id — panels carry auto-generated panel-N ids) is:
  *
@@ -13,8 +13,8 @@
  *
  * Pure + dependency-injected (a structural PanelService subset) so it tests at the
  * seam with a fake bridge. The ipc.ts caller guards with `companionService.isOpen()`
- * exactly like the mission M4 block, so a background tick can never resurrect a
- * closed companion via update→route→sendToCompanion→getOrCreate.
+ * so a background tick can never resurrect a closed companion via
+ * update→route→sendToCompanion→getOrCreate.
  */
 
 /** The panel fields the sync reads (a structural subset of PanelState). */

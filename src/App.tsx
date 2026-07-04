@@ -32,15 +32,12 @@ import CommandPalette, { Command } from "./components/CommandPalette"
 import ToastHost from "./components/ToastHost"
 import ShortcutsHelp from "./components/ShortcutsHelp"
 import HistorySearch from "./components/HistorySearch"
-import MissionPrompt from "./components/MissionPrompt"
 import ScheduleForm from "./components/ScheduleForm"
-import MissionsList from "./components/MissionsList"
 import WorkspaceCreateModal from "./components/WorkspaceCreateModal"
 import RestoreConversationModal from "./components/RestoreConversationModal"
 import { toast } from "./lib/toast"
 import { useSessions } from "./hooks/useSessions"
 import { useAttention } from "./hooks/useAttention"
-import { useMissions } from "./hooks/useMissions"
 import { useSchedules, type ScheduleSummary, type ScheduleFormInput } from "./hooks/useSchedules"
 import { useWorkspaces } from "./hooks/useWorkspaces"
 import { filterByWorkspace } from "./lib/workspaceFilter"
@@ -237,25 +234,13 @@ declare global {
       onNotificationDismiss: (callback: (id: string) => void) => void
       // Attention queue (AQ-2)
       attentionSeen: (terminalId: string) => Promise<void>
-      attentionSeenMission: (missionId: string) => Promise<void>
       attentionDismiss: (id: string) => Promise<boolean>
       onAttentionUpdated: (callback: (entries: any[]) => void) => void
       onAttentionJump: (callback: (id: string) => void) => void
-      // Mission push events (MS-2 — push not poll)
-      onMissionUpdated: (callback: (mission: any) => void) => void
-      onMissionRemoved?: (callback: (id: string) => void) => void
       onPanelShow: (callback: (panel: PanelState) => void) => void
       onPanelUpdate: (callback: (payload: { id: string; props: any }) => void) => void
       onPanelHide: (callback: (id: string) => void) => void
       onPanelHideAll: (callback: () => void) => void
-      // Missions
-      createMission: (goal: string, cwd: string, autonomy?: string) => Promise<any>
-      listMissions: () => Promise<any[]>
-      getMissionStatus: (id?: string) => Promise<any>
-      stopMission: (id: string) => Promise<any>
-      pauseMission: (id: string) => Promise<any>
-      resumeMission: (id: string) => Promise<any>
-      deleteMission: (id: string) => Promise<boolean>
       // CAPP-114 (SCHED-1) — on-device scheduler
       listSchedules: () => Promise<any[]>
       createSchedule: (input: any) => Promise<any>
@@ -266,10 +251,6 @@ declare global {
       onScheduleRemoved?: (callback: (id: string) => void) => void
       requestScheduleEdit: (id: string) => Promise<void>
       onScheduleEdit?: (callback: (id: string) => void) => void
-      // WW-2b — worktree review
-      approveWorktreeTask: (missionId: string, taskId: string) => Promise<{ status?: string; reviewReason?: string } | null>
-      rejectWorktreeTask: (missionId: string, taskId: string, reason?: string) => Promise<{ status?: string; reviewReason?: string } | null>
-      getReviewTask: (missionId: string, taskId: string) => Promise<{ missionId: string; taskId: string; title: string; diff: string; reviewReason?: string; status?: string } | null>
       removeAllListeners: (channel: string) => void
       getSessionOverview: (sessionId: string) => Promise<any>
       getSessionTimeline: (sessionId: string) => Promise<Array<{ time: number; kind: string; text: string; terminalId?: string }>>
@@ -437,16 +418,9 @@ export default function App() {
   // ACTUAL engine removes that race and fixes split panes in one move. See the
   // `activeTerminals.map` fork and SplitView below.
 
-  // Attention queue: focus an entry's session+terminal (terminal entries), or open
-  // the mission dashboard panel (mission entries carrying missionId). Held in a ref
-  // so the hook's mount-once `attention:jump` listener always calls the latest closure.
+  // Attention queue: focus an entry's session+terminal. Held in a ref so the hook's
+  // mount-once `attention:jump` listener always calls the latest closure.
   const focusEntryRef = useRef<(sessionId: string, terminalId?: string) => void>(() => {})
-  // MS-2: mission attention entries open the dashboard panel. Ref so useAttention's
-  // mount-once handler always calls the latest closure. Set after usePanels is called.
-  const jumpToMissionRef = useRef<((missionId: string) => void) | null>(null)
-  // WW-2b: worktree-review attention entries (carrying a taskId) open the review
-  // panel for that mission+task. Same ref pattern as jumpToMissionRef.
-  const jumpToReviewRef = useRef<((missionId: string, taskId: string) => void) | null>(null)
 
   const focusEntry = useCallback(
     (sessionId: string, terminalId?: string) => {
@@ -464,7 +438,7 @@ export default function App() {
     nowTick: attentionNow,
     dismiss: dismissAttention,
     jumpTo: jumpToAttention,
-  } = useAttention(focusEntryRef, jumpToMissionRef, jumpToReviewRef)
+  } = useAttention(focusEntryRef)
 
   // Spec: focusing a terminal by ANY path (tab click, session select, Alt+N —
   // not just the attention-row jump) counts as attention given and clears its
@@ -607,10 +581,6 @@ export default function App() {
     setHelpOpen,
     historyOpen,
     setHistoryOpen,
-    missionPromptOpen,
-    setMissionPromptOpen,
-    missionsListOpen,
-    setMissionsListOpen,
     zenMode,
     setZenMode,
   } = useOverlays()
@@ -621,13 +591,6 @@ export default function App() {
   // (persisted pref + responsive sub-1400px auto-collapse). Effective `railOpen`
   // drives both the rail render and the `.app` layout class (so the center reflows).
   const { open: railOpen, toggle: toggleRail } = useAgentRail()
-
-  // useMissions must come before usePanels so allMissions can be passed for panel refresh.
-  const {
-    missions: allMissions,
-    visible: visibleMissions,
-    dismiss: dismissMission,
-  } = useMissions()
 
   // CAPP-114 (SCHED-1) — the SCHEDULED surface (seed + push, no polling).
   const {
@@ -675,24 +638,20 @@ export default function App() {
 
   // WS-D — FILTER & HIDE. A specific active workspace scopes each section to its
   // own items; "All" (activeWorkspaceId null) shows everything (untagged/legacy
-  // items are "All"-only). SESSIONS + MISSIONS carry workspaceId directly;
-  // attention entries resolve theirs from the owning session/mission. Re-derived
-  // reactively whenever the active id or the underlying lists change.
+  // items are "All"-only). SESSIONS carry workspaceId directly; attention entries
+  // resolve theirs from the owning session. Re-derived reactively whenever the
+  // active id or the underlying lists change.
   const scopedSessions = useMemo(
     () => filterByWorkspace(sessions, activeWorkspaceId),
     [sessions, activeWorkspaceId],
-  )
-  const scopedMissions = useMemo(
-    () => filterByWorkspace(visibleMissions, activeWorkspaceId),
-    [visibleMissions, activeWorkspaceId],
   )
   const scopedSchedules = useMemo(
     () => filterByWorkspace(allSchedules, activeWorkspaceId),
     [allSchedules, activeWorkspaceId],
   )
   const scopedAttention = useMemo(
-    () => filterAttentionByWorkspace(attentionEntries, activeWorkspaceId, sessions, allMissions),
-    [attentionEntries, activeWorkspaceId, sessions, allMissions],
+    () => filterAttentionByWorkspace(attentionEntries, activeWorkspaceId, sessions),
+    [attentionEntries, activeWorkspaceId, sessions],
   )
 
   // CAPP-80 — the transient RESUMING section's rows, derived purely from the live
@@ -731,12 +690,10 @@ export default function App() {
     panels,
     recentlyChanged: panelsRecentlyChanged,
     setPanels,
-    openMission,
     openSchedule,
     openOverview,
     openTimeline,
-    createMission,
-  } = usePanels(refreshOverviewsRef, activeSession, missionsListOpen, allMissions, allSchedules, schedulesSeeded)
+  } = usePanels(refreshOverviewsRef, allSchedules, schedulesSeeded)
 
   // CAPP-109 / S2 — the ModalHost renders panels IN the main window (modal-by-default).
   // `modalActiveId` is the renderer-side tab selection; null = the form-exclusive default
@@ -819,38 +776,8 @@ export default function App() {
       .catch((err) => toast("error", `Couldn't re-prime: ${errMsg(err)}`))
   }, [activeSessionId, activeTerminalId])
 
-  // MS-2: wire the mission-dashboard opener into the attention-jump ref so that
-  // attention entries carrying missionId route to the panel (not a terminal).
-  // openMission is stable (useCallback in usePanels), so the effect runs once.
-  useEffect(() => {
-    jumpToMissionRef.current = (missionId: string) => {
-      openMission({ id: missionId }).catch(() => {})
-    }
-  }, [openMission])
-
-  // WW-2b: wire the worktree-review opener into the attention-jump ref. A review
-  // entry carries missionId+taskId; we fetch the LATEST captured diff via IPC
-  // (so the panel always has fresh content) then open the review panel in the
-  // companion window. P0-5: surface a fetch/open failure as a toast.
-  useEffect(() => {
-    jumpToReviewRef.current = (missionId: string, taskId: string) => {
-      void (async () => {
-        try {
-          const task = await window.api.getReviewTask(missionId, taskId)
-          if (!task) {
-            toast("warning", "That review task is no longer available.")
-            return
-          }
-          await window.api.showPanel("worktree-review", task, "right")
-        } catch (err) {
-          toast("error", `Couldn't open the review panel: ${errMsg(err)}`)
-        }
-      })()
-    }
-  }, [])
-
   // CAPP-94 / U6 — open the workspace-memory editor for the ACTIVE workspace (or the
-  // untagged "All" bucket when none is selected). Mirrors jumpToReviewRef: fetch the
+  // untagged "All" bucket when none is selected). Fetch the
   // record main-side, then show the companion panel pinned to that workspaceId so every
   // edit targets it even if the active workspace changes while the editor is open. The
   // record fields ride in as panel props (seed); the panel re-fetches live.
@@ -1038,9 +965,7 @@ export default function App() {
       { id: "zen", label: zenMode ? "Exit Focus Mode" : "Enter Focus Mode", hint: "Ctrl+Shift+Z", keywords: "zen distraction free hide sidebar fullscreen", run: () => setZenMode((z) => !z) },
       { id: "agent-rail", label: railOpen ? "Collapse Agent Rail" : "Open Agent Rail", hint: "Ctrl+Alt+A", keywords: "agent rail right column now cost beacon sidebar collapse", run: toggleRail },
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
-      { id: "mission", label: "Start Mission…", keywords: "orchestrate conductor autonomous build", run: () => setMissionPromptOpen(true) },
       { id: "schedule", label: "New Scheduled Run…", keywords: "schedule recurring cron timer interval daily automate", run: () => { setEditingSchedule(null); setScheduleFormOpen(true) } },
-      { id: "missions", label: "View Missions", keywords: "orchestrate conductor list dashboard status", run: () => setMissionsListOpen(true) },
       { id: "session-overview", label: "Show Session Overview", keywords: "context summary findings notes birdseye", run: () => activeSessionId && openOverview(activeSessionId) },
       { id: "session-timeline", label: "Show Session Timeline", keywords: "history events chronology activity log", run: () => { const s = sessions.find((x) => x.id === activeSessionId); if (s) openTimeline(s.id, s.name) } },
       { id: "handoff", label: "Retire & Continue Terminal", hint: "Ctrl+Shift+H", keywords: "handoff flush summary fresh terminal retire context", run: () => handleHandoff() },
@@ -1137,7 +1062,7 @@ export default function App() {
       run: () => handleSelectSession(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, openTimeline, activeSessionId, activeTerminals, activeTerminalId, handleToggleEngine, themeMode, cycleTheme, railOpen, toggleRail, setPaletteOpen, setHelpOpen, setHistoryOpen, setMissionPromptOpen, setMissionsListOpen, setZenMode])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, openTimeline, activeSessionId, activeTerminals, activeTerminalId, handleToggleEngine, themeMode, cycleTheme, railOpen, toggleRail, setPaletteOpen, setHelpOpen, setHistoryOpen, setZenMode])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {
@@ -1188,7 +1113,7 @@ export default function App() {
         // Ctrl+J / Cmd+J — jump to the top VISIBLE "NEEDS YOU" entry ("who needs
         // me?"). Use scopedAttention (the workspace-filtered list the sidebar
         // actually renders), NOT the unfiltered attentionEntries — otherwise Ctrl+J
-        // could yank the user to an off-scope session/mission, or fire when no rows
+        // could yank the user to an off-scope session, or fire when no rows
         // are even visible. The queue is pre-sorted (tier then oldest-first) by the
         // service and the filter preserves order, so [0] is the most urgent visible
         // entry. No-op when nothing is visible.
@@ -1212,7 +1137,7 @@ export default function App() {
         setHelpOpen(false)
       } else if (
         e.key === "Escape" &&
-        !paletteOpen && !historyOpen && !missionPromptOpen && !missionsListOpen && !scheduleFormOpen &&
+        !paletteOpen && !historyOpen && !scheduleFormOpen &&
         pendingKillId === null
       ) {
         // CAPP-120 (STT-1 review, MAJOR 2) — an ACTIVE DICTATION RECORDING owns Esc
@@ -1231,7 +1156,7 @@ export default function App() {
         // awaiting a permission): kill + resume the conversation. escInterruptRef
         // returns false when the active terminal isn't structured+busy, so Esc passes
         // through untouched to an xterm/PTY (where it is load-bearing) and is a no-op
-        // when idle. Guarded on the nav overlays so an open palette/history/mission
+        // when idle. Guarded on the nav overlays so an open palette/history
         // overlay closes via its OWN Esc handler instead of being hijacked into an
         // interrupt — this capture-phase handler would otherwise stopPropagation and
         // suppress that close.
@@ -1256,7 +1181,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handler, { capture: true })
     return () => window.removeEventListener("keydown", handler, { capture: true })
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, helpOpen, paletteOpen, historyOpen, missionPromptOpen, missionsListOpen, pendingKillId, setActiveTerminalId, setPaletteOpen, setHistoryOpen, setZenMode, setHelpOpen, scopedAttention, jumpToAttention, toggleRail])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleSelectSession, sessions, activeTerminals, activeTerminalId, helpOpen, paletteOpen, historyOpen, pendingKillId, setActiveTerminalId, setPaletteOpen, setHistoryOpen, setZenMode, setHelpOpen, scopedAttention, jumpToAttention, toggleRail])
 
   return (
     <div
@@ -1310,11 +1235,6 @@ export default function App() {
         onClose={() => setHistoryOpen(false)}
         onSelectSession={(id) => setActiveTerminalId(id)}
       />
-      <MissionPrompt
-        open={missionPromptOpen}
-        onClose={() => setMissionPromptOpen(false)}
-        onSubmit={createMission}
-      />
       <ScheduleForm
         open={scheduleFormOpen}
         editing={editingSchedule}
@@ -1344,18 +1264,6 @@ export default function App() {
         folder={activeWorkspace?.dir ?? null}
         onRestore={handleRestoreConversation}
       />
-      <MissionsList
-        open={missionsListOpen}
-        missions={allMissions}
-        onClose={() => setMissionsListOpen(false)}
-        onOpen={(m) => {
-          openMission(m)
-          setMissionsListOpen(false)
-        }}
-        onStop={(id) => window.api.stopMission(id)}
-        onPause={(id) => window.api.pauseMission(id)}
-        onResume={(id) => window.api.resumeMission(id)}
-      />
       <Sidebar
         sessions={scopedSessions}
         activeSessionId={activeSessionId}
@@ -1363,14 +1271,6 @@ export default function App() {
         attentionNow={attentionNow}
         onJumpAttention={jumpToAttention}
         onDismissAttention={dismissAttention}
-        missions={scopedMissions}
-        onOpenMission={(m) => {
-          openMission(m).catch(() => {})
-          Promise.resolve(window.api.attentionSeenMission(m.id)).catch(() => {})
-        }}
-        onDismissMission={dismissMission}
-        onNewMission={() => setMissionPromptOpen(true)}
-        onFocusConductor={(sessionId) => handleSelectSession(sessionId)}
         schedules={scopedSchedules}
         onNewSchedule={() => { setEditingSchedule(null); setScheduleFormOpen(true) }}
         onOpenSchedule={(s) => { openSchedule(s).catch(() => {}) }}

@@ -63,12 +63,12 @@ describe("filterByWorkspace — edge cases", () => {
     expect(filterByWorkspace([], "ws-a")).toEqual([])
   })
 
-  it("works for mission-shaped and session-shaped items alike (structural)", () => {
-    const missions = [
-      { id: "m1", goal: "x", workspaceId: "ws-a" },
-      { id: "m2", goal: "y" },
+  it("works for any workspaceId-shaped items (structural)", () => {
+    const items = [
+      { id: "m1", label: "x", workspaceId: "ws-a" },
+      { id: "m2", label: "y" },
     ]
-    expect(filterByWorkspace(missions, "ws-a").map((m) => m.id)).toEqual(["m1"])
-    expect(filterByWorkspace(missions, null).map((m) => m.id)).toEqual(["m1", "m2"])
+    expect(filterByWorkspace(items, "ws-a").map((m) => m.id)).toEqual(["m1"])
+    expect(filterByWorkspace(items, null).map((m) => m.id)).toEqual(["m1", "m2"])
   })
 })

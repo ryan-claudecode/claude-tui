@@ -354,13 +354,13 @@ describe("SessionService.getContext", () => {
     svc.setSummary(s.id, "Goal: fix the auth race. Currently patching middleware.")
     const wrong = svc.addNote(s.id, "bug is in auth")!
     svc.addNote(s.id, "actually it's the list endpoint", { corrects: wrong.id })
-    svc.addNote(s.id, "tests live in mission.test.ts")
+    svc.addNote(s.id, "tests live in auth.test.ts")
     const ctx = svc.getContext(s.id)!
     // summary leads
     expect(ctx.indexOf("Goal: fix the auth race")).toBeGreaterThanOrEqual(0)
     // active notes present
     expect(ctx).toContain("actually it's the list endpoint")
-    expect(ctx).toContain("tests live in mission.test.ts")
+    expect(ctx).toContain("tests live in auth.test.ts")
     // ruled-out section present and shows the superseded note with its correction
     expect(ctx).toContain("Ruled out")
     expect(ctx).toContain("bug is in auth")

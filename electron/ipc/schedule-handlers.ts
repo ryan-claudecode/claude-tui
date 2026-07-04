@@ -2,9 +2,9 @@ import { ipcMain, app, type BrowserWindow } from "electron"
 import type { SchedulerService, ScheduleInput, ScheduleUpdate } from "../services/scheduler"
 
 /**
- * CAPP-114 (SCHED-1) — thin one-line wrappers over SchedulerService. Mirrors
- * mission-handlers.ts. The `schedule:updated` / `schedule:removed` renderer push is
- * wired in ipc.ts off `schedulerService.onEvent` (like `mission:updated`).
+ * CAPP-114 (SCHED-1) — thin one-line wrappers over SchedulerService. The
+ * `schedule:updated` / `schedule:removed` renderer push is wired in ipc.ts off
+ * `schedulerService.onEvent`.
  *
  * CAPP-115 (SCHED-2) — `schedule:request-edit` is the detail panel's "Edit" button
  * round-trip: the panel (in either the ModalHost or a popped-out companion window)

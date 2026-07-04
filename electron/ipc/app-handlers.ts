@@ -74,7 +74,7 @@ export function registerAppHandlers(deps: {
   // custom value (the picker's free-text entry). addModelExtra persists (idempotent +
   // de-duping) and returns whether it actually wrote; only then do we (a) mirror onto
   // the in-memory config snapshot (returned by config:get) and (b) PUSH the fresh
-  // models block to every window on `config:models-changed` (the mission:updated /
+  // models block to every window on `config:models-changed` (the
   // theme:changed broadcast pattern) so already-mounted pickers refresh WITHOUT an
   // app restart — the renderer fetches config exactly once on mount.
   ipcMain.handle("config:add-model-extra", (_e, value: string) => {

@@ -309,7 +309,7 @@ describe("PanelService — dismissWindowPanels on companion close (CAPP-110 / S3
 
   it("drops popped-out non-form panels (no ghost left for the M4 loop to resurrect)", () => {
     const a = env.svc.show("markdown", { content: "# A" })
-    const b = env.svc.show("mission", { id: "m1" })
+    const b = env.svc.show("code", { code: "x" })
     env.svc.popOut(a.id) // window
     env.svc.popOut(b.id) // window
     // A still-modal panel must SURVIVE a companion close (it lives in the main window).

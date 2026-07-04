@@ -11,7 +11,6 @@ import type { ShellService } from "../services/shell"
 import type { NotesService } from "../services/notes"
 import type { FileService } from "../services/files"
 import type { UiService } from "../services/ui"
-import type { MissionService } from "../services/mission"
 import type { SchedulerService } from "../services/scheduler"
 import type { SessionService } from "../services/sessions"
 import type { RecallService } from "../services/recall"
@@ -21,7 +20,6 @@ import type { ContextInspectorService } from "../services/contextInspector"
 import type { ExportService } from "../services/export"
 import { registerSessionTools } from "./tools/sessions"
 import { registerWorkSessionTools } from "./tools/worksessions"
-import { registerMissionTools } from "./tools/missions"
 import { registerPanelTools } from "./tools/panels"
 import { registerPermissionTools } from "./tools/permissions"
 import { registerGitTools } from "./tools/git"
@@ -53,7 +51,6 @@ export function registerTools(
   notes: NotesService,
   files: FileService,
   ui: UiService,
-  mission: MissionService,
   workSessions: SessionService,
   recall: RecallService,
   attention: AttentionService,
@@ -65,7 +62,6 @@ export function registerTools(
 ) {
   registerSessionTools(server, sessions, attention, workSessions, workspaces, identity)
   registerWorkSessionTools(server, workSessions, panels, recall, identity)
-  registerMissionTools(server, mission)
   registerPanelTools(server, panels, notes, files, sessions, identity)
   registerPermissionTools(server, sessions, identity, (m, l, t) => notifications.notify(m, l, t))
   registerGitTools(server, git, sessions)

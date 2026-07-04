@@ -16,7 +16,7 @@ const panel = (id: string, type: string, scheduleId?: string) => ({
 
 describe("refreshSchedulePanels", () => {
   it("replaces a matching schedule panel's props with the fresh snapshot", () => {
-    const panels = [panel("panel-1", "schedule", "s1"), panel("panel-2", "mission", "m1")]
+    const panels = [panel("panel-1", "schedule", "s1"), panel("panel-2", "markdown", "m1")]
     const fresh = { id: "s1", name: "renamed", enabled: false }
     const out = refreshSchedulePanels(panels, [fresh])
     expect(out[0].props).toBe(fresh)
@@ -46,7 +46,7 @@ describe("staleSchedulePanelIds", () => {
 
   it("ignores non-schedule panels and schedule panels without a props.id", () => {
     const panels = [
-      panel("panel-1", "mission", "m1"), // wrong type
+      panel("panel-1", "markdown", "m1"), // wrong type
       panel("panel-2", "schedule"), // no props.id — never guess a destructive hide
       panel("panel-3", "markdown"),
     ]

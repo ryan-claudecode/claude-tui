@@ -19,12 +19,6 @@ export function registerAttentionHandlers(deps: { getAttention: () => AttentionS
     getAttention().seen(terminalId)
   })
 
-  // The mission dashboard was opened — clear that mission's tier-2/3 entry
-  // (MS-2 wires the preload accessor + the renderer call site).
-  ipcMain.handle("attention:seen-mission", (_e, missionId: string) => {
-    getAttention().seenMission(missionId)
-  })
-
   // Manual dismiss (the hover × in the sidebar row).
   ipcMain.handle("attention:dismiss", (_e, id: string) => getAttention().dismiss(id))
 }

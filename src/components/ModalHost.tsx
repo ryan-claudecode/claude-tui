@@ -45,20 +45,13 @@ export interface ModalHostProps {
 
 /** Build the main-window `PanelApi` over `window.api`. `sendToSession` wraps the
  *  fire-and-forget `companion:send-to-session` accessor to return `true` (the PanelApi
- *  contract); `missionStop`/`missionPause` wrap the invoke-based `stopMission`/
- *  `pauseMission`. Every other member is a raw `window.api` accessor (parity-gated). */
+ *  contract). Every other member is a raw `window.api` accessor (parity-gated). */
 export function buildMainPanelApi(): PanelApi {
   const a = window.api as any
   return {
     sendToSession: (text: string) => {
       a.sendToSession(text)
       return true
-    },
-    missionStop: (id: string) => {
-      void a.stopMission(id)
-    },
-    missionPause: (id: string) => {
-      void a.pauseMission(id)
     },
     // CAPP-115 — schedule detail-panel controls over window.api. `scheduleEdit` routes
     // through requestScheduleEdit → main process → the main window's `schedule:edit`
@@ -80,8 +73,6 @@ export function buildMainPanelApi(): PanelApi {
     hidePanel: (panelId: string) => {
       void a.hidePanel(panelId)
     },
-    approveWorktreeTask: (m, t) => a.approveWorktreeTask(m, t),
-    rejectWorktreeTask: (m, t, reason) => a.rejectWorktreeTask(m, t, reason),
     recall: (query, scope, sessionId) => a.recall(query, scope, sessionId),
     openSessionOverview: (sessionId) => a.openSessionOverview(sessionId),
     promoteSessionToWorkspace: (sessionId) => a.promoteSessionToWorkspace(sessionId),
