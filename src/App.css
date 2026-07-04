@@ -8020,6 +8020,15 @@ body {
 .slash-picker-kind-skill {
   color: var(--accent);
 }
+/* CAPP-126 — the muted staleness hint pinned under the persisted/builtin floor. */
+.slash-picker-stale {
+  padding: var(--s-1) var(--s-2);
+  margin-top: var(--s-1);
+  border-top: 1px solid var(--border-subtle, var(--border-strong));
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-3);
+}
 
 .composer-attachments {
   display: flex;

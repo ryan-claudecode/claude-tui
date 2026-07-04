@@ -24,6 +24,24 @@ function isNonEmptyStr(v: unknown): v is string {
 }
 
 /**
+ * CAPP-126 — the always-available BUILTIN FLOOR: the core Claude Code slash commands
+ * the picker offers even when NO live/persisted catalog is available yet (a
+ * never-initialized fresh terminal, or a restored terminal before its first reply).
+ * Names WITHOUT the leading slash. They forward to Claude unchanged over the stdin
+ * sink (or are native-mapped by the `slashCommands.ts` routing table for `/config` /
+ * `/resume`), so the floor never loses a typed command to the message body. The LIVE
+ * catalog wins on de-dupe (see {@link buildPickerEntries}), so when init lands the
+ * real (richer) entries replace these.
+ */
+export const BUILTIN_SLASH_COMMANDS: readonly string[] = [
+  "clear",
+  "compact",
+  "config",
+  "context",
+  "resume",
+]
+
+/**
  * Merge a catalog's slash commands + skills into a de-duplicated, alphabetically
  * sorted entry list. A name present in both arrays appears once; a name present in
  * `skills` is labeled "skill" (the more specific of the unified pair), otherwise
@@ -41,6 +59,37 @@ export function buildCatalogEntries(catalog: AgentCatalog | null | undefined): C
     if (!seen.has(name)) seen.set(name, { name, kind: "skill" })
   }
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * CAPP-126 — the picker's ACTUAL source list: the merged live/persisted catalog
+ * ({@link buildCatalogEntries}) UNION the {@link BUILTIN_SLASH_COMMANDS} floor, so
+ * even a never-initialized / pre-first-reply terminal offers the core commands. The
+ * LIVE catalog wins on de-dupe: a builtin that the catalog ALSO carries keeps the
+ * catalog's entry (and its kind), and only the missing builtins are appended. Sorted
+ * alphabetically, matching {@link buildCatalogEntries}.
+ */
+export function buildPickerEntries(catalog: AgentCatalog | null | undefined): CatalogEntry[] {
+  const live = buildCatalogEntries(catalog)
+  const have = new Set(live.map((e) => e.name))
+  const floor: CatalogEntry[] = BUILTIN_SLASH_COMMANDS.filter((n) => !have.has(n)).map((name) => ({
+    name,
+    kind: "command",
+  }))
+  return [...live, ...floor].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * CAPP-126 — is the picker running on a STALE (persisted-from-last-session or
+ * builtin-floor) catalog rather than a fresh one from THIS process? True until a
+ * live `init` stream event has been seen since the terminal mounted (a headless
+ * `claude -p` emits init only after the first user message). Drives the muted
+ * "from last session — refreshes after the first reply" hint at the bottom of the
+ * picker. A persisted catalog counts as stale (it may be a day old), so this keys
+ * PURELY on whether a live init arrived, not on whether entries exist.
+ */
+export function isCatalogStale(sawLiveInit: boolean): boolean {
+  return !sawLiveInit
 }
 
 /**

@@ -805,6 +805,66 @@ test("structured engine: both split panes render a usable composer (not blank xt
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
 
+test("structured engine: slash picker offers the BUILTIN FLOOR before the first turn (CAPP-126)", async () => {
+  // CAPP-126 — the bug: on a fresh (or restored) structured terminal, `init` hasn't
+  // arrived yet (a headless `claude -p` emits it only AFTER the first user message), so
+  // the picker was DEAD — typing "/" showed nothing and "/compact" looked like it would
+  // just be sent as a message. The fix: a static builtin floor (+ a staleness hint) so
+  // the picker works IMMEDIATELY. The fakeStream stays silent until the first write, so
+  // opening a session and typing "/" WITHOUT sending exercises the exact pre-init state.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-slash-preinit-"))
+  await seedStructuredConfig(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+  await win.locator(".sidebar-action", { hasText: "+ New session" }).click()
+
+  const composer = win.locator(".agent-composer textarea")
+  await expect(composer).toBeVisible({ timeout: 15_000 })
+
+  // Type "/" WITHOUT sending anything — no init has streamed yet, so the ONLY source
+  // is the builtin floor. The picker must still open and offer the core commands.
+  const picker = win.locator(".slash-picker")
+  await composer.fill("/")
+  await expect(picker).toBeVisible({ timeout: 10_000 })
+  await expect(picker).toContainText("/compact")
+  await expect(picker).toContainText("/clear")
+  await expect(picker).toContainText("/context")
+  await expect(picker).toContainText("/config")
+  await expect(picker).toContainText("/resume")
+
+  // The muted staleness hint is visible TEXT (no hover/tooltip) — it tells the user
+  // the list is from last session and refreshes after the first reply.
+  await expect(picker.locator(".slash-picker-stale")).toContainText(
+    /from last session — refreshes after the first reply/i,
+  )
+
+  // Drive the first turn so the (fake) init streams; the live catalog then lands and
+  // the staleness hint clears (a fresh init was seen this process).
+  await composer.fill("")
+  await composer.fill("hi")
+  await composer.press("Enter")
+  await expect(win.locator(".agent-assistant")).toContainText("fake agent", { timeout: 15_000 })
+  await expect(async () => {
+    await composer.fill("")
+    await composer.fill("/")
+    await expect(picker).toBeVisible({ timeout: 2_000 })
+    // Once a live init has been seen, the hint is gone (fresh catalog).
+    await expect(picker.locator(".slash-picker-stale")).toHaveCount(0, { timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
 test("structured engine: slash picker reflects the LIVE init catalog and /config maps natively", async () => {
   // BO-7 — the `/`-command picker is sourced from the headless init event's
   // slash_commands + skills (fakeStream seeds a sample catalog), and native-mapped

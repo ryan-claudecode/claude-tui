@@ -13,11 +13,18 @@ export default function SlashCommandPicker({
   index,
   onHover,
   onSelect,
+  stale = false,
 }: {
   entries: CatalogEntry[]
   index: number
   onHover: (i: number) => void
   onSelect: (name: string) => void
+  /**
+   * CAPP-126 — render the muted "from last session" hint when the list is the
+   * persisted/builtin floor (no fresh `init` yet this process). Visible TEXT (no
+   * hover/tooltip), so the user knows the list refreshes after the first reply.
+   */
+  stale?: boolean
 }) {
   if (entries.length === 0) return null
   return (
@@ -41,6 +48,9 @@ export default function SlashCommandPicker({
           <span className={`slash-picker-kind slash-picker-kind-${entry.kind}`}>{entry.kind}</span>
         </button>
       ))}
+      {stale && (
+        <div className="slash-picker-stale">from last session — refreshes after the first reply</div>
+      )}
     </div>
   )
 }

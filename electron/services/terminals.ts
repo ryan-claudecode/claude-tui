@@ -1721,6 +1721,19 @@ export class TerminalService {
   }
 
   /**
+   * CAPP-126 — seed a headless terminal's picker catalog from a persisted copy (the
+   * SessionService ref, captured off a previous session's `init`). Called on RESTORE
+   * (`reopenTerminal`) so the `/`-autocomplete works immediately with last session's
+   * catalog BEFORE the first turn re-emits `init`. Only fills an entry that has no
+   * catalog yet — a fresh live `init` (which lands after the first message) always
+   * WINS and is never clobbered. No-op for an unknown / xterm (non-headless) terminal.
+   */
+  seedCatalog(id: string, catalog: AgentCatalog): void {
+    const entry = this.headless.get(id)
+    if (entry && !entry.catalog) entry.catalog = catalog
+  }
+
+  /**
    * BO-12 (CAPP-51) — rehydrate a structured chat view: read a conversation's
    * on-disk Claude Code transcript (`~/.claude/projects/<encoded-cwd>/<id>.jsonl`)
    * and return the ordered StreamEvent[] it folds into (via the renderer's shared

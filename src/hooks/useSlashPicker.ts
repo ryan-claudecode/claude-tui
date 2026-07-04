@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { AgentCatalog } from "../../electron/services/streamProtocol"
 import {
-  buildCatalogEntries,
+  buildPickerEntries,
   filterCatalogEntries,
+  isCatalogStale,
   slashQuery,
   type CatalogEntry,
 } from "../lib/slashCatalog"
@@ -29,6 +30,12 @@ export interface SlashPicker {
   accept: (name: string) => void
   /** Returns true if it handled the key (composer should not also act on it). */
   handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean
+  /**
+   * CAPP-126 — true while the open picker is running on a STALE catalog (persisted
+   * from last session, or the builtin floor) because no live `init` has arrived this
+   * process yet. Drives the muted "from last session" hint in SlashCommandPicker.
+   */
+  stale: boolean
 }
 
 export function useSlashPicker(opts: {
@@ -40,10 +47,15 @@ export function useSlashPicker(opts: {
   const [catalog, setCatalog] = useState<AgentCatalog>({ slashCommands: [], skills: [] })
   const [dismissed, setDismissed] = useState(false)
   const [index, setIndex] = useState(0)
+  // CAPP-126 — has a LIVE `init` arrived THIS process (vs. the persisted/builtin
+  // catalog)? Only a live init clears the staleness hint; the pulled catalog on
+  // mount may be from last session, so it does NOT flip this true.
+  const [sawLiveInit, setSawLiveInit] = useState(false)
 
-  // Catalog source: pull whatever's already captured, then keep current off live
-  // init events. Per-instance unsubscribe (preload returns a disposer) so this
-  // second stream listener never clobbers AgentView's.
+  // Catalog source: pull whatever's already captured (a fresh init this process OR
+  // the persisted catalog seeded onto a restored terminal — CAPP-126), then keep
+  // current off live init events. Per-instance unsubscribe (preload returns a
+  // disposer) so this second stream listener never clobbers AgentView's.
   useEffect(() => {
     let alive = true
     window.api
@@ -59,6 +71,7 @@ export function useSlashPicker(opts: {
           slashCommands: p.event.slashCommands ?? [],
           skills: p.event.skills ?? [],
         })
+        setSawLiveInit(true)
       }
     })
     return () => {
@@ -67,7 +80,7 @@ export function useSlashPicker(opts: {
     }
   }, [terminalId])
 
-  const allEntries = useMemo(() => buildCatalogEntries(catalog), [catalog])
+  const allEntries = useMemo(() => buildPickerEntries(catalog), [catalog])
   const query = slashQuery(text) // null unless the text is an in-progress slash token
   const entries = useMemo(
     () => (query == null ? [] : filterCatalogEntries(allEntries, query)),
@@ -128,5 +141,7 @@ export function useSlashPicker(opts: {
     [open, entries, safeIndex, accept],
   )
 
-  return { open, entries, index: safeIndex, setIndex, accept, handleKeyDown }
+  const stale = open && isCatalogStale(sawLiveInit)
+
+  return { open, entries, index: safeIndex, setIndex, accept, handleKeyDown, stale }
 }

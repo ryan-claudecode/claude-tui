@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest"
 import {
+  BUILTIN_SLASH_COMMANDS,
   buildCatalogEntries,
+  buildPickerEntries,
   filterCatalogEntries,
+  isCatalogStale,
   slashQuery,
   type CatalogEntry,
 } from "./slashCatalog"
@@ -34,6 +37,51 @@ describe("buildCatalogEntries — merge slash commands + skills (a unified syste
       skills: [],
     })
     expect(entries.map((e) => e.name)).toEqual(["ok"])
+  })
+})
+
+describe("buildPickerEntries — the builtin floor (CAPP-126)", () => {
+  it("offers the full builtin floor when the catalog is empty/absent", () => {
+    const names = buildPickerEntries({ slashCommands: [], skills: [] }).map((e) => e.name)
+    expect(names).toEqual([...BUILTIN_SLASH_COMMANDS].sort((a, b) => a.localeCompare(b)))
+    // The absent-catalog case degrades to the same floor (never empty).
+    expect(buildPickerEntries(undefined).map((e) => e.name)).toEqual(names)
+  })
+
+  it("all floor entries are present and labeled as commands", () => {
+    const byName = Object.fromEntries(buildPickerEntries(undefined).map((e) => [e.name, e.kind]))
+    for (const n of BUILTIN_SLASH_COMMANDS) {
+      expect(byName[n]).toBe("command")
+    }
+  })
+
+  it("de-dupes when the live catalog overlaps a builtin — the LIVE entry wins", () => {
+    // "compact" is a builtin; here the catalog reports it as a SKILL. The merged
+    // list carries it exactly once, keeping the live (skill) kind.
+    const entries = buildPickerEntries({ slashCommands: [], skills: ["compact"] })
+    const compacts = entries.filter((e) => e.name === "compact")
+    expect(compacts).toHaveLength(1)
+    expect(compacts[0].kind).toBe("skill")
+  })
+
+  it("unions the live catalog with the floor (both appear, sorted, deduped)", () => {
+    const names = buildPickerEntries({
+      slashCommands: ["clear"], // overlaps the floor
+      skills: ["deep-research"], // live-only skill
+    }).map((e) => e.name)
+    // floor ∪ {deep-research}; clear appears once.
+    expect(names).toEqual(
+      [...new Set([...BUILTIN_SLASH_COMMANDS, "deep-research"])].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    )
+  })
+})
+
+describe("isCatalogStale — the 'from last session' flag (CAPP-126)", () => {
+  it("is stale until a live init has been seen this process", () => {
+    expect(isCatalogStale(false)).toBe(true) // no fresh init yet → persisted/builtin
+    expect(isCatalogStale(true)).toBe(false) // a live init landed → fresh
   })
 })
 
