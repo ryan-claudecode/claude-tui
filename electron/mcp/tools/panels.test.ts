@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest"
 import { z } from "zod"
 import { registerPanelTools } from "./panels"
 import type { PanelService } from "../../services/panels"
-import type { NotesService } from "../../services/notes"
 import type { FileService } from "../../services/files"
 import type { TerminalService } from "../../services/terminals"
 import type { TerminalIdentity } from "./shared"
@@ -50,7 +49,6 @@ function register(panels: PanelService, identity: TerminalIdentity = {}) {
   registerPanelTools(
     server as any,
     panels,
-    {} as unknown as NotesService,
     {} as unknown as FileService,
     {} as unknown as TerminalService,
     identity,

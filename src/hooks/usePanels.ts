@@ -195,25 +195,11 @@ export function usePanels(
     setPanels((prev) => [...prev.filter((p) => p.id !== panel.id), { ...panel, id: panel.id }])
   }, [])
 
-  // Open the session's durable timeline as a companion `timeline` panel
-  // (snapshot — reopen to refresh). Maps each SessionEvent to a timeline Step.
-  const openTimeline = useCallback(async (sessionId: string, sessionName?: string) => {
-    const events: Array<{ time: number; kind: string; text: string }> =
-      (await window.api.getSessionTimeline(sessionId)) ?? []
-    const steps = events.map((e) => ({
-      label: e.text,
-      status: e.kind === "correction" ? "error" : (e.kind === "spawn" || e.kind === "handoff" ? "active" : "done"),
-      meta: new Date(e.time).toLocaleString(),
-    }))
-    await window.api.showPanel("timeline", { title: `Timeline — ${sessionName ?? sessionId}`, steps }, "right")
-  }, [])
-
   return {
     panels,
     recentlyChanged,
     setPanels,
     openSchedule,
     openOverview,
-    openTimeline,
   }
 }

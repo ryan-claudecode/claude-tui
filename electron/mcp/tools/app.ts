@@ -5,11 +5,10 @@ import type { WorkspaceService } from "../../services/workspaces"
 import type { AppService } from "../../services/app"
 import type { PanelService } from "../../services/panels"
 import type { NotificationService } from "../../services/notifications"
-import type { TestRunnerService } from "../../services/tests"
 import type { ClipboardService } from "../../services/clipboard"
 import type { ShellService } from "../../services/shell"
 import { loadConfig } from "../../config"
-import { resolveCwd, type TerminalIdentity } from "./shared"
+import type { TerminalIdentity } from "./shared"
 
 export function registerAppTools(
   server: McpServer,
@@ -18,7 +17,6 @@ export function registerAppTools(
   appService: AppService,
   panels: PanelService,
   notifications: NotificationService,
-  tests: TestRunnerService,
   clipboard: ClipboardService,
   shellService: ShellService,
   identity: TerminalIdentity = {},
@@ -93,38 +91,6 @@ export function registerAppTools(
       // surfaces in the attention queue as a tier-2 `error` entry.
       const notification = notifications.notify(message, level, title, timeout, identity.sessionId)
       return { content: [{ type: "text" as const, text: JSON.stringify(notification) }] }
-    },
-  )
-
-  // Test runner — run a project's test suite and surface parsed results in a panel
-
-  server.tool(
-    "run_tests",
-    "Run a project's test suite in a session's working directory and show the parsed results (pass/fail/skip counts, exit code, duration, output) in a test panel. Use this to verify changes without scraping the terminal.",
-    {
-      session_id: z
-        .string()
-        .optional()
-        .describe("Session whose cwd to run tests in (defaults to the first open session)"),
-      command: z
-        .string()
-        .optional()
-        .describe("Test command to run (default: 'npm test'). e.g. 'npm test', 'vitest run', 'pytest'"),
-      show_panel: z
-        .boolean()
-        .optional()
-        .describe("Show the result in a test panel (default: true)"),
-    },
-    async ({ session_id, command, show_panel }) => {
-      try {
-        const result = tests.run(resolveCwd(sessions, session_id), command)
-        if (show_panel !== false) {
-          panels.show("test", { result })
-        }
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `run_tests failed: ${e.message}` }] }
-      }
     },
   )
 

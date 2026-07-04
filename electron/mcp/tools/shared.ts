@@ -12,9 +12,9 @@ export interface TerminalIdentity {
 }
 
 /**
- * Resolve a working directory for git/test/file ops: prefer the named session's
+ * Resolve a working directory for git/file ops: prefer the named session's
  * cwd, fall back to the first open session, then the app's own cwd. Used by the
- * git, app (run_tests), and panels (diff_files) tool modules.
+ * git tool module and panels (diff_files).
  */
 export function resolveCwd(sessions: TerminalService, sessionId?: string): string {
   const list = sessions.list()

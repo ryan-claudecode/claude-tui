@@ -197,7 +197,6 @@ declare global {
       onScheduleEdit?: (callback: (id: string) => void) => void
       removeAllListeners: (channel: string) => void
       getSessionOverview: (sessionId: string) => Promise<any>
-      getSessionTimeline: (sessionId: string) => Promise<Array<{ time: number; kind: string; text: string; terminalId?: string }>>
       handoffTerminal: (sessionId: string, terminalId: string) => Promise<{ terminalId: string } | undefined>
       // CAPP-39 gate ② — launch an interactive `claude /login` terminal (structured
       // engine can't show OAuth UI); from the AgentView "not signed in" Sign-in button.
@@ -631,7 +630,6 @@ export default function App() {
     setPanels,
     openSchedule,
     openOverview,
-    openTimeline,
   } = usePanels(refreshOverviewsRef, allSchedules, schedulesSeeded)
 
   // CAPP-109 / S2 — the ModalHost renders panels IN the main window (modal-by-default).
@@ -814,7 +812,6 @@ export default function App() {
       { id: "shortcuts", label: "Keyboard Shortcuts", hint: "Ctrl+/", keywords: "help keys bindings", run: () => setHelpOpen(true) },
       { id: "schedule", label: "New Scheduled Run…", keywords: "schedule recurring cron timer interval daily automate", run: () => { setEditingSchedule(null); setScheduleFormOpen(true) } },
       { id: "session-overview", label: "Show Session Overview", keywords: "context summary findings notes birdseye", run: () => activeSessionId && openOverview(activeSessionId) },
-      { id: "session-timeline", label: "Show Session Timeline", keywords: "history events chronology activity log", run: () => { const s = sessions.find((x) => x.id === activeSessionId); if (s) openTimeline(s.id, s.name) } },
       { id: "handoff", label: "Retire & Continue Terminal", hint: "Ctrl+Shift+H", keywords: "handoff flush summary fresh terminal retire context", run: () => handleHandoff() },
       {
         id: "switch-theme",
@@ -873,7 +870,7 @@ export default function App() {
       run: () => handleSelectSession(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, openTimeline, activeSessionId, activeTerminals, activeTerminalId, handleToggleEngine, themeMode, cycleTheme, railOpen, toggleRail, setPaletteOpen, setHelpOpen, setHistoryOpen, setZenMode])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, activeSessionId, activeTerminals, activeTerminalId, handleToggleEngine, themeMode, cycleTheme, railOpen, toggleRail, setPaletteOpen, setHelpOpen, setHistoryOpen, setZenMode])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {

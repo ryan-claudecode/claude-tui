@@ -1380,8 +1380,8 @@ describe("SessionService model persistence (BO-6)", () => {
   })
 })
 
-describe("SessionService.getSessionTimeline (ST-1)", () => {
-  it("appends a spawn event at openSession and returns it", () => {
+describe("SessionService eventLog (ST-1) — the durable life-history (kept for restore/overview)", () => {
+  it("appends a spawn event at openSession", () => {
     const term = new FakeTerminals()
     let clock = 1000
     const svc = new SessionService({ dir, now: () => clock })
@@ -1390,10 +1390,10 @@ describe("SessionService.getSessionTimeline (ST-1)", () => {
     clock = 1000
     const { session } = svc.openSession("/repo") // spawn event
 
-    const tl = svc.getSessionTimeline(session.id)
-    expect(tl.map((e) => e.kind)).toEqual(["spawn"])
-    expect(tl[0].time).toBe(1000)
-    expect(tl[0].text).toContain("Spawned terminal")
+    const log = svc.get(session.id)!.eventLog!
+    expect(log.map((e) => e.kind)).toEqual(["spawn"])
+    expect(log[0].time).toBe(1000)
+    expect(log[0].text).toContain("Spawned terminal")
   })
 
   it("records retire on closeTerminal and handoff on handoffTerminal", () => {
@@ -1404,7 +1404,7 @@ describe("SessionService.getSessionTimeline (ST-1)", () => {
     svc.handoffTerminal(session.id, terminalId)
     const fresh = svc.get(session.id)!.terminals.find((t) => t.lastState === "active")!
     svc.closeTerminal(session.id, fresh.id)
-    const kinds = svc.getSessionTimeline(session.id).map((e) => e.kind)
+    const kinds = svc.get(session.id)!.eventLog!.map((e) => e.kind)
     expect(kinds).toContain("spawn")
     expect(kinds).toContain("handoff")
     expect(kinds).toContain("retire")
@@ -1433,15 +1433,9 @@ describe("SessionService.getSessionTimeline (ST-1)", () => {
     expect(log[log.length - 1].text).toContain("event 599")
   })
 
-  it("returns [] for an unknown session", () => {
-    const svc = new SessionService({ dir, now: () => 1 })
-    expect(svc.getSessionTimeline("nope")).toEqual([])
-  })
-
-  it("a LEGACY (no eventLog) persisted session loads and backfills a single 'created' event", () => {
+  it("a LEGACY (no eventLog) persisted session loads cleanly (additive optional field)", () => {
     // A real on-disk file from before ST-1: a valid v1 envelope whose data has NO
-    // eventLog field. It must load cleanly (additive optional field, no schema bump)
-    // and getSessionTimeline must backfill a single creation entry from createdAt.
+    // eventLog field. It must load cleanly (additive optional field, no schema bump).
     const legacyData = {
       id: "legacy-no-log",
       name: "Pre-ST-1 session",
@@ -1459,12 +1453,6 @@ describe("SessionService.getSessionTimeline (ST-1)", () => {
     const loaded = svc.get("legacy-no-log")!
     expect(loaded.name).toBe("Pre-ST-1 session")
     expect(loaded.eventLog).toBeUndefined() // field stays absent, nothing forged
-
-    const tl = svc.getSessionTimeline("legacy-no-log")
-    expect(tl).toHaveLength(1)
-    expect(tl[0].kind).toBe("spawn")
-    expect(tl[0].time).toBe(1000)
-    expect(tl[0].text).toContain("created")
   })
 })
 

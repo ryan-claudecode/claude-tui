@@ -102,12 +102,11 @@ describe.runIf(LIVE)("BO-10 LIVE interrupt (real claude -p) — gated by BO10_LI
     const started = await startMcpServer(
       svc,
       stub(), stub(), stub(), stub(), stub(), // 2-6 workspace/app/panel/notification/git
-      stub(), // 7 testRunnerService
-      stub(), stub(), stub(), stub(), stub(), // 8-12 clipboard/shell/notes/file/ui
-      stub(), // 13 workSessionService
-      attention, // 14 attentionService
-      stub(), // 15 contextInspectorService (CAPP-98)
-      stub(), // 16 schedulerService (CAPP-114)
+      stub(), stub(), stub(), stub(), // 7-10 clipboard/shell/file/ui
+      stub(), // 11 workSessionService
+      attention, // 12 attentionService
+      stub(), // 13 contextInspectorService (CAPP-98)
+      stub(), // 14 schedulerService (CAPP-114)
     )
     svc.setMcpConfigPath(started.configPath)
     svc.setMcpServerUrl(`http://127.0.0.1:${started.port}/sse`)

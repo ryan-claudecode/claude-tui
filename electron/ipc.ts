@@ -7,10 +7,8 @@ import { AppService } from "./services/app"
 import { PanelService } from "./services/panels"
 import { NotificationService } from "./services/notifications"
 import { GitService } from "./services/git"
-import { TestRunnerService } from "./services/tests"
 import { ClipboardService } from "./services/clipboard"
 import { ShellService } from "./services/shell"
-import { NotesService } from "./services/notes"
 import { FileService } from "./services/files"
 import { UiService } from "./services/ui"
 import { SchedulerService } from "./services/scheduler"
@@ -45,10 +43,8 @@ export const appService = new AppService()
 export const panelService = new PanelService()
 export const notificationService = new NotificationService()
 export const gitService = new GitService()
-export const testRunnerService = new TestRunnerService()
 export const clipboardService = new ClipboardService()
 export const shellService = new ShellService()
-export const notesService = new NotesService()
 export const fileService = new FileService()
 export const uiService = new UiService()
 export const companionService = new CompanionService()
@@ -397,10 +393,8 @@ export async function setupIpc(win: BrowserWindow) {
       panelService,
       notificationService,
       gitService,
-      testRunnerService,
       clipboardService,
       shellService,
-      notesService,
       fileService,
       uiService,
       workSessionService,
@@ -474,8 +468,6 @@ export async function setupIpc(win: BrowserWindow) {
     sessionService,
     workspaceService,
     appService,
-    testRunnerService,
-    notesService,
   })
 
   // Cleanup

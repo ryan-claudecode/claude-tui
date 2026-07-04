@@ -5,10 +5,8 @@ import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
 import type { NotificationService } from "../services/notifications"
 import type { GitService } from "../services/git"
-import type { TestRunnerService } from "../services/tests"
 import type { ClipboardService } from "../services/clipboard"
 import type { ShellService } from "../services/shell"
-import type { NotesService } from "../services/notes"
 import type { FileService } from "../services/files"
 import type { UiService } from "../services/ui"
 import type { SchedulerService } from "../services/scheduler"
@@ -42,10 +40,8 @@ export function registerTools(
   panels: PanelService,
   notifications: NotificationService,
   git: GitService,
-  tests: TestRunnerService,
   clipboard: ClipboardService,
   shellService: ShellService,
-  notes: NotesService,
   files: FileService,
   ui: UiService,
   workSessions: SessionService,
@@ -56,7 +52,7 @@ export function registerTools(
 ) {
   registerSessionTools(server, sessions, attention, workSessions, workspaces, identity)
   registerWorkSessionTools(server, workSessions, panels, identity)
-  registerPanelTools(server, panels, notes, files, sessions, identity)
+  registerPanelTools(server, panels, files, sessions, identity)
   registerPermissionTools(server, sessions, identity, (m, l, t) => notifications.notify(m, l, t))
   registerGitTools(server, git, sessions)
   registerWorkspaceTools(server, workspaces, workSessions, contextInspector, identity)
@@ -68,7 +64,6 @@ export function registerTools(
     appService,
     panels,
     notifications,
-    tests,
     clipboard,
     shellService,
     identity,

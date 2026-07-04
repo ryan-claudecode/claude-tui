@@ -2,8 +2,6 @@ import { ipcMain, BrowserWindow } from "electron"
 import type { TerminalService } from "../services/terminals"
 import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
-import type { TestRunnerService } from "../services/tests"
-import type { NotesService } from "../services/notes"
 import {
   getThemeMode,
   setThemeMode,
@@ -20,16 +18,12 @@ export function registerAppHandlers(deps: {
   sessionService: TerminalService
   workspaceService: WorkspaceService
   appService: AppService
-  testRunnerService: TestRunnerService
-  notesService: NotesService
 }) {
   const {
     config,
     sessionService,
     workspaceService,
     appService,
-    testRunnerService,
-    notesService,
   } = deps
 
   // Workspace IPC. Now backed by the durable registry (WS-A): the renderer
@@ -101,21 +95,4 @@ export function registerAppHandlers(deps: {
   ipcMain.handle("app:save-image", (_e, base64: string, filename: string) =>
     appService.saveDroppedImage(base64, filename),
   )
-
-  // Test runner IPC
-  ipcMain.handle("test:run", (_e, cwd: string, command?: string) =>
-    testRunnerService.run(cwd, command),
-  )
-
-  // Notes IPC -- persistent cross-session scratchpad
-  ipcMain.handle("notes:list", (_e, scope?: string, tag?: string) =>
-    notesService.list(scope, tag),
-  )
-  ipcMain.handle("notes:get", (_e, id: string) => notesService.get(id))
-  ipcMain.handle(
-    "notes:save",
-    (_e, title: string, body: string, opts?: { id?: string; scope?: string; tags?: string[] }) =>
-      notesService.save(title, body, opts),
-  )
-  ipcMain.handle("notes:delete", (_e, id: string) => notesService.delete(id))
 }

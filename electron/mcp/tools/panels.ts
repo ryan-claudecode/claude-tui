@@ -2,7 +2,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { TerminalService } from "../../services/terminals"
 import type { PanelService } from "../../services/panels"
-import type { NotesService } from "../../services/notes"
 import type { FileService } from "../../services/files"
 import { resolveCwd, type TerminalIdentity } from "./shared"
 // CAPP-107 (review MINOR 1) — the QuestionForm↔ask_user payload contract lives in ONE
@@ -13,7 +12,6 @@ import { normalizeQuestionOptions, parseQuestionAnswer } from "../../../src/lib/
 export function registerPanelTools(
   server: McpServer,
   panels: PanelService,
-  notes: NotesService,
   files: FileService,
   sessions: TerminalService,
   identity: TerminalIdentity = {},
@@ -22,9 +20,9 @@ export function registerPanelTools(
 
   server.tool(
     "show_panel",
-    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, test, chart, heatmap, tree, timeline, git, kanban, notes, stat, log, progress, or code). For interactive forms that return user input, use show_form instead. For chart: props = { kind: 'bar'|'line'|'pie', title?, unit?, data: [{ label, value, color? }] }. For tree: props = { data: <any JSON value>, title?, defaultExpandDepth? } — a collapsible JSON/data tree viewer. For timeline: props = { title?, steps: [{ label, status?: 'done'|'active'|'pending'|'error', detail?, meta? }] } — multi-step task progress. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For kanban: props = { title?, columns: [{ title, color?, cards: [{ title, tag?, detail?, color? }] }] } — a board of grouped cards for status buckets or parallel workstreams. For notes: props = { title?, notes: [{ id, title, body, scope?, tags?, updatedAt? }] } — the cross-session scratchpad (prefer the show_notes tool, which loads saved notes for you). For stat: props = { title?, stats: [{ label, value, unit?, delta?, trend?: 'up'|'down'|'flat', color?, hint? }] } — a dashboard of big-number KPI cards (test counts, coverage %, build time, bundle size); distinct from chart, which is for series viz. For log: props = { title?, lines: [string | { text, level?: 'info'|'warn'|'error'|'debug'|'success', time? }], showLevel? } — a scrollable monospace log viewer with per-line severity coloring (command output, test streams, server logs). For progress: props = { title?, steps: [{ label, status?: 'pending'|'active'|'done'|'error'|'skipped', detail? }], percent? } — a vertical stepper with a progress bar for sequential task pipelines (distinct from timeline, which is chronological events). For code: props = { code: string, language?, filename?, startLine?, highlightLines?: number[], wrap? } — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from diff, which compares two versions). For heatmap: props = { title?, rows: number[][], xLabels?: string[], yLabels?: string[], unit?, min?, max? } — a color-coded 2D numeric matrix on a blue→green→amber→red ramp (correlation matrices, coverage grids, latency-by-hour); distinct from chart (series viz) and table (text grid).",
+    "Show a rich UI panel in ClaudeTUI (diff, image, markdown, table, git, or code). For interactive forms that return user input, use show_form instead. For git: props = the git_status result ({ branch, ahead, behind, clean, changes: [{ path, status, staged, label }] }) plus optional commits: [{ hash, author, date, subject }] from git_log — a staged/unstaged file overview. For code: props = { code: string, language?, filename?, startLine?, highlightLines?: number[], wrap? } — a read-only code excerpt with gutter line numbers and per-line highlighting (distinct from diff, which compares two versions). For table: props = { title?, columns: [...], rows: [...] } — a text grid. For markdown: props = { content }. For image: props = { src } (data URI or path).",
     {
-      type: z.enum(["diff", "image", "markdown", "table", "test", "chart", "tree", "timeline", "git", "kanban", "notes", "stat", "log", "progress", "code", "heatmap", "context-inspector"]).describe("Panel type"),
+      type: z.enum(["diff", "image", "markdown", "table", "git", "code", "context-inspector"]).describe("Panel type"),
       props: z.record(z.string(), z.any()).describe("Panel-specific data"),
       position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
     },
@@ -150,93 +148,6 @@ export function registerPanelTools(
   server.tool("list_panels", "List all open ClaudeTUI panels", {}, async () => {
     return { content: [{ type: "text" as const, text: JSON.stringify(panels.list(), null, 2) }] }
   })
-
-  // Notes — a persistent cross-session scratchpad. Leave durable context for a
-  // future session (or yourself after a restart) that snippets/templates can't:
-  // gotchas, decisions, "the prod DB host is X", task hand-off notes.
-
-  server.tool(
-    "save_note",
-    "Save a durable note to the cross-session scratchpad (persisted to disk). Use this to leave context that a FUTURE Claude session should know — decisions made, gotchas discovered, where things live, or a hand-off summary. Pass an existing note's `id` to update it instead of creating a new one. Returns the saved note (with its id).",
-    {
-      title: z.string().describe("Short title for the note"),
-      body: z.string().describe("The note's content (markdown is fine)"),
-      scope: z
-        .string()
-        .optional()
-        .describe("Optional project/working-dir path this note pertains to, for later filtering"),
-      tags: z.array(z.string()).optional().describe("Optional tags for grouping/filtering"),
-      id: z.string().optional().describe("Existing note id to update; omit to create a new note"),
-    },
-    async ({ title, body, scope, tags, id }) => {
-      const note = notes.save(title, body, { id, scope, tags })
-      return { content: [{ type: "text" as const, text: JSON.stringify(note, null, 2) }] }
-    },
-  )
-
-  server.tool(
-    "list_notes",
-    "List saved scratchpad notes, most-recently-updated first. Optionally filter by `scope` (substring match on the note's project path) and/or `tag`. Call this at the start of work to recover context a prior session left behind.",
-    {
-      scope: z.string().optional().describe("Filter to notes whose scope contains this substring"),
-      tag: z.string().optional().describe("Filter to notes carrying this tag"),
-    },
-    async ({ scope, tag }) => {
-      const list = notes.list(scope, tag)
-      return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] }
-    },
-  )
-
-  server.tool(
-    "get_note",
-    "Fetch a single scratchpad note by its id.",
-    {
-      id: z.string().describe("Note id"),
-    },
-    async ({ id }) => {
-      const note = notes.get(id)
-      return {
-        content: [
-          { type: "text" as const, text: note ? JSON.stringify(note, null, 2) : "Note not found" },
-        ],
-      }
-    },
-  )
-
-  server.tool(
-    "delete_note",
-    "Delete a scratchpad note by its id once it's no longer relevant.",
-    {
-      id: z.string().describe("Note id"),
-    },
-    async ({ id }) => {
-      const ok = notes.delete(id)
-      return { content: [{ type: "text" as const, text: ok ? "Note deleted" : "Note not found" }] }
-    },
-  )
-
-  server.tool(
-    "show_notes",
-    "Show the saved scratchpad notes in a UI panel so the USER can see the durable cross-session context Claude has accumulated (the notes are otherwise invisible to them). Loads notes via the same filters as list_notes (`scope` substring / `tag`) and renders each note's title, scope, tags, and markdown body. Returns how many notes were shown.",
-    {
-      scope: z.string().optional().describe("Filter to notes whose scope contains this substring"),
-      tag: z.string().optional().describe("Filter to notes carrying this tag"),
-      title: z.string().optional().describe("Optional heading for the panel (defaults to \"Notes\")"),
-      position: z.enum(["right", "bottom"]).optional().describe("Drawer position"),
-    },
-    async ({ scope, tag, title, position }) => {
-      const list = notes.list(scope, tag)
-      const panel = panels.show("notes", { title, notes: list }, position)
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({ panelId: panel.id, count: list.length }),
-          },
-        ],
-      }
-    },
-  )
 
   // Show a diff of two files (or a file vs proposed content) in the interactive
   // review-enabled diff panel. Reads via FileService and hands the contents to

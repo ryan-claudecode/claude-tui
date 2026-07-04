@@ -7,10 +7,8 @@ import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
 import type { NotificationService } from "../services/notifications"
 import type { GitService } from "../services/git"
-import type { TestRunnerService } from "../services/tests"
 import type { ClipboardService } from "../services/clipboard"
 import type { ShellService } from "../services/shell"
-import type { NotesService } from "../services/notes"
 import type { FileService } from "../services/files"
 import type { UiService } from "../services/ui"
 import type { SchedulerService } from "../services/scheduler"
@@ -30,11 +28,10 @@ Tool groups (all prefixed mcp__claudetui__):
 PILLAR 1 — CONTINUITY (work outlives any single context window):
 - Work sessions — create_work_session / list_work_sessions / work_session_status build a durable *container* that groups many terminals and survives restarts. set_terminal_activity reports what a terminal is doing now. list_folder_conversations + restore_conversation discover and reopen ANY past Claude Code conversation for a folder (including ones started outside this app) — claude --resume in that folder as a new work session. Durable KNOWLEDGE lives in Claude's own native memory (CLAUDE.md / CLAUDE.local.md / auto-memory), not in this app.
 - Session history — get_session_output / search_session_output (review what a background session did while you were away), get_session_activity (which sessions are active vs idle), wait_for_session_idle (delegate a task to another session and block until it finishes).
-- Durable notes — save_note / list_notes / get_note / delete_note / show_notes (a cross-session scratchpad on disk for the next session).
 - Native context (READ-ONLY) — inspect_workspace_context enumerates the complete launch-time context a fresh Claude eats in a workspace — managed policy, user/project memory + rules, parent-chain, native auto-memory — by precedence; @imports listed not expanded; it NEVER writes a file.
 
 PILLAR 2 — AGENT-RENDERED UI (you drive the app back, routing the user's attention):
-- Panels — show_panel renders a rich panel in the companion window: diff, image, markdown, table, test, chart, heatmap, tree, timeline, git, kanban, notes, stat, log, progress, code. show_form shows an interactive form and waits for the user's submission. Plus update_panel / hide_panel / hide_all_panels / list_panels. diff_files opens an interactive, review-enabled diff of two files (or a proposed rewrite).
+- Panels — show_panel renders a rich panel: diff, image, markdown, table, git, code. show_form shows an interactive form and waits for the user's submission. Plus update_panel / hide_panel / hide_all_panels / list_panels. diff_files opens an interactive, review-enabled diff of two files (or a proposed rewrite).
 - Asking the user a question — the native AskUserQuestion tool is NOT available in this environment; use ask_user to ask an interactive question. It BLOCKS until the user answers and raises their attention: pass a question plus optional options (2-8 click-to-select choices), multi_select, and/or allow_free_text; it returns their chosen label(s) and any free text.
 - Attention & handoff — notify (a toast that surfaces even when this terminal isn't focused — announce completion, request input, report errors), request_attention (put yourself on the user's attention queue when you need them) / get_attention_queue (see if the human is already backed up before raising another checkpoint), write_clipboard / read_clipboard (hand the user a finished artifact / read what they copied), open_external (open a URL in their browser), reveal_path (show a file in their OS file manager).
 - App UI control — drive the same view actions the user can: set_focus_mode, open_command_palette, show_keyboard_shortcuts, open_history_search, export_session_log, get_config.
@@ -46,7 +43,7 @@ PILLAR 3 — ORCHESTRATION (durable goals, code-level supervision):
 SUPPORTING (observability & self-verification):
 - Read-only git — git_status / git_log / git_diff / git_show / git_blame / git_branches return structured JSON for inspecting repo state without scraping the terminal. (Write-side git — commit/push/branch/stash — is deliberately NOT here; use your own shell.)
 - Workspaces — the durable registry of user-named single-folder workspaces (the spatial frame sessions scope to; each workspace is ONE optional directory): list_workspaces / get_active_workspace (read), rescan_workspaces (re-scan the configured paths for new workspace.json manifests and seed them — idempotent, never duplicates or reverts user edits), create_workspace (name + optional single dir) / rename_workspace / set_workspace_dir (set or clear the workspace's one folder; null clears) / delete_workspace (CRUD by registry id), set_active_workspace (SELECTION-ONLY — mark the active workspace; null clears to the 'All' bucket; does NOT spawn), launch_workspace (the explicit BOOT verb — open editors + spawn one session per repo, or one in the workspace's folder).
-- Self-verification — take_screenshot, get_app_state, run_build, run_tests.
+- Self-verification — take_screenshot, get_app_state, run_build.
 
 IF YOU WERE SPAWNED AS A TERMINAL IN A WORK SESSION: your identity is bound to this MCP connection — the work-session tools (set_terminal_activity, work_session_status) default to YOUR session and terminal, so call them with NO ids (e.g. set_terminal_activity({ activity: "running the test suite" })). As you work, call set_terminal_activity whenever your focus changes. On Ctrl+Shift+H you'll be asked to retire and continue in a fresh terminal. Record durable knowledge in the project's native memory files (CLAUDE.md / CLAUDE.local.md), not in this app. Then proceed with the user's instructions.
 
@@ -83,10 +80,8 @@ export async function startMcpServer(
   panelService: PanelService,
   notificationService: NotificationService,
   gitService: GitService,
-  testRunnerService: TestRunnerService,
   clipboardService: ClipboardService,
   shellService: ShellService,
-  notesService: NotesService,
   fileService: FileService,
   uiService: UiService,
   workSessionService: SessionService,
@@ -115,10 +110,8 @@ export async function startMcpServer(
       panelService,
       notificationService,
       gitService,
-      testRunnerService,
       clipboardService,
       shellService,
-      notesService,
       fileService,
       uiService,
       workSessionService,

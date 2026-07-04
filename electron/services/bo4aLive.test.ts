@@ -90,16 +90,15 @@ describe.runIf(LIVE)("BO-4a LIVE end-to-end (real claude -p) — gated by BO4A_L
     // The REAL MCP server — its approve_tool gate is what makes the permission
     // round-trip live. Only sessionService (svc, position 1) + attentionService
     // (position 15) are real; positions 2-14 + 16-19 are stubs never invoked by this
-    // harness's prompts. (19 args total — see startMcpServer.)
+    // harness's prompts. (14 args total — see startMcpServer.)
     const started = await startMcpServer(
       svc,
       stub(), stub(), stub(), stub(), stub(), // 2-6 workspace/app/panel/notification/git
-      stub(), // 7 testRunnerService
-      stub(), stub(), stub(), stub(), stub(), // 8-12 clipboard/shell/notes/file/ui
-      stub(), // 13 workSessionService
-      attention, // 14 attentionService
-      stub(), // 15 contextInspectorService (CAPP-98)
-      stub(), // 16 schedulerService (CAPP-114)
+      stub(), stub(), stub(), stub(), // 7-10 clipboard/shell/file/ui
+      stub(), // 11 workSessionService
+      attention, // 12 attentionService
+      stub(), // 13 contextInspectorService (CAPP-98)
+      stub(), // 14 schedulerService (CAPP-114)
     )
     svc.setMcpConfigPath(started.configPath)
     svc.setMcpServerUrl(`http://127.0.0.1:${started.port}/sse`)

@@ -59,8 +59,6 @@ const mainApi = {
   // GATE (src/lib/panelApiParity.test.ts) fails the build if it's missing from window.api.
   openSessionOverview: (sessionId: string) =>
     ipcRenderer.invoke("worksession:open-overview", sessionId),
-  getSessionTimeline: (sessionId: string) =>
-    ipcRenderer.invoke("worksession:timeline", sessionId),
   handoffTerminal: (sessionId: string, terminalId: string) =>
     ipcRenderer.invoke("worksession:handoff", sessionId, terminalId),
   // CAPP-39 gate ② — launch an interactive `claude /login` terminal from the

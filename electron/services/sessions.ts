@@ -1289,20 +1289,6 @@ export class SessionService {
     if (s.eventLog.length > MAX_EVENTS) s.eventLog.splice(0, s.eventLog.length - MAX_EVENTS)
   }
 
-  /**
-   * The session's life-history, sorted oldest→newest (ST-1). For sessions that
-   * predate the event log (empty/undefined `eventLog`), BACKFILL a single creation
-   * entry so an old session still shows something rather than a blank panel.
-   */
-  getSessionTimeline(sessionId: string): SessionEvent[] {
-    const s = this.sessions.get(sessionId)
-    if (!s) return []
-    if (s.eventLog && s.eventLog.length > 0) {
-      return [...s.eventLog].sort((a, b) => a.time - b.time)
-    }
-    return [{ time: s.createdAt, kind: "spawn", text: `Session "${s.name}" created` }]
-  }
-
   private persist(s: WorkSession): void {
     s.updatedAt = this.now()
     // CAPP-39 gate ② — NEVER persist the one-time `claude /login` terminal: it's an

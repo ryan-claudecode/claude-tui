@@ -57,9 +57,6 @@ export function registerWorkSessionHandlers(deps: {
     if (!overview || !panelService) return null
     return panelService.show("session-overview", overview, "right")
   })
-  ipcMain.handle("worksession:timeline", (_e, sessionId: string) =>
-    workSessionService.getSessionTimeline(sessionId),
-  )
   ipcMain.handle("worksession:handoff", (_e, sessionId: string, terminalId: string) =>
     workSessionService.handoffTerminal(sessionId, terminalId),
   )

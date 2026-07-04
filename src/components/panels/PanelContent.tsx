@@ -3,18 +3,8 @@ import FormPanel from "./FormPanel"
 import ImagePanel from "./ImagePanel"
 import MarkdownPanel from "./MarkdownPanel"
 import TablePanel from "./TablePanel"
-import TestPanel from "./TestPanel"
-import ChartPanel from "./ChartPanel"
-import TreePanel from "./TreePanel"
-import TimelinePanel from "./TimelinePanel"
 import GitPanel from "./GitPanel"
-import KanbanPanel from "./KanbanPanel"
-import NotesPanel from "./NotesPanel"
-import StatPanel from "./StatPanel"
-import LogPanel from "./LogPanel"
-import ProgressPanel from "./ProgressPanel"
 import CodePanel from "./CodePanel"
-import HeatmapPanel from "./HeatmapPanel"
 import SessionOverviewPanel from "./SessionOverviewPanel"
 import ContextInspectorPanel from "./ContextInspectorPanel"
 import SchedulePanel from "./SchedulePanel"
@@ -46,10 +36,8 @@ export interface PanelLike {
 /** Display label for a panel TYPE (the generic fallback the tab strip uses). */
 export const PANEL_LABELS: Record<string, string> = {
   diff: "Diff", form: "Form", image: "Image", markdown: "Markdown",
-  table: "Table", test: "Tests", chart: "Chart", tree: "Tree",
-  timeline: "Timeline", git: "Git", kanban: "Kanban", notes: "Notes",
-  stat: "Stats", log: "Log", progress: "Progress", code: "Code",
-  heatmap: "Heatmap", "session-overview": "Overview",
+  table: "Table", git: "Git", code: "Code",
+  "session-overview": "Overview",
   "context-inspector": "Context", schedule: "Schedule",
 }
 
@@ -90,30 +78,10 @@ export default function PanelContent({ panel, api }: PanelContentProps) {
       return <MarkdownPanel {...panel.props} />
     case "table":
       return <TablePanel {...panel.props} />
-    case "test":
-      return <TestPanel {...panel.props} />
-    case "chart":
-      return <ChartPanel {...panel.props} />
-    case "tree":
-      return <TreePanel {...panel.props} />
-    case "timeline":
-      return <TimelinePanel {...panel.props} />
     case "git":
       return <GitPanel {...panel.props} />
-    case "kanban":
-      return <KanbanPanel {...panel.props} />
-    case "notes":
-      return <NotesPanel {...panel.props} />
-    case "stat":
-      return <StatPanel {...panel.props} />
-    case "log":
-      return <LogPanel {...panel.props} />
-    case "progress":
-      return <ProgressPanel {...panel.props} />
     case "code":
       return <CodePanel {...panel.props} />
-    case "heatmap":
-      return <HeatmapPanel {...(panel.props as any)} />
     case "session-overview":
       return <SessionOverviewPanel {...(panel.props as any)} />
     case "context-inspector":
