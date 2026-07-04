@@ -1,6 +1,8 @@
 import { useCallback, useState } from "react"
 import AgentView, { type TranscriptCache } from "./AgentView"
 import AgentComposer from "./AgentComposer"
+import ContextMeterBar from "./ContextMeterBar"
+import type { ContextMeter } from "../lib/contextMeter"
 import { toast } from "../lib/toast"
 
 interface Props {
@@ -74,6 +76,32 @@ export default function AgentSurface({
   onSwitched,
 }: Props) {
   const [switching, setSwitching] = useState(false)
+  // CAPP-127 — the derived context meter, lifted from AgentView (which owns the folded
+  // blocks). Null until a usage-bearing result lands → the bar stays hidden.
+  const [contextMeter, setContextMeter] = useState<ContextMeter | null>(null)
+
+  // CAPP-127 — the legend's "Compact" action: send `/compact` through the SAME
+  // agent-input path the composer's send uses (the slash forwards unchanged to Claude,
+  // per the BO-7 routing). Guarded to a live, non-busy terminal.
+  const compact = useCallback(() => {
+    if (busy || !sessionId) return
+    window.api.sendAgentInput(terminalId, { text: "/compact", attachments: [] })
+  }, [busy, sessionId, terminalId])
+
+  // CAPP-127 — the legend's "Handoff" action: retire-and-continue THIS terminal via the
+  // same window.api.handoffTerminal mechanism as Ctrl+Shift+H (flush summary + fresh
+  // terminal + retire old — the logic lives in the backend service, not duplicated here).
+  // The respawn mints a new terminal id; onSwitched re-points the active selection at it.
+  const handoff = useCallback(async () => {
+    if (!sessionId) return
+    try {
+      const r = await window.api.handoffTerminal(sessionId, terminalId)
+      if (r?.terminalId) onSwitched?.(r.terminalId)
+    } catch {
+      toast("error", "Couldn't hand off the terminal.")
+    }
+  }, [sessionId, terminalId, onSwitched])
+
   const switchToRaw = useCallback(async () => {
     if (!sessionId || busy || switching) return
     setSwitching(true)
@@ -109,7 +137,13 @@ export default function AgentSurface({
         ccConversationId={ccConversationId}
         transcriptCache={transcriptCache}
         onSwitched={onSwitched}
+        onContextMeter={setContextMeter}
       />
+      {/* CAPP-127 — the live context meter, spanning the bottom of the chat surface
+          directly above the composer. Slim + statically visible; hidden until the
+          first usage-bearing result (meter null). Works identically single-pane and
+          in a split (this surface is shared by both). */}
+      <ContextMeterBar meter={contextMeter} busy={busy} onCompact={compact} onHandoff={handoff} />
       <AgentComposer
         terminalId={terminalId}
         sessionId={sessionId}
