@@ -2244,7 +2244,7 @@ export class TerminalService {
   list(): TerminalInfo[] {
     // BO-4a — include HEADLESS (structured) terminals alongside the PTY ones.
     // Both registries are real terminals; consumers that read list() (e.g.
-    // broadcast_input, companion panel input, list_sessions) must see structured
+    // companion panel input, list_sessions) must see structured
     // terminals or they'd be invisible the moment the engine switch is on.
     const ptys = Array.from(this.terminals.values()).map((s) => ({
       id: s.id,
@@ -2253,9 +2253,9 @@ export class TerminalService {
       state: s.state,
       engine: "xterm" as const,
       // CAPP-54 gate ② (re-review BLOCKER) — carry isLogin on the returned object.
-      // BroadcastService excludes login terminals via `.filter((s) => !s.isLogin)`,
-      // which is a NO-OP unless list() actually surfaces the flag. The login PTY is
-      // always xterm, but we copy it on both branches for consistency.
+      // Consumers that special-case the live `claude /login` OAuth PTY rely on the
+      // flag surviving list(). The login PTY is always xterm, but we copy it on both
+      // branches for consistency.
       isLogin: s.isLogin,
     }))
     const headless = Array.from(this.headless.values()).map((s) => ({
@@ -2428,8 +2428,8 @@ export class TerminalService {
 
   write(id: string, data: string): void {
     // BO-5: a structured terminal has no interactive PTY — its stdin is the
-    // stream-json user-message sink. Route legacy write() callers (broadcast_input,
-    // templates, mission dispatch, panel input, handoff force-flush) there instead
+    // stream-json user-message sink. Route legacy write() callers (mission
+    // dispatch, panel input, handoff force-flush) there instead
     // of a dead PTY. Strip the PTY-only idioms (bracketed-paste markers + a trailing
     // submit CR) so the agent receives clean prompt text. (BO-3 owns the richer
     // user composer on sendAgentMessage; this is the LEGACY write() path only.)

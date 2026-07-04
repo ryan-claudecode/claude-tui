@@ -1,16 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
-import type { SessionService, SessionEvent } from "../../services/sessions"
+import type { SessionService } from "../../services/sessions"
 import type { PanelService } from "../../services/panels"
 import type { RecallService, RecallHit } from "../../services/recall"
 import type { TerminalIdentity } from "./shared"
-
-/** Map a SessionEvent kind to the TimelinePanel step status it should render as. */
-function timelineStatus(kind: SessionEvent["kind"]): "done" | "active" | "error" {
-  if (kind === "correction") return "error"
-  if (kind === "spawn" || kind === "handoff") return "active"
-  return "done"
-}
 
 /**
  * CAPP-86 — render a recall hit as one markdown line, reusing getContext's exact
@@ -185,28 +178,6 @@ export function registerWorkSessionTools(
       const ownSession = sid === identity.sessionId
       const ctx = workSessions.getContext(sid, ownSession ? identity.terminalId : undefined)
       return { content: [{ type: "text" as const, text: ctx ?? "Work session not found" }] }
-    },
-  )
-
-  server.tool(
-    "session_timeline",
-    "Render your work session's durable life-history (terminals spawned/retired, notes, corrections, summary refreshes, handoffs, idle-flushes) as a timeline panel in the companion window — the 'what did my agents do while I was away?' view. session_id defaults to your own. Old sessions that predate the event log get a best-effort timeline reconstructed from their creation + notes.",
-    { session_id: z.string().optional() },
-    async ({ session_id }) => {
-      const sid = session_id ?? identity.sessionId
-      if (!sid) return { content: [{ type: "text" as const, text: "No work session bound to this connection — pass session_id." }] }
-      const session = workSessions.get(sid)
-      const events = workSessions.getSessionTimeline(sid)
-      if (events.length === 0) {
-        return { content: [{ type: "text" as const, text: "Work session not found, or it has no recorded history yet." }] }
-      }
-      const steps = events.map((e) => ({
-        label: e.text,
-        status: timelineStatus(e.kind),
-        meta: new Date(e.time).toLocaleString(),
-      }))
-      panels.show("timeline", { title: `Timeline — ${session?.name ?? sid}`, steps })
-      return { content: [{ type: "text" as const, text: `Rendered ${events.length} event(s) in the timeline panel.` }] }
     },
   )
 

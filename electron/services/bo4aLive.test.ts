@@ -94,15 +94,16 @@ describe.runIf(LIVE)("BO-4a LIVE end-to-end (real claude -p) — gated by BO4A_L
     // attention; CAPP-87 added workspaceMemoryService after; see startMcpServer.)
     const started = await startMcpServer(
       svc,
-      stub(), stub(), stub(), stub(), stub(), stub(), stub(), stub(), // 2-9
-      stub(), stub(), stub(), stub(), stub(), stub(), stub(), stub(), // 10-17
-      stub(), // 18 recallService
-      attention, // 19
-      stub(), // 20 workspaceMemoryService (CAPP-87)
-      stub(), // 21 contextInspectorService (CAPP-98)
-      stub(), // 22 exportService (CAPP-99)
-      stub(), // 23 schedulerService (CAPP-114)
-      stub(), // 24 actionButtonService (CAPP-104)
+      stub(), stub(), stub(), stub(), stub(), // 2-6 workspace/app/panel/notification/git
+      stub(), // 7 testRunnerService
+      stub(), stub(), stub(), stub(), stub(), // 8-12 clipboard/shell/notes/file/ui
+      stub(), stub(), // 13-14 missionService/workSessionService
+      stub(), // 15 recallService (CAPP-86)
+      attention, // 16 attentionService
+      stub(), // 17 workspaceMemoryService (CAPP-87)
+      stub(), // 18 contextInspectorService (CAPP-98)
+      stub(), // 19 exportService (CAPP-99)
+      stub(), // 20 schedulerService (CAPP-114)
     )
     svc.setMcpConfigPath(started.configPath)
     svc.setMcpServerUrl(`http://127.0.0.1:${started.port}/sse`)

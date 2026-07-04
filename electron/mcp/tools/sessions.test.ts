@@ -11,7 +11,6 @@ import {
   type SpawnPty,
 } from "../../services/terminals"
 import { SessionService } from "../../services/sessions"
-import type { BroadcastService } from "../../services/broadcast"
 import type { AttentionService } from "../../services/attention"
 import type { WorkspaceService } from "../../services/workspaces"
 
@@ -81,7 +80,6 @@ function register(
   registerSessionTools(
     server as any,
     terminals,
-    {} as unknown as BroadcastService,
     {} as unknown as AttentionService,
     work,
     workspaces,

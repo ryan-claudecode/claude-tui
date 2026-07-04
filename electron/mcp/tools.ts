@@ -5,10 +5,7 @@ import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
 import type { NotificationService } from "../services/notifications"
 import type { GitService } from "../services/git"
-import type { TemplateService } from "../services/templates"
 import type { TestRunnerService } from "../services/tests"
-import type { LayoutService } from "../services/layouts"
-import type { BroadcastService } from "../services/broadcast"
 import type { ClipboardService } from "../services/clipboard"
 import type { ShellService } from "../services/shell"
 import type { NotesService } from "../services/notes"
@@ -22,7 +19,6 @@ import type { AttentionService } from "../services/attention"
 import type { WorkspaceMemoryService } from "../services/workspaceMemory"
 import type { ContextInspectorService } from "../services/contextInspector"
 import type { ExportService } from "../services/export"
-import type { ActionButtonService } from "../services/actionButtons"
 import { registerSessionTools } from "./tools/sessions"
 import { registerWorkSessionTools } from "./tools/worksessions"
 import { registerMissionTools } from "./tools/missions"
@@ -32,7 +28,6 @@ import { registerGitTools } from "./tools/git"
 import { registerAppTools } from "./tools/app"
 import { registerWorkspaceTools } from "./tools/workspaces"
 import { registerScheduleTools } from "./tools/schedules"
-import { registerActionButtonTools } from "./tools/actionButtons"
 import { registerUiTools } from "./tools/ui"
 
 export type { TerminalIdentity } from "./tools/shared"
@@ -52,10 +47,7 @@ export function registerTools(
   panels: PanelService,
   notifications: NotificationService,
   git: GitService,
-  templates: TemplateService,
   tests: TestRunnerService,
-  layouts: LayoutService,
-  broadcast: BroadcastService,
   clipboard: ClipboardService,
   shellService: ShellService,
   notes: NotesService,
@@ -69,10 +61,9 @@ export function registerTools(
   contextInspector: ContextInspectorService,
   exportService: ExportService,
   scheduler: SchedulerService,
-  actionButtons: ActionButtonService,
   identity: TerminalIdentity = {},
 ) {
-  registerSessionTools(server, sessions, broadcast, attention, workSessions, workspaces, identity)
+  registerSessionTools(server, sessions, attention, workSessions, workspaces, identity)
   registerWorkSessionTools(server, workSessions, panels, recall, identity)
   registerMissionTools(server, mission)
   registerPanelTools(server, panels, notes, files, sessions, identity)
@@ -80,7 +71,6 @@ export function registerTools(
   registerGitTools(server, git, sessions)
   registerWorkspaceTools(server, workspaces, workSessions, workspaceMemory, contextInspector, exportService, identity)
   registerScheduleTools(server, scheduler, workspaces, workSessions, identity)
-  registerActionButtonTools(server, actionButtons, workSessions, identity)
   registerAppTools(
     server,
     sessions,
@@ -88,9 +78,7 @@ export function registerTools(
     appService,
     panels,
     notifications,
-    templates,
     tests,
-    layouts,
     clipboard,
     shellService,
     identity,

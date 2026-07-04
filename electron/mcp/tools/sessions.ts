@@ -1,7 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { TerminalService } from "../../services/terminals"
-import type { BroadcastService } from "../../services/broadcast"
 import type { AttentionService } from "../../services/attention"
 import type { SessionService } from "../../services/sessions"
 import type { WorkspaceService } from "../../services/workspaces"
@@ -10,7 +9,6 @@ import type { TerminalIdentity } from "./shared"
 export function registerSessionTools(
   server: McpServer,
   sessions: TerminalService,
-  broadcast: BroadcastService,
   attention: AttentionService,
   workSessions: SessionService,
   workspaces: WorkspaceService,
@@ -150,28 +148,6 @@ export function registerSessionTools(
     sessions.closeSplit()
     return { content: [{ type: "text" as const, text: "Split view closed" }] }
   })
-
-  // Broadcast — fan one input out to many sessions at once (synchronize panes)
-
-  server.tool(
-    "broadcast_input",
-    "Send the same input to multiple sessions at once (the 'synchronize panes' move). By default it goes to every open session; pass session_ids to scope it to a subset. Set submit=true to press Enter and actually run/send the text, or leave it false to just stage the text in each prompt. Returns which sessions received it.",
-    {
-      content: z.string().describe("Text to send to each session"),
-      session_ids: z
-        .array(z.string())
-        .optional()
-        .describe("Sessions to target (defaults to all open sessions)"),
-      submit: z
-        .boolean()
-        .optional()
-        .describe("Append Enter to submit the input instead of just staging it (default: false)"),
-    },
-    async ({ content, session_ids, submit }) => {
-      const result = broadcast.broadcast(content, session_ids, submit)
-      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
-    },
-  )
 
   // Session history — review/search captured terminal output ("what happened while away")
 

@@ -320,17 +320,6 @@ const mainApi = {
   onScheduleEdit: (callback: (id: string) => void) =>
     ipcRenderer.on("schedule:edit", (_e, id) => callback(id)),
 
-  // CAPP-104 (AB-1) — agent-generated rail action buttons. list() seeds the flat set;
-  // `actionbuttons:updated` (one owner's full set per push) drives useActionButtons.
-  // dispatch runs a button's prompt in its owning session's live agent terminal.
-  listActionButtons: () => ipcRenderer.invoke("actionbuttons:list"),
-  removeActionButton: (scope: string, ownerId: string, id: string) =>
-    ipcRenderer.invoke("actionbuttons:remove", scope, ownerId, id),
-  dispatchActionButton: (id: string, targetSessionId: string) =>
-    ipcRenderer.invoke("actionbuttons:dispatch", id, targetSessionId),
-  onActionButtonsUpdated: (callback: (payload: any) => void) =>
-    ipcRenderer.on("actionbuttons:updated", (_e, payload) => callback(payload)),
-
   // WW-2b — worktree review: approve merges the worker's branch, reject discards
   // it (back to pending). Both return the resulting task state ({ status,
   // reviewReason } | null). getReviewTask fetches the latest captured diff so the
@@ -341,10 +330,6 @@ const mainApi = {
     ipcRenderer.invoke("worktree:reject", missionId, taskId, reason),
   getReviewTask: (missionId: string, taskId: string) =>
     ipcRenderer.invoke("worktree:get-review-task", missionId, taskId),
-
-  // Broadcast -- send one input to many sessions at once
-  broadcastInput: (content: string, sessionIds?: string[], submit?: boolean) =>
-    ipcRenderer.invoke("broadcast:send", content, sessionIds, submit),
 
   // Notifications
   listNotifications: () => ipcRenderer.invoke("notification:list"),

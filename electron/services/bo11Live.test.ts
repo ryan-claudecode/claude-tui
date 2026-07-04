@@ -102,15 +102,16 @@ describe.runIf(LIVE)("BO-11 LIVE — Stop truly stops (real claude -p), gated by
     attention = new AttentionService(stub(), svc, stub(), stub(), deps)
     const started = await startMcpServer(
       svc,
-      stub(), stub(), stub(), stub(), stub(), stub(), stub(), stub(),
-      stub(), stub(), stub(), stub(), stub(), stub(), stub(), stub(),
-      stub(), // recallService (CAPP-86)
-      attention,
-      stub(), // workspaceMemoryService (CAPP-87)
-      stub(), // contextInspectorService (CAPP-98)
-      stub(), // exportService (CAPP-99)
-      stub(), // schedulerService (CAPP-114)
-      stub(), // actionButtonService (CAPP-104)
+      stub(), stub(), stub(), stub(), stub(), // 2-6 workspace/app/panel/notification/git
+      stub(), // 7 testRunnerService
+      stub(), stub(), stub(), stub(), stub(), // 8-12 clipboard/shell/notes/file/ui
+      stub(), stub(), // 13-14 missionService/workSessionService
+      stub(), // 15 recallService (CAPP-86)
+      attention, // 16 attentionService
+      stub(), // 17 workspaceMemoryService (CAPP-87)
+      stub(), // 18 contextInspectorService (CAPP-98)
+      stub(), // 19 exportService (CAPP-99)
+      stub(), // 20 schedulerService (CAPP-114)
     )
     svc.setMcpConfigPath(started.configPath)
     svc.setMcpServerUrl(`http://127.0.0.1:${started.port}/sse`)

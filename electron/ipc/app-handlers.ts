@@ -3,8 +3,6 @@ import type { TerminalService } from "../services/terminals"
 import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
 import type { TestRunnerService } from "../services/tests"
-import type { LayoutService } from "../services/layouts"
-import type { BroadcastService } from "../services/broadcast"
 import type { NotesService } from "../services/notes"
 import {
   getThemeMode,
@@ -23,8 +21,6 @@ export function registerAppHandlers(deps: {
   workspaceService: WorkspaceService
   appService: AppService
   testRunnerService: TestRunnerService
-  layoutService: LayoutService
-  broadcastService: BroadcastService
   notesService: NotesService
 }) {
   const {
@@ -33,8 +29,6 @@ export function registerAppHandlers(deps: {
     workspaceService,
     appService,
     testRunnerService,
-    layoutService,
-    broadcastService,
     notesService,
   } = deps
 
@@ -111,19 +105,6 @@ export function registerAppHandlers(deps: {
   // Test runner IPC
   ipcMain.handle("test:run", (_e, cwd: string, command?: string) =>
     testRunnerService.run(cwd, command),
-  )
-
-  // Layout IPC -- saved session snapshots
-  ipcMain.handle("layout:list", () => layoutService.list())
-  ipcMain.handle("layout:save", (_e, name: string) => layoutService.save(name))
-  ipcMain.handle("layout:restore", (_e, name: string) => layoutService.restore(name))
-  ipcMain.handle("layout:delete", (_e, name: string) => layoutService.delete(name))
-
-  // Broadcast IPC -- fan one input out to many sessions at once
-  ipcMain.handle(
-    "broadcast:send",
-    (_e, content: string, sessionIds?: string[], submit?: boolean) =>
-      broadcastService.broadcast(content, sessionIds, submit),
   )
 
   // Notes IPC -- persistent cross-session scratchpad

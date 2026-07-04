@@ -44,7 +44,7 @@ import {
  *     must never crash the memory-mutation path).
  *
  * Mirrors the surrounding services' patterns: an injected `{ registryDir, now }` for hermetic
- * tests, a persisted registry envelope (`persist.ts`, like LayoutService), and a callback-set
+ * tests, a persisted registry envelope (`persist.ts`), and a callback-set
  * dep style for the live workspace/memory reads (kept decoupled + testable).
  */
 

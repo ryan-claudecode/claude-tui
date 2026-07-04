@@ -7,10 +7,7 @@ import type { AppService } from "../services/app"
 import type { PanelService } from "../services/panels"
 import type { NotificationService } from "../services/notifications"
 import type { GitService } from "../services/git"
-import type { TemplateService } from "../services/templates"
 import type { TestRunnerService } from "../services/tests"
-import type { LayoutService } from "../services/layouts"
-import type { BroadcastService } from "../services/broadcast"
 import type { ClipboardService } from "../services/clipboard"
 import type { ShellService } from "../services/shell"
 import type { NotesService } from "../services/notes"
@@ -24,7 +21,6 @@ import type { AttentionService } from "../services/attention"
 import type { WorkspaceMemoryService } from "../services/workspaceMemory"
 import type { ContextInspectorService } from "../services/contextInspector"
 import type { ExportService } from "../services/export"
-import type { ActionButtonService } from "../services/actionButtons"
 import { registerTools, type TerminalIdentity } from "./tools"
 
 // Injected into every connecting session's context via the MCP initialize
@@ -36,9 +32,9 @@ const SERVER_INSTRUCTIONS = `You are running inside ClaudeTUI — a workbench wh
 Tool groups (all prefixed mcp__claudetui__):
 
 PILLAR 1 — CONTINUITY (work outlives any single context window):
-- Work sessions (the context engine) — create_work_session / list_work_sessions / work_session_status build a durable *container* that groups many terminals and accumulates knowledge across restarts and context exhaustion. set_terminal_activity reports what a terminal is doing now; session_note records authoritative findings (pass 'corrects' to supersede a wrong one); set_session_summary sets the running summary; get_session_context pulls the primer (summary + findings + ruled-out) a fresh terminal reads to inherit what the session knows. recall searches every finding + summary ACROSS sessions ("have we learned this before?") — call it BEFORE re-exploring; scope defaults to your workspace, ruled-out hits surface what was disproven (with the fix) so you don't re-walk dead ends. session_timeline renders the session's durable life-history (spawns/retires/notes/corrections/summaries/handoffs) as a timeline panel — the "what did my agents do while I was away?" view. list_folder_conversations + restore_conversation discover and reopen ANY past Claude Code conversation for a folder (including ones started outside this app) — claude --resume in that folder as a new work session.
+- Work sessions (the context engine) — create_work_session / list_work_sessions / work_session_status build a durable *container* that groups many terminals and accumulates knowledge across restarts and context exhaustion. set_terminal_activity reports what a terminal is doing now; session_note records authoritative findings (pass 'corrects' to supersede a wrong one); set_session_summary sets the running summary; get_session_context pulls the primer (summary + findings + ruled-out) a fresh terminal reads to inherit what the session knows. recall searches every finding + summary ACROSS sessions ("have we learned this before?") — call it BEFORE re-exploring; scope defaults to your workspace, ruled-out hits surface what was disproven (with the fix) so you don't re-walk dead ends. list_folder_conversations + restore_conversation discover and reopen ANY past Claude Code conversation for a folder (including ones started outside this app) — claude --resume in that folder as a new work session.
 - Session history — get_session_output / search_session_output (review what a background session did while you were away), get_session_activity (which sessions are active vs idle), wait_for_session_idle (delegate a task to another session and block until it finishes).
-- Durable notes & setups — save_note / list_notes / get_note / delete_note / show_notes (a cross-session scratchpad on disk for the next session); list_session_templates / create_session_from_template (seed a purpose-built session); list_layouts / save_layout / restore_layout / delete_layout (snapshot and recreate a working set of sessions).
+- Durable notes — save_note / list_notes / get_note / delete_note / show_notes (a cross-session scratchpad on disk for the next session).
 - Workspace memory (the durable, workspace-level knowledge tier — survives ALL session deletion, distinct from per-session findings) — get_workspace_memory (read a workspace's standing context + findings), add_workspace_memory (record a workspace-wide finding), set_workspace_memory_context (set the workspace's standing instructions), promote_finding (graduate a session note up to its OWNING session's workspace so it outlives the session), pin_workspace_finding (mark a foundational finding never-evict so it always survives the curated context auto-loaded into a fresh session), inspect_workspace_context (READ-ONLY: enumerate the complete launch-time context a fresh Claude eats — managed policy, user/project memory + rules, parent-chain, native auto-memory, plus our injected primer — by precedence; @imports listed not expanded; never writes a file), export_workspace_memory (materialize the workspace tier into a user-owned markdown file a plain claude can @import — STRICTLY one-way, store→file; Mode A in-folder gitignore-first / Mode C custom path; returns the @import line). Destination is always YOUR bound session's workspace (or the owning session's, for promote) — never the global active selection.
 
 PILLAR 2 — AGENT-RENDERED UI (you drive the app back, routing the user's attention):
@@ -46,11 +42,10 @@ PILLAR 2 — AGENT-RENDERED UI (you drive the app back, routing the user's atten
 - Asking the user a question — the native AskUserQuestion tool is NOT available in this environment; use ask_user to ask an interactive question. It BLOCKS until the user answers and raises their attention: pass a question plus optional options (2-8 click-to-select choices), multi_select, and/or allow_free_text; it returns their chosen label(s) and any free text.
 - Attention & handoff — notify (a toast that surfaces even when this terminal isn't focused — announce completion, request input, report errors), request_attention (put yourself on the user's attention queue when you need them) / get_attention_queue (see if the human is already backed up before raising another checkpoint), write_clipboard / read_clipboard (hand the user a finished artifact / read what they copied), open_external (open a URL in their browser), reveal_path (show a file in their OS file manager).
 - App UI control — drive the same view actions the user can: set_focus_mode, open_command_palette, show_keyboard_shortcuts, open_history_search, export_session_log, get_config.
-- Action buttons (the Agent Rail's two-way surface) — add_action_button / list_action_buttons / remove_action_button: when the user REPEATS a request ("run the tests again", "redeploy") or asks for a button, add a durable labelled button (scope 'session' or 'workspace') whose click re-dispatches a stored prompt into a live agent terminal — turning the repeat into one click. The action is always a prompt to a session, never raw shell.
 
 PILLAR 3 — ORCHESTRATION (durable goals, dispatched workers, code-level supervision):
 - Missions — mission_create/status/list/plan/dispatch/await/resolve/log/pause/resume/stop/finish: run a durable, on-disk mission where you (or another Conductor session) decompose a goal, dispatch worker sessions, review results, and commit — surviving context and usage limits. If spawned as a Conductor, call mission_status FIRST to load state and continue. Opt-in worktree isolation (isolate_workers on mission_create/plan, requires a git cwd) runs each worker in a private git worktree and review-gates its diff: a resolved-done task enters review — mission_review_queue lists pending diffs; mission_approve_task merges (clean → done, conflict → preserved for manual handling, never auto-resolved); mission_reject_task discards back to pending.
-- Sessions & panes — create_session, kill_session, focus_session, rename_session, list_sessions, trigger_handoff, split_panes / close_split, broadcast_input (send the same input to many sessions at once).
+- Sessions & panes — create_session, kill_session, focus_session, rename_session, list_sessions, trigger_handoff, split_panes / close_split.
 - Scheduler (on-device recurring/one-shot runs) — schedule_create/list/update/delete/run_now: register a headless Claude run to fire on THIS machine at set times (interval with an optional time-of-day window + weekday filter, daily-at, or once) — the on-device answer to cloud scheduling (local files, git, gh, the user's auth). schedule_update enables/disables; schedule_run_now fires immediately. Every schedule is visible in the sidebar and scoped to your bound session's workspace by default.
 
 SUPPORTING (observability & self-verification):
@@ -93,10 +88,7 @@ export async function startMcpServer(
   panelService: PanelService,
   notificationService: NotificationService,
   gitService: GitService,
-  templateService: TemplateService,
   testRunnerService: TestRunnerService,
-  layoutService: LayoutService,
-  broadcastService: BroadcastService,
   clipboardService: ClipboardService,
   shellService: ShellService,
   notesService: NotesService,
@@ -110,7 +102,6 @@ export async function startMcpServer(
   contextInspectorService: ContextInspectorService,
   exportService: ExportService,
   schedulerService: SchedulerService,
-  actionButtonService: ActionButtonService,
 ): Promise<{ port: number; configPath: string }> {
   // A single McpServer can only be bound to one transport at a time, so we
   // build a fresh server (with all tools registered) PER SSE connection. The
@@ -133,10 +124,7 @@ export async function startMcpServer(
       panelService,
       notificationService,
       gitService,
-      templateService,
       testRunnerService,
-      layoutService,
-      broadcastService,
       clipboardService,
       shellService,
       notesService,
@@ -150,7 +138,6 @@ export async function startMcpServer(
       contextInspectorService,
       exportService,
       schedulerService,
-      actionButtonService,
       identity,
     )
     return server

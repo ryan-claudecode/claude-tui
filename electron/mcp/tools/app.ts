@@ -5,9 +5,7 @@ import type { WorkspaceService } from "../../services/workspaces"
 import type { AppService } from "../../services/app"
 import type { PanelService } from "../../services/panels"
 import type { NotificationService } from "../../services/notifications"
-import type { TemplateService } from "../../services/templates"
 import type { TestRunnerService } from "../../services/tests"
-import type { LayoutService } from "../../services/layouts"
 import type { ClipboardService } from "../../services/clipboard"
 import type { ShellService } from "../../services/shell"
 import { loadConfig } from "../../config"
@@ -20,9 +18,7 @@ export function registerAppTools(
   appService: AppService,
   panels: PanelService,
   notifications: NotificationService,
-  templates: TemplateService,
   tests: TestRunnerService,
-  layouts: LayoutService,
   clipboard: ClipboardService,
   shellService: ShellService,
   identity: TerminalIdentity = {},
@@ -100,37 +96,6 @@ export function registerAppTools(
     },
   )
 
-  // Session template tools — spawn purpose-built sessions seeded with a prompt
-
-  server.tool(
-    "list_session_templates",
-    "List available session templates (pre-configured session types like 'code review' or 'debugging' that seed a starter prompt).",
-    {},
-    async () => {
-      return { content: [{ type: "text" as const, text: JSON.stringify(templates.list(), null, 2) }] }
-    },
-  )
-
-  server.tool(
-    "create_session_from_template",
-    "Create a new session from a template (see list_session_templates). Spawns the session and types the template's starter prompt into it once Claude has booted.",
-    {
-      template_id: z.string().describe("Template id from list_session_templates"),
-      cwd: z.string().optional().describe("Working directory (overrides the template's default)"),
-    },
-    async ({ template_id, cwd }) => {
-      const info = templates.instantiate(template_id, cwd)
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: info ? JSON.stringify(info) : `Template not found: ${template_id}`,
-          },
-        ],
-      }
-    },
-  )
-
   // Test runner — run a project's test suite and surface parsed results in a panel
 
   server.tool(
@@ -159,64 +124,6 @@ export function registerAppTools(
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] }
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `run_tests failed: ${e.message}` }] }
-      }
-    },
-  )
-
-  // Saved layout tools — snapshot/restore a named set of sessions + working dirs
-
-  server.tool(
-    "list_layouts",
-    "List saved session layouts. A layout is a named snapshot of open sessions and their working directories that can be restored later (e.g. after an app restart).",
-    {},
-    async () => {
-      return { content: [{ type: "text" as const, text: JSON.stringify(layouts.list(), null, 2) }] }
-    },
-  )
-
-  server.tool(
-    "save_layout",
-    "Save the currently open sessions (names + working directories) as a named layout. Re-saving with an existing name overwrites it.",
-    {
-      name: z.string().describe("Name for the layout, e.g. 'frontend' or 'incident-review'"),
-    },
-    async ({ name }) => {
-      const layout = layouts.save(name)
-      return { content: [{ type: "text" as const, text: JSON.stringify(layout) }] }
-    },
-  )
-
-  server.tool(
-    "restore_layout",
-    "Restore a saved layout by recreating each of its sessions. Returns the newly created sessions.",
-    {
-      name: z.string().describe("Name of the layout to restore (see list_layouts)"),
-    },
-    async ({ name }) => {
-      const created = layouts.restore(name)
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: created ? JSON.stringify(created) : `Layout not found: ${name}`,
-          },
-        ],
-      }
-    },
-  )
-
-  server.tool(
-    "delete_layout",
-    "Delete a saved layout by name.",
-    {
-      name: z.string().describe("Name of the layout to delete"),
-    },
-    async ({ name }) => {
-      const ok = layouts.delete(name)
-      return {
-        content: [
-          { type: "text" as const, text: ok ? "Layout deleted" : `Layout not found: ${name}` },
-        ],
       }
     },
   )

@@ -489,9 +489,9 @@ describe("TerminalService spawn seam (FakePty — no real process)", () => {
 
 describe("TerminalService.list() carries isLogin (CAPP-54 gate ② BLOCKER)", () => {
   // The re-review BLOCKER: list() rebuilds plain return objects and previously did
-  // NOT copy isLogin, so BroadcastService's `.filter(s => !s.isLogin)` was a no-op in
+  // NOT copy isLogin, so any `.filter(s => !s.isLogin)` consumer was a no-op in
   // production (the field was always undefined) — the live `claude /login` OAuth PTY
-  // stayed a valid broadcast target. This DIRECT test on list() is the one that would
+  // stayed a valid target. This DIRECT test on list() is the one that would
   // have caught it: it drives the real service (no stub) and asserts the flag survives.
   it("a login terminal's entry carries isLogin===true; a normal terminal's does not", () => {
     const { svc } = makeTestTerminalService()

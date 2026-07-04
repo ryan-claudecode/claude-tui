@@ -569,8 +569,8 @@ describe("BO-5 input routing — write()/waitForIdle reach the stdin sink, not a
   it("write() to a structured terminal routes a clean user message to stdin", () => {
     const { svc, spawned } = makeHeadlessService()
     const info = svc.createHeadless("t", process.cwd())
-    // broadcast_input/mission/templates pass "text" + a submit CR (and sometimes
-    // bracketed-paste). The structured route strips those PTY idioms.
+    // legacy write() callers (mission dispatch, panel input) pass "text" + a submit CR
+    // (and sometimes bracketed-paste). The structured route strips those PTY idioms.
     svc.write(info.id, "\x1b[200~run the tests\x1b[201~\r")
     expect(spawned[0].written).toHaveLength(1)
     expect(JSON.parse(spawned[0].written[0])).toEqual({
