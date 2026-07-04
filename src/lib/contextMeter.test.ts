@@ -52,6 +52,28 @@ describe("resultContextFootprint", () => {
     expect(resultContextFootprint({} as ResultCost)).toBeNull()
     expect(resultContextFootprint({ costUsd: 0.02, durationMs: 500 } as ResultCost)).toBeNull()
   })
+  it("prefers contextTokens (the LAST API request's window snapshot) over the per-turn sum", () => {
+    // A tool-heavy turn: top-level classes SUM across the turn's API requests (~1.48M
+    // billed), but the window at turn end is only the last request's footprint.
+    expect(
+      resultContextFootprint({
+        inputTokens: 12_000,
+        outputTokens: 40_000,
+        cacheReadTokens: 1_400_000,
+        cacheCreationTokens: 66_025,
+        contextTokens: 82_500,
+      } as ResultCost),
+    ).toBe(82_500)
+  })
+  it("falls back to the summed classes when contextTokens is absent (old payloads)", () => {
+    expect(
+      resultContextFootprint({
+        inputTokens: 100,
+        cacheReadTokens: 5000,
+        cacheCreationTokens: 400,
+      } as ResultCost),
+    ).toBe(5500)
+  })
 })
 
 describe("footprintsFromBlocks", () => {

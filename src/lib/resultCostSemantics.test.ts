@@ -81,6 +81,40 @@ describe("CAPP-125 — the live wire verdict (documented by the captured fixture
     expect(c2.costUsd).toBeCloseTo(TURN2_CUMULATIVE, 9) // RAW cumulative (the trap)
     expect(c2.totalTokens).toBe(10 + 106 + 4574 + 29621) // per-turn — safe to sum
   })
+
+  it("extractCost captures contextTokens from the LAST usage.iterations entry (window snapshot)", () => {
+    // Single-request turns: the one iteration IS the snapshot (== the summed classes).
+    const c1 = extractCost(P1_TURN1_RESULT_RAW)
+    expect(c1.contextTokens).toBe(10 + 25160 + 4461)
+
+    // Tool-heavy turn: top-level classes SUM across the turn's API requests, so a
+    // 200k-window turn can report >1M billed input-side tokens. The window at turn end
+    // is the LAST iteration's input+cache_read+cache_creation — NOT the top-level sum.
+    const multiIteration = {
+      ...P1_TURN1_RESULT_RAW,
+      usage: {
+        ...P1_TURN1_RESULT_RAW.usage,
+        input_tokens: 30,
+        cache_creation_input_tokens: 9_000,
+        cache_read_input_tokens: 160_000,
+        iterations: [
+          { type: "message", input_tokens: 10, output_tokens: 400, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 4_000 },
+          { type: "message", input_tokens: 10, output_tokens: 300, cache_read_input_tokens: 54_000, cache_creation_input_tokens: 3_000 },
+          { type: "message", input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 56_000, cache_creation_input_tokens: 2_000 },
+        ],
+      },
+    }
+    const cm = extractCost(multiIteration)
+    expect(cm.contextTokens).toBe(10 + 56_000 + 2_000) // last iteration only
+    expect(cm.totalTokens).toBe(30 + 458 + 9_000 + 160_000) // billed sum untouched
+
+    // No iterations array (older claude versions) → undefined, callers fall back.
+    const noIterations = {
+      ...P1_TURN1_RESULT_RAW,
+      usage: { ...P1_TURN1_RESULT_RAW.usage, iterations: undefined },
+    }
+    expect(extractCost(noIterations).contextTokens).toBeUndefined()
+  })
 })
 
 describe("toPerTurnCost — cumulative → this turn's own cost (reset-safe)", () => {

@@ -4,11 +4,13 @@
  * pure) so it's a plain unit-test seam, exactly like sessionRow / scheduleRow /
  * contextMeter's sibling reducers.
  *
- * A structured (headless) turn ends with a `result` event whose `usage` reports the
- * turn's INPUT-side token footprint. The context WINDOW a fresh `claude` is eating at
- * that moment ≈ `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`
- * (the same three classes {@link ResultCost} already carries — see CAPP-125's
- * extractCost). Output tokens do NOT occupy the input window, so they're excluded.
+ * A structured (headless) turn ends with a `result` event. The context WINDOW at that
+ * moment is the LAST API request's `input_tokens + cache_read_input_tokens +
+ * cache_creation_input_tokens` — {@link ResultCost.contextTokens}, extracted from the
+ * final `usage.iterations` entry. The TOP-LEVEL usage classes SUM across every API
+ * request in the turn (one per tool-call round), so on a tool-heavy turn they report
+ * total BURN (>1M is possible on a 200k window) — they serve only as a fallback for
+ * payloads without `iterations`. Output tokens do NOT occupy the input window.
  *
  * The bar shows three stacked segments that PARTITION the current total:
  *   - baseline  — the FIRST result's footprint (≈ system prompt + tools + CLAUDE.md +
@@ -44,12 +46,18 @@ export function contextCapForModel(model?: string): number {
 }
 
 /**
- * The context-window footprint a single `result` reports: input + cache-read +
- * cache-creation tokens. Returns `null` when the result carried NO usage at all (so it
- * is SKIPPED, never counted as a real 0 — a usage-less result must not reset the bar).
+ * The context-window footprint a single `result` reports. PREFERS `contextTokens` —
+ * the LAST API request's input + cache-read + cache-creation (the true window snapshot
+ * at turn end). The top-level classes SUM across every API request in the turn, so on
+ * a tool-heavy turn they report BURN (>1M is possible on a 200k window) — they're only
+ * a fallback for payloads without `usage.iterations` (older claude versions), where a
+ * single-request turn makes the sum ≈ the snapshot anyway. Returns `null` when the
+ * result carried NO usage at all (so it is SKIPPED, never counted as a real 0 — a
+ * usage-less result must not reset the bar).
  */
 export function resultContextFootprint(cost?: ResultCost): number | null {
   if (!cost) return null
+  if (cost.contextTokens != null) return cost.contextTokens
   const { inputTokens, cacheReadTokens, cacheCreationTokens } = cost
   if (inputTokens == null && cacheReadTokens == null && cacheCreationTokens == null) return null
   return (inputTokens ?? 0) + (cacheReadTokens ?? 0) + (cacheCreationTokens ?? 0)

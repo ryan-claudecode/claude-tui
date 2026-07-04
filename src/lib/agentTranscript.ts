@@ -97,6 +97,16 @@ export interface ResultCost {
    *  Built from the TOP-LEVEL `usage` object, which is PER-TURN (CAPP-125, unlike
    *  `total_cost_usd`/`modelUsage` which are cumulative) — so this is safe to sum as-is. */
   totalTokens?: number
+  /**
+   * The context-WINDOW snapshot at turn end: the LAST `usage.iterations` entry's
+   * input + cache-read + cache-creation (each iteration is one API request). The
+   * TOP-LEVEL input-side classes SUM across every request in the turn — a tool-heavy
+   * turn on a 200k window can report >1M billed input-side tokens — so they measure
+   * BURN, not window fullness; the context meter must read THIS field. Undefined when
+   * the payload carries no iterations (older claude versions) — callers fall back to
+   * the summed classes.
+   */
+  contextTokens?: number
   numTurns?: number
 }
 
@@ -257,6 +267,22 @@ export function extractCost(raw: unknown): ResultCost {
   const totalTokens = tokenClasses.some((t) => t != null)
     ? tokenClasses.reduce<number>((sum, t) => sum + (t ?? 0), 0)
     : undefined
+  // Window snapshot = the LAST iteration's input-side classes (one iteration per API
+  // request; the top-level classes are their SUM — burn, not fullness). Absent or
+  // malformed iterations → undefined so callers fall back.
+  let contextTokens: number | undefined
+  const iterations = Array.isArray(usage.iterations) ? usage.iterations : []
+  const last = iterations.length > 0 ? iterations[iterations.length - 1] : undefined
+  if (isObj(last)) {
+    const parts = [
+      num(last.input_tokens),
+      num(last.cache_read_input_tokens),
+      num(last.cache_creation_input_tokens),
+    ]
+    if (parts.some((t) => t != null)) {
+      contextTokens = parts.reduce<number>((sum, t) => sum + (t ?? 0), 0)
+    }
+  }
   return {
     costUsd: num(r.total_cost_usd),
     durationMs: num(r.duration_ms),
@@ -266,6 +292,7 @@ export function extractCost(raw: unknown): ResultCost {
     cacheCreationTokens,
     cacheReadTokens,
     totalTokens,
+    contextTokens,
   }
 }
 
