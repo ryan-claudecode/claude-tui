@@ -83,7 +83,7 @@ declare global {
       // BO-3: structured composer input + permission gate
       sendAgentInput: (terminalId: string, msg: { text?: string; attachments?: string[] }) => void
       // BO-7: structured composer `/`-command picker catalog + native-command bridge
-      getAgentCatalog: (terminalId: string) => Promise<AgentCatalog | null>
+      getAgentCatalog: (terminalId: string) => Promise<(AgentCatalog & { live?: boolean }) | null>
       // CAPP-120 (STT-1): push-to-talk dictation (Parakeet/sherpa-onnx utility process)
       sttStatus: () => Promise<SttStatusSnapshot>
       sttTranscribe: (samples: Float32Array, sampleRate: number) => Promise<SttTranscription>

@@ -61,7 +61,13 @@ export function useSlashPicker(opts: {
     window.api
       .getAgentCatalog(terminalId)
       .then((c) => {
-        if (alive && c) setCatalog(c)
+        if (!alive || !c) return
+        setCatalog(c)
+        // CAPP-126 — the pull reports whether the catalog came from a live init THIS
+        // spawn (vs. seeded-from-persisted on restore). Freshness is per-spawn, not
+        // per-mount: without this, remounting the composer (switching terminals) after
+        // turn 1 would wrongly re-show the "from last session" hint.
+        if (c.live) setSawLiveInit(true)
       })
       .catch(() => {})
     const dispose = window.api.onStreamEvent((p) => {

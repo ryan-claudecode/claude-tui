@@ -263,7 +263,7 @@ describe("createHeadless — parses the stream into typed events on the onEvent 
 })
 
 describe("BO-7 — retains the init catalog (slash commands + skills) per terminal", () => {
-  it("captures slash_commands + skills off the init line, exposed via getCatalog", () => {
+  it("captures slash_commands + skills off the init line, exposed via getCatalog (live)", () => {
     const { svc, spawned } = makeHeadlessService()
     const info = svc.createHeadless("t", process.cwd())
     // Before init: nothing captured yet.
@@ -272,6 +272,22 @@ describe("BO-7 — retains the init catalog (slash commands + skills) per termin
     expect(svc.getCatalog(info.id)).toEqual({
       slashCommands: ["apiref-check", "chrome-live"],
       skills: ["apiref-check", "chrome-live"],
+      live: true,
+    })
+  })
+
+  it("CAPP-126: a seedCatalog'd (restored) catalog reports live:false until a live init lands", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const info = svc.createHeadless("t", process.cwd())
+    svc.seedCatalog(info.id, { slashCommands: ["compact"], skills: [] })
+    // Seeded from the persisted ref → available immediately, but NOT live.
+    expect(svc.getCatalog(info.id)).toEqual({ slashCommands: ["compact"], skills: [], live: false })
+    // The first live init replaces the seed AND flips live.
+    spawned[0].emitStdout(`${fx.INIT}\n`)
+    expect(svc.getCatalog(info.id)).toEqual({
+      slashCommands: ["apiref-check", "chrome-live"],
+      skills: ["apiref-check", "chrome-live"],
+      live: true,
     })
   })
 
