@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react"
 import type { StreamEvent } from "../../electron/services/streamProtocol"
+import { contextMeterFromBlocks, type ContextMeter } from "../lib/contextMeter"
 import {
   reduceTranscript,
   emptyTranscript,
@@ -125,6 +126,14 @@ interface Props {
   transcriptCache?: TranscriptCache
   /** Re-point the active selection at the respawned terminal after a model switch. */
   onSwitched?: (terminalId: string) => void
+  /**
+   * CAPP-127 — lift the derived context meter up to AgentSurface, which mounts the
+   * ContextMeterBar between this view and the composer. Derived HERE (not in the
+   * surface) because the folded `state.blocks` — the same blocks the transcript
+   * renders, and which rehydrate on restore — live in this component. Null until a
+   * usage-bearing `result` lands (the bar stays hidden).
+   */
+  onContextMeter?: (meter: ContextMeter | null) => void
 }
 
 /**
@@ -149,6 +158,7 @@ export default function AgentView({
   ccConversationId,
   transcriptCache,
   onSwitched,
+  onContextMeter,
 }: Props) {
   // BO-12 — SEED from the cache synchronously in the initializer so a respawn's
   // cache hit paints the prior conversation on the VERY FIRST render (zero blank
@@ -418,6 +428,21 @@ export default function AgentView({
   // so it appears only while prose is actively streaming and clears the instant the
   // block settles / the turn ends.
   const caretId = streamingCaretId(state.blocks, busy)
+
+  // CAPP-127 — derive the context meter from the FULL folded blocks (not the windowed
+  // `visible` tail) + the terminal's model. The alias (`opus[1m]`) and the init-resolved
+  // id are joined so the `[1m]` 1M-cap marker is detected from whichever carries it.
+  const capModel = useMemo(
+    () => [model, resolvedModel].filter(Boolean).join(" "),
+    [model, resolvedModel],
+  )
+  const contextMeter = useMemo(
+    () => contextMeterFromBlocks(state.blocks, capModel),
+    [state.blocks, capModel],
+  )
+  useEffect(() => {
+    onContextMeter?.(contextMeter)
+  }, [contextMeter, onContextMeter])
 
   return (
     <div
