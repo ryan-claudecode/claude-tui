@@ -1,6 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react"
-import type { StreamEvent } from "../../electron/services/streamProtocol"
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+  useSyncExternalStore,
+} from "react"
 import { contextMeterFromBlocks, type ContextMeter } from "../lib/contextMeter"
+import type { TranscriptStore } from "../lib/transcriptStore"
 import {
   reduceTranscript,
   emptyTranscript,
@@ -124,6 +132,15 @@ interface Props {
   ccConversationId?: string
   /** BO-12 — the shared, cross-pane transcript cache (see {@link TranscriptCache}). */
   transcriptCache?: TranscriptCache
+  /**
+   * THE TRUST FIX — the always-on renderer transcript store (one instance in App.tsx,
+   * subscribed once at mount). AgentView reads THIS terminal's folded state from here
+   * via useSyncExternalStore instead of folding into component-local state, so the
+   * transcript keeps accumulating while the view is unmounted (the user switched to
+   * another session) and is intact on return. The App-level subscription is the sole
+   * fold site; this view only READS + SEEDS history into it.
+   */
+  transcriptStore: TranscriptStore
   /** Re-point the active selection at the respawned terminal after a model switch. */
   onSwitched?: (terminalId: string) => void
   /**
@@ -157,35 +174,45 @@ export default function AgentView({
   resolvedModel,
   ccConversationId,
   transcriptCache,
+  transcriptStore,
   onSwitched,
   onContextMeter,
 }: Props) {
-  // BO-12 — SEED from the cache synchronously in the initializer so a respawn's
-  // cache hit paints the prior conversation on the VERY FIRST render (zero blank
-  // flash). The dangling-tool settle here covers a Stop-aborted tool the live
-  // cache may have left "running". A disk-only restore (cache cold) falls through
-  // to emptyTranscript and is filled by the seed effect below.
-  const [state, setState] = useState<TranscriptState>(() => {
-    if (ccConversationId) {
-      const cached = transcriptCache?.get(ccConversationId)
-      if (cached && cached.blocks.length > 0) return settleRunningTools(cached)
-    }
-    return emptyTranscript()
-  })
+  // THE TRUST FIX — read THIS terminal's folded transcript from the always-on store
+  // via useSyncExternalStore. The fold happens ONCE in App.tsx (subscribed at mount),
+  // so events keep accumulating while this view is unmounted (the user switched away)
+  // and the full transcript is intact on return. `state` is the store's snapshot: a
+  // stable reference between changes, and a shared empty for a not-yet-seen terminal
+  // (so the Object.is snapshot compare never loops). Live folding (coalescing, tool
+  // correlation, resume-append) is byte-identical — it's the same reduceTranscript,
+  // just relocated into the store.
+  const subscribe = useCallback(
+    (cb: () => void) => transcriptStore.subscribe(terminalId, cb),
+    [transcriptStore, terminalId],
+  )
+  const getSnapshot = useCallback(
+    () => transcriptStore.get(terminalId),
+    [transcriptStore, terminalId],
+  )
+  const state = useSyncExternalStore(subscribe, getSnapshot)
+
   // True while the on-disk transcript read is in flight (cache cold + a convo id
   // present → app-restart restore). Seeds the "Restoring conversation…" rest state
-  // instead of flashing "Ready when you are" (which reads as data loss).
+  // instead of flashing "Ready when you are" (which reads as data loss). If the store
+  // already holds this terminal's blocks (live-accumulated while unmounted, or seeded
+  // on a prior mount) there is nothing to restore.
   const [seeding, setSeeding] = useState<boolean>(() => {
     if (!ccConversationId) return false
+    if (transcriptStore.get(terminalId).blocks.length > 0) return false
     const cached = transcriptCache?.get(ccConversationId)
     return !(cached && cached.blocks.length > 0)
   })
   // CAPP-103 — render-windowing: the number of OLDEST blocks NOT rendered. A long restored
   // conversation renders only its tail (the rest froze the main thread parsing markdown).
-  // Seeded SYNCHRONOUSLY from the cache hit here so a huge cached transcript never paints a
-  // full-DOM frame before windowing kicks in; the disk-restore path seeds it in the read's
-  // .then (below). Live streaming appends at the tail and never changes it — a conversation
-  // the user watched grow is never auto-hidden. The user reveals older blocks via "Load earlier".
+  // Seeded from the cache hit here so a huge cached transcript is windowed from the first
+  // paint; the disk-restore path seeds it in the read's .then (below). Live streaming (incl.
+  // content accumulated while the view was unmounted) appends at the tail and never changes
+  // it — a conversation the user watched grow is never auto-hidden. "Load earlier" reveals it.
   const [hiddenCount, setHiddenCount] = useState<number>(() => {
     if (ccConversationId) {
       const cached = transcriptCache?.get(ccConversationId)
@@ -205,34 +232,33 @@ export default function AgentView({
   // observes this (the scroll container itself is inset:0 and never resizes).
   const contentRef = useRef<HTMLDivElement>(null)
 
-  // Subscribe to the structured stream, filtered to THIS terminal. The reducer
-  // runs incrementally (append-in-place coalescing keeps settled block ids
-  // stable) so React never remounts settled blocks. Live events fold onto the
-  // SEEDED baseline; because a resumed conversation always starts the next turn
-  // with the user's own message (a `user_message` block breaks coalescing), live
-  // turns APPEND after the rehydrated history rather than double-rendering it.
-  useEffect(() => {
-    const dispose = window.api.onStreamEvent((payload) => {
-      if (payload.terminalId !== terminalId) return
-      setState((prev) => reduceTranscript(prev, payload.event as StreamEvent))
-    })
-    return () => {
-      // Per-instance unsubscribe (preload returns a disposer) — no sibling
-      // AgentView's listener is clobbered, and nothing leaks across remounts.
-      dispose?.()
+  // BO-12 (cache-hit seed) — a respawn (model switch / handoff / interrupt) remounts
+  // this view under a NEW terminal id but the SAME convo id; seed the store from the
+  // convo-keyed cache SYNCHRONOUSLY (layout effect, pre-paint) so the prior conversation
+  // paints with no blank flash. The dangling-tool settle covers a Stop-aborted tool the
+  // live cache may have left "running". `seedHistory` is idempotent (a per-terminal
+  // seeded flag) and merges BENEATH any live blocks, so a remount never double-seeds and
+  // never discards live content.
+  useLayoutEffect(() => {
+    if (!ccConversationId) return
+    if (transcriptStore.hasSeeded(terminalId)) return
+    const cached = transcriptCache?.get(ccConversationId)
+    if (cached && cached.blocks.length > 0) {
+      transcriptStore.seedHistory(terminalId, settleRunningTools(cached))
     }
-  }, [terminalId])
+  }, [ccConversationId, terminalId, transcriptStore, transcriptCache])
 
-  // BO-12 — rehydrate from the ON-DISK transcript when the cache is cold (an app
-  // restart starts with an empty cache). Runs once; the cache-hit path is already
-  // handled by the useState initializer above. Guards against clobbering live
-  // state: if events streamed in before the read resolved, keep them.
+  // BO-12 (disk seed) — rehydrate from the ON-DISK transcript when the cache is cold (an
+  // app restart starts with an empty cache). Runs once. `seedHistory` merges the restored
+  // history BENEATH whatever live blocks already streamed into the store — the line-244 fix:
+  // no live event can discard the seed, and no seed can discard live blocks.
   useEffect(() => {
     if (seededRef.current) return
     if (!ccConversationId) return
+    if (transcriptStore.hasSeeded(terminalId)) return // cache seed / a prior mount already did it
     seededRef.current = true
     const cached = transcriptCache?.get(ccConversationId)
-    if (cached && cached.blocks.length > 0) return // already seeded from cache
+    if (cached && cached.blocks.length > 0) return // handled by the cache-seed layout effect
     let cancelled = false
     window.api
       .getTranscriptEvents(ccConversationId)
@@ -241,9 +267,8 @@ export default function AgentView({
         setSeeding(false)
         if (!events || events.length === 0) return
         const seeded = settleRunningTools(events.reduce(reduceTranscript, emptyTranscript()))
-        setState((prev) => (prev.blocks.length === 0 ? seeded : prev))
-        // CAPP-103 — window a big RESTORED transcript to its tail (batched with the setState
-        // above → windowed from the first paint, no full-DOM frame). ONLY for a genuine cold
+        transcriptStore.seedHistory(terminalId, seeded)
+        // CAPP-103 — window a big RESTORED transcript to its tail. ONLY for a genuine cold
         // restore — never a fresh live session whose convo id arrived late (coldRestoreRef).
         // Preserve any value the user already set rather than clobbering it.
         if (coldRestoreRef.current) {
@@ -256,11 +281,11 @@ export default function AgentView({
     return () => {
       cancelled = true
     }
-  }, [ccConversationId, transcriptCache])
+  }, [ccConversationId, terminalId, transcriptCache, transcriptStore])
 
   // BO-12 — keep the shared cache current with live folding, so a later respawn
   // (which remounts this component under a new terminal id but the SAME convo id)
-  // re-seeds from memory. Keyed by the stable convo id.
+  // re-seeds from memory. Keyed by the stable convo id. Reads the store snapshot.
   useEffect(() => {
     if (ccConversationId && state.blocks.length > 0) {
       transcriptCache?.set(ccConversationId, state)

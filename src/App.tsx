@@ -20,6 +20,7 @@ import AgentSurface from "./components/AgentSurface"
 import AgentRail from "./components/AgentRail"
 import WindowControls from "./components/WindowControls"
 import type { TranscriptCache } from "./components/AgentView"
+import { createTranscriptStore } from "./lib/transcriptStore"
 import PermissionPrompt from "./components/PermissionPrompt"
 import KillSessionModal from "./components/KillSessionModal"
 import ModalHost from "./components/ModalHost"
@@ -399,18 +400,45 @@ export default function App() {
   // convo share the entry.
   const transcriptCacheRef = useRef<TranscriptCache>(new Map())
 
+  // THE TRUST FIX — the ALWAYS-ON renderer transcript store. Held in a ref so the
+  // instance is stable for the window's life, and subscribed ONCE at mount (below).
+  // It folds EVERY terminal's stream continuously — mounted or not — so a switched-
+  // away terminal (whose AgentView is unmounted, because App only mounts AgentView
+  // for the ACTIVE session's terminals) keeps accumulating its transcript instead of
+  // silently dropping it. AgentView reads its terminal's state from here via
+  // useSyncExternalStore. Keyed by terminalId (the WITHIN-spawn, across-mount tier);
+  // the transcriptCache above stays the ACROSS-respawn tier keyed by convo id.
+  const transcriptStoreRef = useRef(createTranscriptStore())
+
+  // Subscribe ONCE, for the window's life: fold every terminal's stream into the
+  // store regardless of which AgentView (if any) is mounted. This is the seam the
+  // per-component onStreamEvent listener used to own — lifting it here is what makes
+  // an away-period stream survivable.
+  useEffect(() => {
+    const dispose = window.api.onStreamEvent((payload) => {
+      transcriptStoreRef.current.ingest(payload)
+    })
+    return () => dispose?.()
+  }, [])
+
   // GC cache entries whose convo id no longer belongs to any live terminal — i.e.
   // a closed terminal or a killed session. A `--resume` respawn keeps the convo id
   // on its ref, so it stays "live" and is never evicted mid-respawn; only a genuine
-  // close/kill drops it. Cheap set-diff on each session change.
+  // close/kill drops it. Cheap set-diff on each session change. The transcript STORE
+  // is GC'd alongside, keyed by terminalId (a closed/killed terminal's id drops out).
   useEffect(() => {
-    const live = new Set<string>()
+    const liveConvos = new Set<string>()
+    const liveTerminals = new Set<string>()
     for (const s of sessions) {
-      for (const t of s.terminals) if (t.ccConversationId) live.add(t.ccConversationId)
+      for (const t of s.terminals) {
+        liveTerminals.add(t.id)
+        if (t.ccConversationId) liveConvos.add(t.ccConversationId)
+      }
     }
     for (const key of transcriptCacheRef.current.keys()) {
-      if (!live.has(key)) transcriptCacheRef.current.delete(key)
+      if (!liveConvos.has(key)) transcriptCacheRef.current.delete(key)
     }
+    transcriptStoreRef.current.gc(liveTerminals)
   }, [sessions])
 
   // BO-4b — the renderer fork is PER TERMINAL (on `t.engine`, surfaced from the
@@ -1430,6 +1458,7 @@ export default function App() {
               terminals={activeTerminals}
               sessionId={activeSessionId}
               transcriptCache={transcriptCacheRef.current}
+              transcriptStore={transcriptStoreRef.current}
               onSwitched={setActiveTerminalId}
               isTerminalBusy={isTerminalBusy}
               modelOptions={modelOptions}
@@ -1460,6 +1489,7 @@ export default function App() {
                     extraXhigh={extraXhigh}
                     ccConversationId={t.ccConversationId}
                     transcriptCache={transcriptCacheRef.current}
+                    transcriptStore={transcriptStoreRef.current}
                     active={t.id === activeTerminalId}
                     busy={isTerminalBusy(t.id)}
                     onSwitched={setActiveTerminalId}

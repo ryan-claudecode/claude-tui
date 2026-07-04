@@ -2,6 +2,7 @@ import { useCallback } from "react"
 import TerminalPane from "./TerminalPane"
 import AgentSurface from "./AgentSurface"
 import type { TranscriptCache } from "./AgentView"
+import type { TranscriptStore } from "../lib/transcriptStore"
 
 interface PaneTerminal {
   id: string
@@ -30,6 +31,9 @@ interface Props {
   sessionId?: string | null
   /** BO-12 — the shared, cross-pane transcript cache (rehydrate on respawn). */
   transcriptCache?: TranscriptCache
+  /** THE TRUST FIX — the always-on renderer transcript store (per-terminal fold that
+   *  survives unmount). Threaded to each structured pane's AgentSurface. */
+  transcriptStore: TranscriptStore
   /** BO-6 — re-point the active selection at a respawned terminal after a model switch. */
   onSwitched?: (terminalId: string) => void
   /** CAPP-49 — per-terminal busy (generating OR permission-parked). Drives each
@@ -62,6 +66,7 @@ function PaneContent({
   active,
   sessionId,
   transcriptCache,
+  transcriptStore,
   onSwitched,
   busy,
   modelOptions,
@@ -75,6 +80,7 @@ function PaneContent({
   active: boolean
   sessionId?: string | null
   transcriptCache?: TranscriptCache
+  transcriptStore: TranscriptStore
   onSwitched?: (terminalId: string) => void
   busy?: boolean
   modelOptions?: string[]
@@ -97,6 +103,7 @@ function PaneContent({
         extraXhigh={extraXhigh}
         ccConversationId={term.ccConversationId}
         transcriptCache={transcriptCache}
+        transcriptStore={transcriptStore}
         active
         busy={busy}
         onSwitched={onSwitched}
@@ -123,6 +130,7 @@ export default function SplitView({
   terminals,
   sessionId,
   transcriptCache,
+  transcriptStore,
   onSwitched,
   isTerminalBusy,
   modelOptions,
@@ -146,6 +154,7 @@ export default function SplitView({
           active={activeId === leftId}
           sessionId={sessionId}
           transcriptCache={transcriptCache}
+          transcriptStore={transcriptStore}
           onSwitched={onSwitched}
           busy={isTerminalBusy?.(leftId) ?? false}
           modelOptions={modelOptions}
@@ -166,6 +175,7 @@ export default function SplitView({
           active={activeId === rightId}
           sessionId={sessionId}
           transcriptCache={transcriptCache}
+          transcriptStore={transcriptStore}
           onSwitched={onSwitched}
           busy={isTerminalBusy?.(rightId) ?? false}
           modelOptions={modelOptions}

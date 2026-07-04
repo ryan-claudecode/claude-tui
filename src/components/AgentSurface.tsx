@@ -3,6 +3,7 @@ import AgentView, { type TranscriptCache } from "./AgentView"
 import AgentComposer from "./AgentComposer"
 import ContextMeterBar from "./ContextMeterBar"
 import type { ContextMeter } from "../lib/contextMeter"
+import type { TranscriptStore } from "../lib/transcriptStore"
 import { toast } from "../lib/toast"
 
 interface Props {
@@ -28,6 +29,8 @@ interface Props {
   ccConversationId?: string
   /** BO-12 — the shared, cross-pane transcript cache. */
   transcriptCache?: TranscriptCache
+  /** THE TRUST FIX — the always-on renderer transcript store AgentView reads from. */
+  transcriptStore: TranscriptStore
   active: boolean
   /**
    * BO-10 — the terminal is generating a turn or parked on a permission prompt.
@@ -71,6 +74,7 @@ export default function AgentSurface({
   extraXhigh,
   ccConversationId,
   transcriptCache,
+  transcriptStore,
   active,
   busy,
   onSwitched,
@@ -136,6 +140,7 @@ export default function AgentSurface({
         resolvedModel={resolvedModel}
         ccConversationId={ccConversationId}
         transcriptCache={transcriptCache}
+        transcriptStore={transcriptStore}
         onSwitched={onSwitched}
         onContextMeter={setContextMeter}
       />

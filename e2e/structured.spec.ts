@@ -1847,3 +1847,66 @@ test("CAPP-124: the mic sits in the INPUT ROW beside Send, and its download card
 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
+
+test("structured engine: switching sessions away and back KEEPS the transcript (the trust bug)", async () => {
+  // THE TRUST BUG — a structured terminal renders via AgentView, which (before the
+  // renderer transcript store) folded the stream into COMPONENT-LOCAL state and
+  // subscribed to `onStreamEvent` in a useEffect. App.tsx only mounts AgentView for
+  // the ACTIVE session's terminals, so switching to another session UNMOUNTED it,
+  // killed its listener, and lost the whole transcript — the user's own message
+  // bubble AND the assistant's reply. Seeding couldn't heal it: a FRESH fake session
+  // never captures a ccConversationId (the fake writes no on-disk transcript), so the
+  // BO-12 cache is never written and the disk seed never runs — remount blanked to
+  // "Ready when you are". This test drives that exact user flow and asserts the
+  // transcript SURVIVES a round-trip through another session.
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-switchaway-"))
+  await seedStructuredConfig(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  // Open session A and run one full turn so the transcript has real content.
+  await win.locator(".sidebar-action", { hasText: "+ New session" }).click()
+  const composer = win.locator(".agent-composer textarea")
+  await expect(composer).toBeVisible({ timeout: 15_000 })
+  await composer.fill("hi")
+  await composer.press("Enter")
+  // Both sides of the conversation render in A: the user's own bubble + the reply.
+  await expect(win.locator(".agent-user")).toContainText("hi", { timeout: 15_000 })
+  await expect(win.locator(".agent-assistant")).toContainText("fake agent", { timeout: 15_000 })
+  // Settle on the turn-complete result so the reply is fully folded before we leave.
+  await expect(win.locator(".agent-result")).toContainText(/turn complete/i, { timeout: 15_000 })
+
+  // Switch AWAY: open session B. A's AgentView unmounts (activeTerminals renders only
+  // the ACTIVE session's terminals) — this is where the away-period stream was lost.
+  await win.locator(".sidebar-action", { hasText: "+ New session" }).click()
+  await expect(win.locator(".session-item")).toHaveCount(2, { timeout: 15_000 })
+  // Proof we actually switched: A's transcript is no longer in the DOM, and B shows
+  // its empty "ready to type" state.
+  await expect(win.locator(".agent-user", { hasText: "hi" })).toHaveCount(0, { timeout: 15_000 })
+  await expect(win.locator(".agent-view-empty")).toBeVisible({ timeout: 15_000 })
+
+  // Switch BACK to session A (the first sidebar session row).
+  await win.locator(".session-item").first().click()
+
+  // THE ASSERTION — A's transcript is intact: the user's own message bubble AND the
+  // assistant reply both render again. Pre-fix, A remounted blank ("Ready when you
+  // are") with no way to recover the lost stream; the store keeps folding while
+  // unmounted so the return paints the full history.
+  await expect(win.locator(".agent-user")).toContainText("hi", { timeout: 15_000 })
+  await expect(win.locator(".agent-assistant")).toContainText("fake agent", { timeout: 15_000 })
+  await expect(win.locator(".agent-result")).toContainText(/turn complete/i, { timeout: 15_000 })
+  // Not the blank empty state.
+  await expect(win.locator(".agent-view-empty")).toHaveCount(0)
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
