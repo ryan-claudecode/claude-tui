@@ -440,7 +440,24 @@ export default function AgentView({
     () => contextMeterFromBlocks(state.blocks, capModel),
     [state.blocks, capModel],
   )
+  // Lift only when the meter's VALUES change (a new result landed / the cap changed),
+  // not on every blocks-identity change — state.blocks is replaced per stream delta,
+  // and an unconditional lift would setState in AgentSurface (re-rendering the composer)
+  // on every streamed token.
+  const liftedMeterRef = useRef<ContextMeter | null>(null)
   useEffect(() => {
+    const prev = liftedMeterRef.current
+    if (
+      prev === contextMeter ||
+      (prev != null &&
+        contextMeter != null &&
+        prev.total === contextMeter.total &&
+        prev.results === contextMeter.results &&
+        prev.cap === contextMeter.cap)
+    ) {
+      return
+    }
+    liftedMeterRef.current = contextMeter
     onContextMeter?.(contextMeter)
   }, [contextMeter, onContextMeter])
 
