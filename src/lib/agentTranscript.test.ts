@@ -225,6 +225,48 @@ describe("foldTranscript — thinking, result, error, raw", () => {
     expect((blocks[1] as AssistantTextBlock).text).toBe("answer")
   })
 
+  // The headless stream emits thinking as EMPTY placeholders (`thinking:""`); a
+  // content-less "Thinking" block is pure noise, so the reducer drops empty deltas.
+  it("drops an EMPTY thinking_delta — no content-less thinking block is minted", () => {
+    expect(foldTranscript([{ kind: "thinking_delta", text: "" }])).toEqual([])
+    // A whole run of empty placeholders (the live 98/98-empty shape) → nothing.
+    expect(
+      foldTranscript([
+        { kind: "thinking_delta", text: "" },
+        { kind: "thinking_delta", text: "" },
+        { kind: "thinking_delta", text: "" },
+      ]),
+    ).toEqual([])
+  })
+
+  it("still renders a genuinely-populated thinking stream (only empties are dropped)", () => {
+    const blocks = foldTranscript([
+      { kind: "thinking_delta", text: "" },
+      { kind: "thinking_delta", text: "Let me " },
+      { kind: "thinking_delta", text: "reason." },
+    ])
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].kind).toBe("thinking")
+    // Real whitespace between tokens is preserved (empties are exact-"" only, never trimmed).
+    expect((blocks[0] as { text: string }).text).toBe("Let me reason.")
+  })
+
+  it("empty thinking between two tool batches leaves them CONSECUTIVE (so groups merge)", () => {
+    // The win the user asked for: an empty 'Thinking' pause between batches no longer
+    // splits the transcript — the flanking tools sit adjacent and collapse into one group.
+    const events: StreamEvent[] = [
+      { kind: "tool_use", id: "a", name: "Read", input: {} },
+      { kind: "tool_result", toolUseId: "a", content: "ok" },
+      { kind: "thinking_delta", text: "" },
+      { kind: "thinking_delta", text: "" },
+      { kind: "tool_use", id: "b", name: "Grep", input: {} },
+      { kind: "tool_result", toolUseId: "b", content: "ok" },
+    ]
+    const blocks = foldTranscript(events)
+    // No thinking block survives; the two tools are adjacent.
+    expect(blocks.map((b) => b.kind)).toEqual(["tool", "tool"])
+  })
+
   it("surfaces token / cost / duration from a real result fixture", () => {
     const blocks = foldTranscript([FX.result])
     expect(blocks).toHaveLength(1)

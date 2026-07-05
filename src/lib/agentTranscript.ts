@@ -622,6 +622,17 @@ export function reduceTranscript(state: TranscriptState, event: StreamEvent): Tr
     }
 
     case "thinking_delta": {
+      // The headless stream emits thinking as EMPTY placeholders (`thinking:""`) — the
+      // real thinking text is not on the wire (proven live: 98/98 empty on a long run).
+      // A content-less "Thinking" block is pure noise AND, sitting between two tool
+      // batches, SPLITS what should be one collapsed tool group. So DROP empty deltas: an
+      // all-empty thinking sequence yields NO block (letting the flanking tool batches
+      // merge into one group), while a genuinely-populated stream — a model that DOES
+      // surface thinking — still renders. Safe for coalescing: appending "" was already a
+      // no-op, so the ONLY behavior change is we no longer MINT a block for a leading
+      // empty delta. Keyed on exact "" (never trimmed) so real whitespace BETWEEN thinking
+      // tokens is preserved (trimming per-delta would concatenate words).
+      if (event.text === "") return state
       if (last && last.kind === "thinking") {
         const updated: ThinkingBlock = { ...last, text: last.text + event.text }
         return { blocks: [...blocks.slice(0, -1), updated], seq }
