@@ -2,8 +2,27 @@ import { defineConfig } from "electron-vite"
 import react from "@vitejs/plugin-react"
 import { resolve, dirname } from "path"
 import { fileURLToPath } from "url"
+import { readFileSync } from "fs"
+import { execSync } from "child_process"
 
 const __dirname_ = dirname(fileURLToPath(import.meta.url))
+
+// Build stamp baked into the renderer at build time (Sidebar footer). The git
+// hash is what distinguishes "the packaged app I'm running" from "latest main" —
+// package.json version alone doesn't move per build. Guarded: a build outside a
+// git checkout (or without git on PATH) still succeeds with hash "unknown".
+const pkgVersion = JSON.parse(readFileSync(resolve(__dirname_, "package.json"), "utf8")).version as string
+let gitHash = "unknown"
+try {
+  gitHash = execSync("git rev-parse --short HEAD", { cwd: __dirname_, encoding: "utf8" }).trim()
+} catch {
+  /* not a git checkout — keep "unknown" */
+}
+const buildDefine = {
+  __APP_VERSION__: JSON.stringify(pkgVersion),
+  __GIT_HASH__: JSON.stringify(gitHash),
+  __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+}
 
 export default defineConfig({
   main: {
@@ -57,6 +76,7 @@ export default defineConfig({
   },
   renderer: {
     root: ".",
+    define: buildDefine,
     build: {
       outDir: "out/renderer",
       rollupOptions: {

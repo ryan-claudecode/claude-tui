@@ -275,6 +275,28 @@ export default function Sidebar({
         <div className="sidebar-action" onClick={onNewSession}>+ New session</div>
         <div className="sidebar-action" onClick={onKillSession}>Kill session</div>
       </div>
+
+      <div className="sidebar-version">{buildStamp()}</div>
     </div>
   )
+}
+
+/**
+ * The build stamp shown at the sidebar's foot — version, git hash, and build
+ * time, so a running (packaged) app is checkable against latest main at a
+ * glance. The constants are baked in by electron.vite.config.ts `define`;
+ * under vitest they don't exist, hence the `typeof` guards ("dev" fallback).
+ */
+function buildStamp(): string {
+  const version = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "dev"
+  const hash = typeof __GIT_HASH__ !== "undefined" ? __GIT_HASH__ : ""
+  const built = typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : ""
+  let when = ""
+  if (built) {
+    const d = new Date(built)
+    when = isNaN(d.getTime())
+      ? ""
+      : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+  }
+  return ["v" + version, hash, when].filter(Boolean).join(" · ")
 }
