@@ -28,6 +28,12 @@ import {
 } from "../lib/agentTranscript"
 import { nextScrollTop, scrollFollowBehavior, shouldStick } from "../lib/scrollStick"
 import { initialHiddenCount, revealEarlier, visibleBlocks, LOAD_EARLIER_PAGE } from "../lib/transcriptWindow"
+import {
+  groupToolRuns,
+  summarizeToolGroup,
+  activeToolLabel,
+  type ToolGroupItem,
+} from "../lib/toolGroups"
 import { useSmoothReveal } from "../hooks/useSmoothReveal"
 import { prefersReducedMotion } from "../lib/reducedMotion"
 import AgentModelPicker from "./AgentModelPicker"
@@ -448,6 +454,13 @@ export default function AgentView({
   // target is the trailing block, always in the visible tail), so streaming is unaffected.
   const visible = visibleBlocks(state.blocks, hiddenCount)
 
+  // Collapse consecutive tool-call BURSTS in the visible tail into one expandable group
+  // (a long autonomous turn is otherwise a wall of read/grep/edit rows). Display-only +
+  // pure — `state.blocks`, the caret target, and the context meter are all derived from
+  // the ungrouped blocks, so streaming/tool-correlation are unaffected. Memoized so the
+  // O(n) fold only reruns when the visible slice changes.
+  const items = useMemo(() => groupToolRuns(visible), [visible])
+
   // WS5 — id of the assistant block (if any) that should carry the live streaming
   // caret. Derived from the same trailing-block + busy signals as the working row,
   // so it appears only while prose is actively streaming and clears the instant the
@@ -542,20 +555,24 @@ export default function AgentView({
               </button>
             </div>
           )}
-          {visible.map((block) => (
-            <BlockView
-              key={block.id}
-              block={block}
-              onExpand={() => expand(block)}
-              terminalId={terminalId}
-              sessionId={sessionId ?? null}
-              model={model}
-              modelOptions={modelOptions}
-              resolvedModel={resolvedModel}
-              onSwitched={onSwitched}
-              streaming={block.id === caretId}
-            />
-          ))}
+          {items.map((item) =>
+            item.kind === "tool-group" ? (
+              <ToolGroupView key={item.id} group={item} onExpand={expand} />
+            ) : (
+              <BlockView
+                key={item.block.id}
+                block={item.block}
+                onExpand={() => expand(item.block)}
+                terminalId={terminalId}
+                sessionId={sessionId ?? null}
+                model={model}
+                modelOptions={modelOptions}
+                resolvedModel={resolvedModel}
+                onSwitched={onSwitched}
+                streaming={item.block.id === caretId}
+              />
+            ),
+          )}
           {working && <WorkingRow status={working.status} />}
         </>
       )}
@@ -800,6 +817,59 @@ function toolSummary(input: unknown): string {
 
 function pickStr(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined
+}
+
+/**
+ * A collapsed run of consecutive tool calls (see {@link groupToolRuns}). Native
+ * `<details>` — the whole header is a statically-visible clickable/keyboard-toggleable
+ * control (no hover-reveal, per the project UI rule), collapsed by default. The header
+ * carries the aggregate status dot, a live "Running X…" label while the burst is in
+ * flight (else "N tool calls"), the per-tool-name breakdown, and a red "N failed" count
+ * so a failure inside the burst is never hidden. Expanding reveals every individual tool
+ * row exactly as it renders inline (each keeps its own ⤢ detail button); interleaved raw
+ * events render in the body too, so nothing is lost.
+ *
+ * Uncontrolled on purpose: the `<details>` keeps its own open state in the DOM, keyed by
+ * the group's stable id (the first tool's block id). As more tools stream into a live
+ * burst the id is invariant, so a group the user expanded stays expanded while it grows.
+ */
+export function ToolGroupView({ group, onExpand }: { group: ToolGroupItem; onExpand: (block: TranscriptBlock) => void }) {
+  const active = activeToolLabel(group)
+  const breakdown = summarizeToolGroup(group)
+  const title = active ? `Running ${active}…` : `${group.count} tool calls`
+  return (
+    <details className={`agent-block agent-tool-group agent-tool-group-${group.status}`}>
+      <summary className="agent-tool-group-summary">
+        <span className="agent-tool-group-chevron" aria-hidden="true">▸</span>
+        <span
+          className={`agent-tool-status agent-tool-status-${group.status}`}
+          aria-hidden="true"
+        />
+        <span className="agent-tool-group-title">{title}</span>
+        {breakdown && <span className="agent-tool-group-breakdown">{breakdown}</span>}
+        {group.errored > 0 && (
+          <span className="agent-tool-group-failed">{group.errored} failed</span>
+        )}
+      </summary>
+      <div className="agent-tool-group-body">
+        {group.items.map((block) =>
+          block.kind === "tool" ? (
+            <ToolView key={block.id} tool={block} onExpand={() => onExpand(block)} />
+          ) : (
+            // A transparent raw event absorbed into the burst — render it via the shared
+            // block renderer (it only needs onExpand; terminal/session are unused for raw).
+            <BlockView
+              key={block.id}
+              block={block}
+              onExpand={() => onExpand(block)}
+              terminalId=""
+              sessionId={null}
+            />
+          ),
+        )}
+      </div>
+    </details>
+  )
 }
 
 function ToolView({ tool, onExpand }: { tool: ToolBlock; onExpand: () => void }) {

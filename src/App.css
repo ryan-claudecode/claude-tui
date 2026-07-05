@@ -2047,6 +2047,64 @@ body {
 .agent-tool-summary { color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-tool-error { border-color: var(--red); }
 
+/* Tool-group COLLAPSE — a run of consecutive tool calls folded into one expandable
+   row so a long autonomous burst doesn't flood the history. The summary is a single
+   quiet tool-row-height header; expanding drops the individual rows below a hairline. */
+.agent-tool-group {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+}
+.agent-tool-group[open] { background: var(--bg-0); }
+
+.agent-tool-group-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-2);
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  /* Electron/Chromium drops the default disclosure triangle once summary is a flex
+     container, so we supply our own rotating chevron instead. */
+  list-style: none;
+}
+.agent-tool-group-summary::-webkit-details-marker { display: none; }
+.agent-tool-group-summary:hover { border-color: var(--accent); }
+
+.agent-tool-group-chevron {
+  flex: none;
+  color: var(--text-3);
+  font-size: 10px;
+  transition: transform 0.15s var(--ease-out);
+}
+.agent-tool-group[open] .agent-tool-group-chevron { transform: rotate(90deg); }
+
+.agent-tool-group-title { flex: none; font-weight: 600; color: var(--text-0); }
+.agent-tool-group-breakdown {
+  color: var(--text-3);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-tool-group-failed {
+  margin-left: auto;
+  flex: none;
+  color: var(--red);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.agent-tool-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
 /* WS5 — soft chrome: errors recast from a full hard red border into a soft card
    with a colored LEFT-accent stripe (red) + soft tinted fill, matching the
    de-blocked language. The stripe is the left border alone; the box edge softens

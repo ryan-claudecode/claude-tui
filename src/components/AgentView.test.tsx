@@ -1,7 +1,7 @@
 import React from "react"
 import { describe, it, expect } from "vitest"
 import { renderToStaticMarkup } from "react-dom/server"
-import { BlockView, assistantBlockClass } from "./AgentView"
+import { BlockView, ToolGroupView, assistantBlockClass } from "./AgentView"
 import { wordFadeClass } from "./MarkdownView"
 import type {
   AssistantTextBlock,
@@ -9,6 +9,7 @@ import type {
   UserBlock,
   InjectedBlock,
 } from "../lib/agentTranscript"
+import type { ToolGroupItem } from "../lib/toolGroups"
 
 /**
  * BO-8 — the structured chat must render assistant + result PROSE as markdown
@@ -219,6 +220,72 @@ describe("AgentView markdown rendering", () => {
       />,
     )
     expect(html).not.toContain("agent-revealing")
+  })
+})
+
+/**
+ * Tool-group COLLAPSE — a run of consecutive tool calls renders as one collapsed,
+ * expandable `<details>` header instead of a wall of rows. These render the real
+ * ToolGroupView to static markup (node-only) and assert the header summary + that the
+ * individual rows are still present in the (collapsed) body.
+ */
+describe("AgentView — tool-group collapse", () => {
+  const grp: ToolGroupItem = {
+    kind: "tool-group",
+    id: "b0",
+    tools: [
+      { kind: "tool", id: "b0", toolUseId: "t0", name: "Read", input: {}, status: "done" },
+      { kind: "tool", id: "b1", toolUseId: "t1", name: "Grep", input: {}, status: "done" },
+      { kind: "tool", id: "b2", toolUseId: "t2", name: "Read", input: {}, status: "done" },
+    ],
+    items: [
+      { kind: "tool", id: "b0", toolUseId: "t0", name: "Read", input: {}, status: "done" },
+      { kind: "tool", id: "b1", toolUseId: "t1", name: "Grep", input: {}, status: "done" },
+      { kind: "tool", id: "b2", toolUseId: "t2", name: "Read", input: {}, status: "done" },
+    ],
+    count: 3,
+    running: 0,
+    errored: 0,
+    status: "done",
+    breakdown: [
+      { name: "Read", count: 2 },
+      { name: "Grep", count: 1 },
+    ],
+  }
+
+  it("renders a settled group header with the count + name breakdown", () => {
+    const html = renderToStaticMarkup(<ToolGroupView group={grp} onExpand={() => {}} />)
+    expect(html).toContain("agent-tool-group")
+    expect(html).toContain("3 tool calls")
+    expect(html).toContain("Read ×2 · Grep ×1")
+    // Collapsed by default — a native <details> with no `open`.
+    expect(html).toContain("<details")
+    expect(html).not.toContain("open=")
+    // The individual rows are still present in the body (revealed on expand).
+    expect(html).toContain("agent-tool-name")
+  })
+
+  it("shows a live 'Running X…' label + running status while the burst is in flight", () => {
+    const live: ToolGroupItem = {
+      ...grp,
+      running: 1,
+      status: "running",
+      tools: [
+        grp.tools[0],
+        grp.tools[1],
+        { kind: "tool", id: "b2", toolUseId: "t2", name: "Bash", input: {}, status: "running" },
+      ],
+    }
+    const html = renderToStaticMarkup(<ToolGroupView group={live} onExpand={() => {}} />)
+    expect(html).toContain("Running Bash…")
+    expect(html).toContain("agent-tool-status-running")
+  })
+
+  it("surfaces a failure count in the header (failures are never hidden)", () => {
+    const failed: ToolGroupItem = { ...grp, errored: 1, status: "error" }
+    const html = renderToStaticMarkup(<ToolGroupView group={failed} onExpand={() => {}} />)
+    expect(html).toContain("1 failed")
+    expect(html).toContain("agent-tool-group-error")
   })
 })
 
