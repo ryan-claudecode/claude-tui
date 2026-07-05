@@ -10,6 +10,7 @@ npm run build              # build only
 npm test                   # Vitest unit/integration suite — hermetic, fast. THE gate.
 npm run e2e                # Playwright Electron smoke suite (builds first; separate from npm test)
 npm run package            # electron-builder --win dir → dist/win-unpacked (fast build validation)
+npm run package:desktop    # package + deploy the unpacked app to Desktop\ClaudeTUI (what "build the app" means)
 npm run package:installer  # NSIS installer
 ```
 

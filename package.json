@@ -1,6 +1,6 @@
 {
   "name": "claude-tui-app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cross-platform terminal multiplexer for Claude Code sessions",
   "main": "./out/main/index.js",
   "scripts": {
@@ -10,6 +10,8 @@
     "typecheck": "tsc -b",
     "start": "electron .",
     "package": "npm run build && electron-builder --win dir",
+    "package:desktop": "npm run package && npm run deploy:desktop",
+    "deploy:desktop": "node scripts/deploy-desktop.mjs",
     "package:installer": "npm run build && electron-builder --win nsis",
     "test": "vitest run",
     "test:watch": "vitest",
