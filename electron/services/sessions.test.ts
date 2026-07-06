@@ -1218,6 +1218,155 @@ describe("SessionService.interruptAgent (BO-10)", () => {
   })
 })
 
+describe("SessionService.restartTerminal (reload the proc, resume the conversation)", () => {
+  it("restarts a structured terminal: kills old, respawns the SAME convo via --resume + same model/effort/ultracode, re-points the ref", async () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id, undefined, undefined, "opus", "high", true)
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "idle", engine: "structured", model: "opus", effort: "high", ultracode: true })
+    term.emit({ type: "convo", id: head.id, ccConversationId: "conv-keep" })
+
+    const r = await svc.restartTerminal(head.id)
+
+    // Old proc killed; a fresh headless terminal resumed the SAME convo, preserving
+    // model/effort/ultracode verbatim (a restart changes nothing but the process).
+    expect(term.killed).toContain(head.id)
+    const last = term.spawned[term.spawned.length - 1]
+    expect(last.headless).toBe(true)
+    expect(last.resumeConvId).toBe("conv-keep")
+    expect(last.model).toBe("opus")
+    expect(r?.terminalId).toBe(last.id)
+    const ref = svc.get(s.id)!.terminals.find((t) => t.id === last.id)
+    expect(ref?.model).toBe("opus")
+    expect(ref?.ultracode).toBe(true)
+  })
+
+  it("restarts an XTERM terminal too (unlike interrupt): respawns via createXterm resuming the same convo", async () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const { session, terminalId } = svc.openSession("/repo") // create() → live-* PTY, not headless
+    term.emit({ type: "convo", id: terminalId, ccConversationId: "conv-pty" })
+
+    const r = await svc.restartTerminal(terminalId)
+
+    expect(term.killed).toContain(terminalId)
+    const last = term.spawned[term.spawned.length - 1]
+    expect(last.xterm).toBe(true) // respawned on the SAME (xterm) engine, not headless
+    expect(last.resumeConvId).toBe("conv-pty")
+    expect(r?.terminalId).toBe(last.id)
+    expect(session).toBeTruthy()
+  })
+
+  it("an IDLE structured terminal (the common MCP-reload case) restarts straight to kill+resume — no abort-drain", async () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id, undefined, undefined, "opus")
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "idle", engine: "structured", model: "opus" })
+    term.emit({ type: "convo", id: head.id, ccConversationId: "conv-keep" })
+    // No pending permission → nothing half-open to close.
+
+    const r = await svc.restartTerminal(head.id)
+
+    expect(term.aborted).toHaveLength(0)
+    expect(term.killed).toContain(head.id)
+    expect(r?.terminalId).toBe(term.spawned[term.spawned.length - 1].id)
+  })
+
+  it("BO-11: when parked on a permission, closes the turn THROUGH the live proc (abort-drain) BEFORE killing", async () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id, undefined, undefined, "opus")
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured", model: "opus" })
+    term.emit({ type: "convo", id: head.id, ccConversationId: "conv-keep" })
+    term.pendingPermissionIds.add(head.id)
+
+    const r = await svc.restartTerminal(head.id)
+
+    expect(term.aborted).toHaveLength(1)
+    expect(term.aborted[0].id).toBe(head.id)
+    expect(term.killed).toContain(head.id)
+    expect(term.spawned[term.spawned.length - 1].resumeConvId).toBe("conv-keep")
+    expect(r?.terminalId).toBeTruthy()
+  })
+
+  // Structured terminal parked on a permission with the abort-drain PAUSED (manual
+  // mode) so a teardown / a second restart can race in DURING the drain window.
+  function parkedHeadlessWithPausedDrain() {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id, undefined, undefined, "opus")
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured", model: "opus" })
+    term.emit({ type: "convo", id: head.id, ccConversationId: "conv-keep" })
+    term.pendingPermissionIds.add(head.id)
+    term.drainMode = "manual"
+    return { term, svc, s, head }
+  }
+
+  it("single-flight: two overlapping restarts on the same terminal respawn EXACTLY once", async () => {
+    const { term, svc, head } = parkedHeadlessWithPausedDrain()
+    const spawnsBefore = term.spawned.length
+
+    const p1 = svc.restartTerminal(head.id) // enters, registers in-flight, awaits the drain
+    const p2 = svc.restartTerminal(head.id) // single-flight → no-op
+    expect(await p2).toBeUndefined()
+    expect(term.aborted).toHaveLength(1)
+
+    term.pendingDrains[0].resolve(true)
+    const r1 = await p1
+    expect(r1?.terminalId).toBeTruthy()
+    expect(term.spawned.length - spawnsBefore).toBe(1)
+    expect((svc as any).interrupting.has(head.id)).toBe(false)
+  })
+
+  it("shares the interrupt single-flight guard: a restart is a no-op while a Stop is in flight on the same terminal", async () => {
+    const { term, svc, head } = parkedHeadlessWithPausedDrain()
+    const spawnsBefore = term.spawned.length
+
+    const stop = svc.interruptAgent(head.id) // enters, registers in-flight, awaits the drain
+    const restart = svc.restartTerminal(head.id) // blocked by the shared guard → no-op
+    expect(await restart).toBeUndefined()
+    expect(term.aborted).toHaveLength(1) // only the Stop started a drain
+
+    term.pendingDrains[0].resolve(true)
+    await stop
+    expect(term.spawned.length - spawnsBefore).toBe(1) // exactly one respawn (the Stop's)
+  })
+
+  it("re-entrancy: a killSession DURING the abort-drain makes restartTerminal BAIL — no respawn, no zombie JSON", async () => {
+    const { term, svc, s, head } = parkedHeadlessWithPausedDrain()
+    const jsonFile = join(dir, `${s.id}.json`)
+    const spawnsBefore = term.spawned.length
+
+    const p = svc.restartTerminal(head.id)
+    svc.killSession(s.id)
+    expect(svc.get(s.id)).toBeUndefined()
+    term.pendingDrains[0].resolve(true)
+    const r = await p
+
+    expect(r).toBeUndefined()
+    expect(term.spawned.length).toBe(spawnsBefore) // no leaked proc
+    expect(existsSync(jsonFile)).toBe(false) // no zombie file re-written
+  })
+
+  it("returns undefined for an unknown terminal", async () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1 })
+    svc.attachTerminals(term as any)
+    svc.create()
+    expect(await svc.restartTerminal("nope")).toBeUndefined()
+    expect(term.killed).toEqual([])
+  })
+})
+
 describe("SessionService.setTerminalEngine (CAPP-39 gate ③ — the raw-view escape hatch)", () => {
   /** A registered, conversation-bound, NON-busy structured terminal — the happy path. */
   function structuredReady(model = "opus") {

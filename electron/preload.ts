@@ -85,6 +85,11 @@ const mainApi = {
   // Returns the new terminal id so the caller re-points the active selection (the
   // respawn mints a fresh id, like the model switch).
   interruptAgent: (terminalId: string) => ipcRenderer.invoke("agent:interrupt", terminalId),
+  // Restart a terminal in place: kill the proc and respawn it on the SAME conversation
+  // (--resume) + SAME engine/model/effort/ultracode, so a fresh --mcp-config / config
+  // read picks up MCP or config changes without closing the app. Returns the new
+  // terminal id so the caller re-points the active selection (respawn mints a fresh id).
+  restartTerminal: (terminalId: string) => ipcRenderer.invoke("agent:restart", terminalId),
 
   // Workspace management
   getWorkspaces: () => ipcRenderer.invoke("workspace:list"),

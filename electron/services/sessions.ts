@@ -281,8 +281,10 @@ export class SessionService {
   private terminals?: TerminalLike
   private mainWin: MainWinLike | null = null
 
-  /** BO-11 — terminal ids with an interruptAgent in flight (single-flight guard so
-   *  overlapping Stops don't double-respawn). Keyed by the original terminal id. */
+  /** BO-11 — terminal ids with an interruptAgent OR restartTerminal in flight
+   *  (single-flight guard so overlapping Stops/Restarts don't double-respawn, and a
+   *  Restart can't race an in-flight Stop on the same terminal). Keyed by the
+   *  original terminal id. */
   private interrupting = new Set<string>()
 
   /** WS-C — active-workspace getter, stamped onto every freshly-minted session. */
@@ -894,6 +896,84 @@ export class SessionService {
         s,
         "spawn",
         `Interrupted "${ref.name}" — stopped the active turn, resumed the conversation`,
+        info.id,
+      )
+      this.persist(s)
+      this.emit("worksession:updated", this.withEffectiveActivity(s))
+      return { terminalId: info.id }
+    } finally {
+      this.interrupting.delete(terminalId)
+    }
+  }
+
+  /**
+   * RESTART a terminal IN PLACE — kill the proc and respawn it, RESUMING the SAME
+   * conversation on the SAME engine with the SAME model/effort/ultracode. Unlike an
+   * interrupt (which exists to STOP a turn), a restart exists to RELOAD the proc: a
+   * fresh spawn re-mints `--mcp-config` and re-reads config.json, so MCP-server
+   * changes, config edits, or a wedged process are picked up WITHOUT closing the whole
+   * app. The conversation survives (`--resume`); only an in-flight turn is dropped.
+   *
+   * Differs from {@link interruptAgent} in two ways:
+   *  - it works for BOTH engines (interrupt refuses xterm because a PTY's Esc is
+   *    load-bearing; a restart is a deliberate kill+resume, which a PTY handles fine —
+   *    it respawns on whatever engine the ref currently uses); and
+   *  - it is meaningful even when the terminal is IDLE (that's the common case: you
+   *    edited an MCP config and want the waiting agent to reload it).
+   *
+   * Reuses the interrupt safety machinery: single-flight (shared `interrupting`
+   * guard), the BO-11 drain-parked-permission-as-deny (so `--resume` can't replay a
+   * half-open tool_use), and the re-entrancy re-validation after that await. Mints a
+   * NEW terminal id; the caller re-points the active selection. Returns undefined for
+   * an unknown/torn-down terminal or one whose restart is already in flight.
+   */
+  async restartTerminal(terminalId: string): Promise<{ terminalId: string } | undefined> {
+    if (!this.terminals) return undefined
+    const s = this.sessionOf(terminalId)
+    if (!s) return undefined
+    const ref = s.terminals.find((t) => t.id === terminalId)
+    if (!ref) return undefined
+
+    // SINGLE-FLIGHT — share the interrupt guard so a Restart can't race an in-flight
+    // Stop (or a second Restart) on the SAME terminal: two overlapping kill+respawns
+    // would leave the caller re-pointing at a dead intermediate id.
+    if (this.interrupting.has(terminalId)) return undefined
+    this.interrupting.add(terminalId)
+    try {
+      const structured = this.terminals.isHeadless(terminalId) || ref.engine === "structured"
+
+      // BO-11 — close a permission-parked STRUCTURED turn THROUGH the live proc before
+      // killing, so the `--resume` proc can't replay a half-open tool_use. No-op/instant
+      // for an idle or plainly-generating turn; xterm has no permission-park concept.
+      if (structured && this.terminals.hasPendingPermission(ref.id)) {
+        await this.terminals.abortPendingPermissionAndDrain(ref.id, INTERRUPT_ABORT_MESSAGE)
+      }
+
+      // RE-ENTRANCY GUARD (mirrors interruptAgent): the drain await can span time during
+      // which a killSession / closeTerminal tears this terminal down. Respawning on the
+      // orphaned s/ref would leak an untracked proc + re-write deleted JSON. Re-validate.
+      // The isHeadless check applies only to the structured path (an xterm ref is never
+      // headless, so it would false-positive there — and it has no drain await anyway).
+      const tornDown =
+        !this.sessions.has(s.id) ||
+        !s.terminals.some((t) => t.id === ref.id) ||
+        (structured && !this.terminals.isHeadless(ref.id))
+      if (tornDown) return undefined
+
+      // Respawn on the CURRENT engine, preserving model/effort/ultracode verbatim — a
+      // restart changes nothing but the process (and thus its --mcp-config / config).
+      const info = this.respawnRefWithEngine(
+        s,
+        ref,
+        structured ? "structured" : "xterm",
+        ref.model,
+        ref.effort,
+        ref.ultracode,
+      )
+      this.logEvent(
+        s,
+        "spawn",
+        `Restarted "${ref.name}" — reloaded the process, resumed the conversation`,
         info.id,
       )
       this.persist(s)

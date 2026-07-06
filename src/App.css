@@ -5929,6 +5929,29 @@ body {
 }
 .agent-model-picker-composer .agent-model-picker-custom { width: 130px; }
 
+/* Restart-this-terminal button — sits in the composer controls row beside "Raw view".
+   Same quiet chrome as the raw-view button (composer sizing), so the per-terminal
+   control set reads as one group; no hover-reveal (statically visible). */
+.agent-restart-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  padding: 2px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--fast) var(--ease-out),
+    color var(--fast) var(--ease-out),
+    background var(--fast) var(--ease-out),
+    transform var(--fast) var(--ease-out);
+}
+.agent-restart-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--text-0); background: var(--bg-3); }
+.agent-restart-btn:active:not(:disabled) { transform: translateY(1px) scale(0.985); }
+.agent-restart-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.agent-restart-btn:disabled { opacity: 0.5; cursor: default; }
+
 /* ------------------------------------------------------------------ */
 /* CAPP-120 (STT-1) / CAPP-124 — push-to-talk dictation mic + download   */
 /* flow. The mic sits in the INPUT ROW immediately beside Send (2026 chat */

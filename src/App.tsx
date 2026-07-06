@@ -213,6 +213,10 @@ declare global {
       // BO-10 — stop/interrupt a structured terminal (kills + resumes the chat).
       // Returns the respawned terminal id so the caller re-points the active tab.
       interruptAgent: (terminalId: string) => Promise<{ terminalId: string } | undefined>
+      // Restart a terminal in place (kills + resumes the chat on the SAME engine) so a
+      // fresh --mcp-config / config read picks up MCP or config changes. Works for both
+      // engines. Returns the respawned terminal id so the caller re-points the active tab.
+      restartTerminal: (terminalId: string) => Promise<{ terminalId: string } | undefined>
       // Theme
       getTheme: () => Promise<string>
       setTheme: (mode: string) => Promise<void>
@@ -450,6 +454,27 @@ export default function App() {
         if (r?.terminalId) setActiveTerminalId(r.terminalId)
       } catch (err) {
         toast("error", `Couldn't stop the agent: ${errMsg(err)}`)
+      }
+    },
+    [setActiveTerminalId],
+  )
+
+  // Restart the active terminal in place: kill + resume the SAME conversation on the
+  // SAME engine, so a fresh --mcp-config / config read picks up MCP or config changes
+  // without closing the app. The respawn mints a new terminal id, so re-point the active
+  // selection at it (like the interrupt / model switch). Universal command-palette entry
+  // point — the composer has its own visible Restart button for structured terminals.
+  const handleRestart = useCallback(
+    async (terminalId: string | null) => {
+      if (!terminalId) return
+      try {
+        const r = await window.api.restartTerminal(terminalId)
+        if (r?.terminalId) {
+          setActiveTerminalId(r.terminalId)
+          toast("success", "Terminal restarted — reloaded the process, resumed the conversation.")
+        }
+      } catch (err) {
+        toast("error", `Couldn't restart the terminal: ${errMsg(err)}`)
       }
     },
     [setActiveTerminalId],
@@ -846,6 +871,16 @@ export default function App() {
     // active terminal's current engine (structured → "raw terminal", xterm → "structured").
     const active = activeTerminals.find((t) => t.id === activeTerminalId)
     if (active) {
+      // Restart the active terminal in place — reload the proc (picks up MCP/config
+      // changes) while resuming the conversation. Works for both engines, so it's
+      // offered whenever there's an active terminal (the composer also has a visible
+      // Restart button for structured terminals).
+      base.push({
+        id: "restart-terminal",
+        label: "Restart terminal",
+        keywords: "restart reload terminal process mcp config resume respawn refresh",
+        run: () => handleRestart(activeTerminalId),
+      })
       base.push(
         active.engine === "structured"
           ? {
@@ -870,7 +905,7 @@ export default function App() {
       run: () => handleSelectSession(s.id),
     }))
     return [...base, ...sessionCmds]
-  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, toggleSplit, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, activeSessionId, activeTerminals, activeTerminalId, handleToggleEngine, themeMode, cycleTheme, railOpen, toggleRail, setPaletteOpen, setHelpOpen, setHistoryOpen, setZenMode])
+  }, [handleNewSession, handleNewTerminal, handleCloseTerminal, handleKillSession, handleHandoff, handleRestart, toggleSplit, handleExportLog, handleSelectSession, zenMode, splitLeft, sessions, openOverview, activeSessionId, activeTerminals, activeTerminalId, handleToggleEngine, themeMode, cycleTheme, railOpen, toggleRail, setPaletteOpen, setHelpOpen, setHistoryOpen, setZenMode])
 
   // Keyboard shortcuts — use capture phase so they fire before xterm.js
   useEffect(() => {

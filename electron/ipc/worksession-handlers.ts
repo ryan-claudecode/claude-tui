@@ -106,4 +106,14 @@ export function registerWorkSessionHandlers(deps: {
   ipcMain.handle("agent:interrupt", (_e, terminalId: string) =>
     workSessionService.interruptAgent(terminalId),
   )
+
+  // Restart a terminal in place — kill the proc and respawn it on the SAME conversation
+  // (via --resume) + SAME engine/model/effort/ultracode. A fresh spawn re-mints
+  // --mcp-config and re-reads config, so MCP/config changes are picked up without
+  // closing the app. Lives here (alongside interrupt) because the respawn reuses the
+  // durable session ref's ccConversationId/model, owned by SessionService. Returns the
+  // new terminal id so the renderer re-points the active selection.
+  ipcMain.handle("agent:restart", (_e, terminalId: string) =>
+    workSessionService.restartTerminal(terminalId),
+  )
 }

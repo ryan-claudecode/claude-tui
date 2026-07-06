@@ -116,6 +116,7 @@ export default function AgentComposer({
   const [attachments, setAttachments] = useState<string[]>([])
   const [dragOver, setDragOver] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [restarting, setRestarting] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   // CAPP-120 (STT-1) — push-to-talk dictation. The mic inserts transcribed text at the
@@ -241,13 +242,36 @@ export default function AgentComposer({
     }
   }, [terminalId, onSwitched])
 
+  // Restart THIS terminal in place: kill the proc + resume the SAME conversation on the
+  // SAME engine, so a fresh --mcp-config / config read picks up MCP or config changes
+  // without closing the app. The respawn mints a new terminal id; onSwitched re-points
+  // the active selection at it (like the interrupt / model switch). Usable while busy —
+  // reloading a wedged proc is the point — and while idle (the common MCP-reload case).
+  const restart = useCallback(async () => {
+    if (!sessionId || restarting) return
+    setRestarting(true)
+    try {
+      const r = await window.api.restartTerminal(terminalId)
+      if (r?.terminalId) onSwitched?.(r.terminalId)
+      // A no-op restart (single-flight already in flight, or the terminal was torn
+      // down) resolves undefined: no respawn, no re-point, so this composer stays on the
+      // SAME id — clear the flag here so the button doesn't wedge on "Restarting…".
+      else setRestarting(false)
+    } catch {
+      toast("error", "Couldn't restart the terminal.")
+      setRestarting(false)
+    }
+  }, [sessionId, restarting, terminalId, onSwitched])
+
   // CAPP-49 — clear the transient `stopping` flag whenever this composer is bound to
   // a NEW terminal id (a respawn landed and the pane re-pointed). Single-pane remounts
   // fresh so this is a no-op there; it matters for the persistent split-pane composer,
   // where a left-over `stopping=true` would otherwise wedge the Stop button the next
-  // time the (new) terminal goes busy.
+  // time the (new) terminal goes busy. The `restarting` flag rides the same reset (a
+  // landed restart re-points to a new id, so the button must un-wedge).
   useEffect(() => {
     setStopping(false)
+    setRestarting(false)
   }, [terminalId])
 
   // BO-7 — `/`-command autocomplete (structured-only; this composer mounts only for
@@ -706,6 +730,18 @@ export default function AgentComposer({
             title="Switch this session to the raw terminal view (keeps the conversation)"
           >
             {switching ? "Switching…" : "Raw view"}
+          </button>
+          {/* Restart THIS terminal in place — reload the proc (picks up MCP/config
+              changes) while resuming the conversation. Usable even while busy (that's
+              when a wedged proc most needs reloading); disabled only with no session or
+              while a restart/engine-swap is already in flight. */}
+          <button
+            className="agent-restart-btn"
+            onClick={restart}
+            disabled={!sessionId || restarting || switching}
+            title="Restart this terminal — reload the process (picks up MCP/config changes) and resume the conversation"
+          >
+            {restarting ? "Restarting…" : "↻ Restart"}
           </button>
         </div>
       </div>
