@@ -759,6 +759,15 @@ export function reduceTranscript(state: TranscriptState, event: StreamEvent): Tr
       // Session metadata, not a render block — surfaced elsewhere if needed.
       return state
 
+    case "background_task_started":
+    case "background_task_done":
+      // BACKGROUND WORK — control signals for the main-process activity machine
+      // (terminals.ts): they keep the session green while detached work runs. NOT
+      // render blocks — the completion is shown via the paired `user_message`
+      // (task-notification) which folds into a CAPP-118 injected chip. Ignore here so
+      // they don't fall through to the `raw` default and render as stray raw events.
+      return state
+
     case "unknown":
     default:
       // Forward-compat escape hatch: any unrecognized variant becomes a benign

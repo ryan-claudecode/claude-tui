@@ -1687,3 +1687,128 @@ describe("CAPP-108 modelSupportsXhigh", () => {
     expect(modelSupportsXhigh("Sonnet")).toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// BACKGROUND WORK — the session must stay "working" (green) after the foreground
+// `result` while a detached background task (a `run_in_background` bash, a
+// TaskCreate/Workflow) is still running, instead of falsely reading idle. The two
+// signals correlate by task-id: a "running in background with ID: X" tool_result
+// STARTS one; a `<task-notification>` with `<task-id>X` COMPLETES it.
+// ---------------------------------------------------------------------------
+describe("BACKGROUND WORK — hold green past `result` while a background task runs", () => {
+  const bgStart = (id: string) =>
+    JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tu",
+            content: `Command running in background with ID: ${id}. Output is being written to: C:\\x`,
+          },
+        ],
+      },
+    }) + "\n"
+  const notif = (id: string) =>
+    JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: `<task-notification> <task-id>${id}</task-id> </task-notification>` }],
+      },
+    }) + "\n"
+  const statesOf = (events: TerminalEvent[], id: string) =>
+    events.filter((e) => e.type === "state" && e.id === id).map((e) => (e as { state: string }).state)
+
+  it("stays ACTIVE after `result` while a background task is outstanding, and counts it", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    svc.sendAgentMessage(info.id, userMessage("go")) // idle→active
+    spawned[0].emitStdout(bgStart("bg1")) // tool_result + background_task_started
+    expect(svc.backgroundCount(info.id)).toBe(1)
+    spawned[0].emitStdout(`${fx.RESULT}\n`) // foreground turn ends — but bg still running
+    // NO idle: the session is held green because work is still happening.
+    expect(statesOf(events, info.id)).toEqual(["active"])
+    expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("active")
+    expect(svc.backgroundCount(info.id)).toBe(1)
+    // A `background` event fired so the sidebar ⚙ N badge can track the count.
+    expect(events.some((e) => e.type === "background" && e.id === info.id)).toBe(true)
+  })
+
+  it("without a background task, `result` still parks idle immediately (control)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    svc.sendAgentMessage(info.id, userMessage("go"))
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`)
+    spawned[0].emitStdout(`${fx.RESULT}\n`)
+    expect(statesOf(events, info.id)).toEqual(["active", "idle"])
+  })
+
+  it("parks idle only AFTER the task completes and the grace window elapses — one clean active→idle", () => {
+    vi.useFakeTimers()
+    try {
+      const { svc, spawned } = makeHeadlessService()
+      const events = collect(svc)
+      ;(svc as unknown as { startIdleMonitor: () => void }).startIdleMonitor()
+      const info = svc.createHeadless("t", process.cwd())
+      svc.sendAgentMessage(info.id, userMessage("go"))
+      spawned[0].emitStdout(bgStart("bg1"))
+      spawned[0].emitStdout(`${fx.RESULT}\n`) // held active
+      spawned[0].emitStdout(notif("bg1")) // background_task_done → count 0, settling
+      expect(svc.backgroundCount(info.id)).toBe(0)
+      expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("active") // still in grace
+      vi.advanceTimersByTime(3000) // past the settle grace
+      expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("idle")
+      expect(statesOf(events, info.id)).toEqual(["active", "idle"]) // no flap
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("a woken follow-up turn cancels the settle (no active→idle flap)", () => {
+    vi.useFakeTimers()
+    try {
+      const { svc, spawned } = makeHeadlessService()
+      const events = collect(svc)
+      ;(svc as unknown as { startIdleMonitor: () => void }).startIdleMonitor()
+      const info = svc.createHeadless("t", process.cwd())
+      svc.sendAgentMessage(info.id, userMessage("go"))
+      spawned[0].emitStdout(bgStart("bg1"))
+      spawned[0].emitStdout(`${fx.RESULT}\n`)
+      spawned[0].emitStdout(notif("bg1")) // bg done → settling
+      spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`) // a follow-up turn wakes → cancels settle
+      vi.advanceTimersByTime(3000)
+      expect(statesOf(events, info.id)).toEqual(["active"]) // never idled
+      expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("active")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("holds green until the LAST of several background tasks completes", () => {
+    vi.useFakeTimers()
+    try {
+      const { svc, spawned } = makeHeadlessService()
+      const info = svc.createHeadless("t", process.cwd())
+      ;(svc as unknown as { startIdleMonitor: () => void }).startIdleMonitor()
+      svc.sendAgentMessage(info.id, userMessage("go"))
+      spawned[0].emitStdout(bgStart("bg1"))
+      spawned[0].emitStdout(bgStart("bg2"))
+      expect(svc.backgroundCount(info.id)).toBe(2)
+      spawned[0].emitStdout(`${fx.RESULT}\n`)
+      spawned[0].emitStdout(notif("bg1")) // one done, one still running
+      vi.advanceTimersByTime(3000)
+      expect(svc.backgroundCount(info.id)).toBe(1)
+      expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("active") // still held
+      spawned[0].emitStdout(notif("bg2")) // last one done → settle
+      vi.advanceTimersByTime(3000)
+      expect(svc.backgroundCount(info.id)).toBe(0)
+      expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("idle")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

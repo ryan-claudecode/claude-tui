@@ -9,7 +9,7 @@ import type { WorkspaceSummary } from "../hooks/useWorkspaces"
 import WorkspaceSwitcher from "./WorkspaceSwitcher"
 import SchedulesList from "./SchedulesList"
 
-interface TerminalRow { id: string; name: string; lastState: string; activity?: string }
+interface TerminalRow { id: string; name: string; lastState: string; activity?: string; backgroundCount?: number }
 interface SessionRow { id: string; name: string; status: string; terminals: TerminalRow[] }
 
 interface Props {
@@ -217,7 +217,7 @@ export default function Sidebar({
           )
         )}
         {sessions.map((s, i) => {
-          const { dot, count, activity } = deriveSessionRow(s)
+          const { dot, count, activity, background } = deriveSessionRow(s)
           const selected = activeSessionId === s.id
           return (
             <div
@@ -256,6 +256,15 @@ export default function Sidebar({
                   </span>
                 )}
                 <span className="session-count">{count} ▣</span>
+                {background > 0 && (
+                  <span
+                    className="session-bg-badge"
+                    title={`${background} background task${background === 1 ? "" : "s"} running`}
+                    aria-label={`${background} background task${background === 1 ? "" : "s"} running`}
+                  >
+                    ⚙ {background}
+                  </span>
+                )}
                 <button
                   className="session-kill-btn"
                   title="Kill session"

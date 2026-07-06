@@ -42,6 +42,10 @@ export interface Terminal {
    */
   ccConversationId?: string
   activity?: string
+  /** BACKGROUND WORK — outstanding background-task count (compute-only, from the
+   *  worksession snapshot's `withEffectiveActivity`). Drives the sidebar `⚙ N` badge and
+   *  keeps the session dot green while > 0. Undefined/0 for xterm terminals. */
+  backgroundCount?: number
 }
 
 export interface WorkSession {

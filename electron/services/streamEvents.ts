@@ -24,6 +24,7 @@
 
 import { logWarn } from "../log"
 import type { StreamEvent, McpServerStatus } from "./streamProtocol"
+import { backgroundStartId, isTaskNotification, taskNotificationIds } from "./backgroundTasks"
 
 /**
  * Reassembles newline-delimited JSON from a byte/character stream that arrives
@@ -163,6 +164,50 @@ function parseStreamSubEvent(event: unknown): StreamEvent[] {
 }
 
 /**
+ * Parse a `user` line's content[] into events. A user line carries EITHER tool_results
+ * (the normal case) OR harness-injected text (a `<task-notification>`, a
+ * `<system-reminder>`, …). We model three things off it:
+ *   - each `tool_result` block → a `tool_result` event (unchanged);
+ *   - a tool_result that reports a `run_in_background` launch → an ADDITIONAL
+ *     `background_task_started` (its content carries the task-id);
+ *   - a `<task-notification>` text block → a `user_message` (so the reducer renders the
+ *     CAPP-118 "background task" chip LIVE — these are otherwise invisible until --resume)
+ *     PLUS a `background_task_done` per completed task-id.
+ * Only task-notification text is surfaced as a user_message; other injected text
+ * (system-reminders, etc.) stays dropped live, exactly as before — this stays scoped to
+ * the background-work signal.
+ */
+function parseUserLine(content: unknown): StreamEvent[] {
+  if (!Array.isArray(content)) return []
+  const out: StreamEvent[] = []
+  const textParts: string[] = []
+  for (const block of content) {
+    if (!isObj(block)) continue
+    if (block.type === "tool_result") {
+      out.push({
+        kind: "tool_result",
+        toolUseId: str(block.tool_use_id) ?? "",
+        content: block.content,
+        isError: block.is_error === true ? true : undefined,
+      })
+      const startId = backgroundStartId(block.content)
+      if (startId) out.push({ kind: "background_task_started", taskId: startId })
+    } else if (block.type === "text") {
+      const t = str(block.text)
+      if (t) textParts.push(t)
+    }
+  }
+  const text = textParts.join("")
+  if (isTaskNotification(text)) {
+    out.push({ kind: "user_message", text })
+    for (const id of taskNotificationIds(text)) {
+      out.push({ kind: "background_task_done", taskId: id })
+    }
+  }
+  return out
+}
+
+/**
  * Parse ONE NDJSON line into 0..N typed StreamEvents. Never throws.
  */
 export function parseStreamLine(line: string): StreamEvent[] {
@@ -237,18 +282,7 @@ export function parseStreamLine(line: string): StreamEvent[] {
       )
 
     case "user":
-      return collectBlocks(
-        isObj(obj.message) ? obj.message.content : undefined,
-        (block) =>
-          block.type === "tool_result"
-            ? {
-                kind: "tool_result",
-                toolUseId: str(block.tool_use_id) ?? "",
-                content: block.content,
-                isError: block.is_error === true ? true : undefined,
-              }
-            : null,
-      )
+      return parseUserLine(isObj(obj.message) ? obj.message.content : undefined)
 
     case "result":
       return [

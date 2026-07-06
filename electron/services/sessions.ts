@@ -92,6 +92,13 @@ export interface TerminalRef {
   /** Epoch ms when `activity` was last set. */
   activityAt?: number
   /**
+   * BACKGROUND WORK — outstanding background-task count. COMPUTE-ONLY: stamped fresh onto
+   * the emitted snapshot by {@link SessionService.withEffectiveActivity} (never persisted;
+   * it's live TerminalService state). The sidebar renders it as the `⚙ N` badge and holds
+   * the session dot green while > 0. Undefined/0 for xterm terminals and legacy refs.
+   */
+  backgroundCount?: number
+  /**
    * CAPP-39 gate ② — true for the one-time interactive `claude /login` terminal
    * (see {@link SessionService.startLogin}). It is NOT a normal agent terminal: an
    * ephemeral OAuth affordance. So it is EXCLUDED from idle-flush summary-refresh,
@@ -225,6 +232,10 @@ export interface TerminalLike {
   createXterm(name?: string, cwd?: string, sessionId?: string, resumeConvId?: string, model?: string, effort?: string, ultracode?: boolean): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; ultracode?: boolean }
   /** BO-5: is this terminal headless? Lets the container branch xterm-vs-structured. */
   isHeadless(id: string): boolean
+  /** BACKGROUND WORK: outstanding background-task count for a terminal (0 if none / not
+   *  headless). Read by {@link SessionService.withEffectiveActivity} into the snapshot's
+   *  `backgroundCount`. Optional so test mocks that don't model background work can omit it. */
+  backgroundCount?(id: string): number
   /** CAPP-126: seed a restored headless terminal's picker catalog from the persisted
    *  ref so `/`-autocomplete works BEFORE its first turn (init arrives only after the
    *  first message). No-op if the terminal isn't headless or already has a fresher
@@ -246,7 +257,7 @@ export interface TerminalLike {
   kill(id: string): boolean
   write(id: string, data: string): void
   getOutput(id: string, maxChars?: number): string | null
-  onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo" | "renamed" | "stream"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string; name?: string; event?: unknown }) => void): () => void
+  onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo" | "renamed" | "stream" | "background"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string; name?: string; event?: unknown }) => void): () => void
 }
 
 interface MainWinLike {
@@ -298,6 +309,12 @@ export class SessionService {
     terminals.onEvent((e) => {
       if (e.type === "state" && e.id && e.state) this.reconcile(e.id, e.state)
       else if (e.type === "exit" && e.id) this.reconcile(e.id, "dead")
+      else if (e.type === "background" && e.id) {
+        // BACKGROUND WORK — the outstanding-task count changed without a state change;
+        // re-emit the session snapshot so the sidebar `⚙ N` badge tracks it live.
+        const s = this.sessionOf(e.id)
+        if (s) this.emit("worksession:updated", this.withEffectiveActivity(s))
+      }
       else if (e.type === "convo" && e.id && e.ccConversationId) {
         this.recordConversationId(e.id, e.ccConversationId)
       } else if (e.type === "renamed" && e.id && e.name) {
@@ -1214,7 +1231,13 @@ export class SessionService {
   private withEffectiveActivity(s: WorkSession): WorkSession {
     return {
       ...s,
-      terminals: s.terminals.map((t) => ({ ...t, activity: this.effectiveActivity(s.id, t.id) })),
+      terminals: s.terminals.map((t) => ({
+        ...t,
+        activity: this.effectiveActivity(s.id, t.id),
+        // BACKGROUND WORK — stamp the live outstanding-task count (compute-only; never
+        // persisted) so the sidebar renders the `⚙ N` badge and holds the dot green.
+        backgroundCount: this.terminals?.backgroundCount?.(t.id) ?? 0,
+      })),
     }
   }
 

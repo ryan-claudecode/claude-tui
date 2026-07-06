@@ -260,6 +260,25 @@ export type StreamEvent =
    * of what the user typed. The renderer folds it into a `user` chat block.
    */
   | { kind: "user_message"; text: string }
+  /**
+   * BACKGROUND WORK — a background task (a `Bash(run_in_background:true)`, a
+   * TaskCreate/Workflow, …) was LAUNCHED. Parsed from the tool_result whose content
+   * reads `Command running in background with ID: <taskId>. Output is being written to:
+   * …`. The transport counts these per terminal so the session stays "working" (green)
+   * after the foreground `result` while detached work continues — instead of falsely
+   * dropping to idle. `taskId` correlates 1:1 with the completing {@link
+   * background_task_done} (both carry the SAME id).
+   */
+  | { kind: "background_task_started"; taskId: string }
+  /**
+   * BACKGROUND WORK — a background task COMPLETED. Parsed from the `<task-notification>`
+   * user message Claude Code injects when a detached task finishes (it carries
+   * `<task-id>…</task-id>`). Drains the terminal's outstanding-set; when it empties AND
+   * the foreground turn has ended, the session finally parks idle. The SAME line also
+   * yields a {@link user_message} carrying the raw wrapper, which the reducer renders as
+   * a compact "background task" chip (CAPP-118) so completion is visible live.
+   */
+  | { kind: "background_task_done"; taskId: string }
   /** Forward-compat escape hatch: an unrecognized top-level event type. */
   | { kind: "unknown"; raw: unknown }
 

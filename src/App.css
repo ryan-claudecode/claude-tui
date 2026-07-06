@@ -1113,6 +1113,24 @@ body {
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
 }
+/* BACKGROUND WORK — the "⚙ N" badge on a session row: background tasks still running
+   after the foreground turn ended (the session dot stays green alongside it). Accent-
+   tinted so it reads as live work; compact, tabular, statically visible (no hover). */
+.session-bg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
 .session-item-line2 {
   font-size: 11px;
   opacity: 0.6;

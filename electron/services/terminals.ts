@@ -231,6 +231,8 @@ export function projectStreamEvent(e: StreamEvent): string | null {
     case "init":
     case "thinking_delta":
     case "needs_auth":
+    case "background_task_started":
+    case "background_task_done":
     case "unknown":
       return null
   }
@@ -567,6 +569,31 @@ interface HeadlessTerminal {
    */
   permissionPending?: boolean
   /**
+   * BACKGROUND WORK — true while the FOREGROUND turn is generating (set on any activity
+   * event, cleared on `result`). Separated from {@link backgroundTasks} so the effective
+   * state is a clean OR: the terminal is "active" (green) while EITHER the foreground turn
+   * runs OR any background task is outstanding. Without this split, `result` unconditionally
+   * parked the session idle even though detached work was still running (the reported bug).
+   */
+  foregroundActive?: boolean
+  /**
+   * BACKGROUND WORK — outstanding background tasks by task-id → epoch-ms launched. A
+   * `background_task_started` adds; a `background_task_done` removes; the idle poll prunes
+   * entries older than {@link backgroundTaskMaxMs} (a missed completion can't pin a session
+   * green forever). Non-empty ⇒ the session holds "active" (green) past the foreground
+   * `result`; the size is surfaced to the sidebar as the `⚙ N` badge.
+   */
+  backgroundTasks?: Map<string, number>
+  /**
+   * BACKGROUND WORK — epoch ms the LAST background task drained while no foreground turn
+   * was live, arming a short grace before parking idle. A background completion often
+   * WAKES a follow-up turn (Claude reacts to the `<task-notification>`), so idling
+   * synchronously would flap active→idle→active and raise a spurious "finished". The idle
+   * monitor parks idle only after {@link idleThresholdMs} with no follow-up; real activity
+   * ({@link markActiveHeadless}) clears this, cancelling the settle. Undefined when not settling.
+   */
+  bgSettleAt?: number
+  /**
    * CAPP-54 gate ② — parity with {@link TerminalInfo.isLogin} so list()/getActivity()
    * can copy `s.isLogin` off either registry without a type split. A headless proc
    * is NEVER a login terminal (the interactive `claude /login` PTY is always xterm),
@@ -608,6 +635,13 @@ export type TerminalEvent =
   | { type: "exit"; id: string }
   | { type: "convo"; id: string; ccConversationId: string }
   | { type: "renamed"; id: string; name: string }
+  /**
+   * BACKGROUND WORK — the outstanding background-task COUNT for a terminal changed
+   * (a task started or completed), without necessarily a state change. SessionService
+   * re-emits the session snapshot so the sidebar `⚙ N` badge tracks it live. Carries no
+   * payload beyond `id` — consumers read the count via {@link TerminalService.backgroundCount}.
+   */
+  | { type: "background"; id: string }
   /**
    * BO-1: a typed event parsed from a HEADLESS terminal's stream-json stdout,
    * attributed to its owning terminal. Emitted on the SAME `onEvent` seam as the
@@ -761,6 +795,14 @@ export class TerminalService {
    * posture before shipping.
    */
   private skipApproval = true
+  /**
+   * BACKGROUND WORK — the safety cap: a background task we never saw complete is pruned
+   * from a terminal's outstanding-set after this long, so a MISSED completion (a dropped
+   * `<task-notification>`, a killed child) can't pin a session green forever. Generous
+   * because legitimate background work (builds, benchmarks) runs long; the common case
+   * drains via the real completion notice well before this. Pruned by the idle monitor.
+   */
+  private readonly backgroundTaskMaxMs = 20 * 60_000
   /** Quiet period after which a live session is considered idle (waiting). */
   private readonly idleThresholdMs = 1500
   private idleTimer: ReturnType<typeof setInterval> | null = null
@@ -893,6 +935,39 @@ export class TerminalService {
           terminal.activeSince = undefined
           this.sendToRenderer("terminal:state", terminal.id, "idle")
           this.emitEvent({ type: "state", id: terminal.id, state: "idle", burstMs, promptDetected })
+        }
+      }
+      // BACKGROUND WORK — per headless terminal: (1) prune stale tasks (a completion we
+      // never saw) so a missed notice can't hold a session green forever, then (2) confirm
+      // a pending settle — park idle only after the grace window elapses with no woken
+      // follow-up turn (a real activity event clears bgSettleAt).
+      for (const entry of this.headless.values()) {
+        const tasks = entry.backgroundTasks
+        if (tasks && tasks.size > 0) {
+          let pruned = false
+          for (const [taskId, startedAt] of tasks) {
+            if (now - startedAt > this.backgroundTaskMaxMs) {
+              tasks.delete(taskId)
+              pruned = true
+            }
+          }
+          if (pruned) {
+            this.emitEvent({ type: "background", id: entry.id })
+            const stillWorking = entry.foregroundActive === true || tasks.size > 0
+            if (!stillWorking && entry.state === "active" && entry.bgSettleAt == null) {
+              entry.bgSettleAt = now
+            }
+          }
+        }
+        if (
+          entry.bgSettleAt != null &&
+          entry.state === "active" &&
+          entry.foregroundActive !== true &&
+          (entry.backgroundTasks?.size ?? 0) === 0 &&
+          now - entry.bgSettleAt >= this.idleThresholdMs
+        ) {
+          entry.bgSettleAt = undefined
+          this.idleHeadless(entry)
         }
       }
     }, 1000)
@@ -1699,7 +1774,14 @@ export class TerminalService {
       case "thinking_delta":
       case "tool_use":
       case "tool_result":
+        entry.foregroundActive = true
         this.markActiveHeadless(entry)
+        break
+      case "background_task_started":
+        this.addBackgroundTask(entry, event.taskId)
+        break
+      case "background_task_done":
+        this.removeBackgroundTask(entry, event.taskId)
         break
       case "init":
         // RUNTIME-INTEGRATION FIX (CAPP-58): on the stream-json path `init` arrives
@@ -1722,24 +1804,89 @@ export class TerminalService {
         entry.activeSince = Date.now()
         break
       case "result":
-        // Turn complete → idle. AttentionService classifies this as `finished`
-        // (or `asked` when the BO-3 permission hook armed promptDetected).
-        this.idleHeadless(entry)
+        // Foreground turn complete. Park idle ONLY if no background task is still
+        // running; otherwise HOLD active (green) — the session is still working
+        // (the reported bug: `result` used to idle unconditionally, so a session that
+        // had launched background work looked "done"). When the last background task
+        // drains (or is pruned), reconcile parks it idle → AttentionService then sees
+        // the `finished`/`asked` transition, so the "needs you?" signal fires when the
+        // WHOLE thing is actually done, not at the foreground turn's end.
+        entry.foregroundActive = false
+        this.reconcileHeadless(entry)
         break
-      // needs_auth/unknown carry no activity signal.
+      // needs_auth/unknown/user_message carry no activity signal.
     }
   }
 
   /** Flip a structured terminal active on new activity; emits state only on the
-   *  idle→active edge (mirrors the PTY `markActive`). */
+   *  idle→active edge (mirrors the PTY `markActive`). Real activity also cancels any
+   *  pending background settle (a woken follow-up turn keeps the session green). */
   private markActiveHeadless(entry: HeadlessTerminal): void {
     entry.lastActivity = Date.now()
+    entry.bgSettleAt = undefined
     if (entry.state === "idle") {
       entry.state = "active"
       entry.activeSince = entry.lastActivity
       this.sendToRenderer("terminal:state", entry.id, "active")
       this.emitEvent({ type: "state", id: entry.id, state: "active" })
     }
+  }
+
+  /**
+   * BACKGROUND WORK — the effective active/idle state is `foregroundActive OR any
+   * background task outstanding`. Called whenever either input changes (`result`,
+   * task start/done, prune): flips to active if it should be and isn't, or parks idle
+   * via {@link idleHeadless} when neither the turn nor any background work remains.
+   * The active edge mirrors {@link markActiveHeadless} but does NOT bump `lastActivity`
+   * (a background hold is not foreground output).
+   */
+  private reconcileHeadless(entry: HeadlessTerminal): void {
+    const shouldBeActive = entry.foregroundActive === true || (entry.backgroundTasks?.size ?? 0) > 0
+    if (shouldBeActive) {
+      entry.bgSettleAt = undefined // work is (still) happening — cancel any pending settle
+      if (entry.state === "idle") {
+        entry.state = "active"
+        entry.activeSince = entry.activeSince ?? Date.now()
+        this.sendToRenderer("terminal:state", entry.id, "active")
+        this.emitEvent({ type: "state", id: entry.id, state: "active" })
+      }
+    } else {
+      this.idleHeadless(entry)
+    }
+  }
+
+  /** BACKGROUND WORK — record a launched background task and refresh the sidebar count.
+   *  Also reconciles state (defensive: a start while somehow idle re-greens the row). */
+  private addBackgroundTask(entry: HeadlessTerminal, taskId: string): void {
+    if (!entry.backgroundTasks) entry.backgroundTasks = new Map()
+    if (entry.backgroundTasks.has(taskId)) return
+    entry.backgroundTasks.set(taskId, Date.now())
+    this.reconcileHeadless(entry)
+    this.emitEvent({ type: "background", id: entry.id })
+  }
+
+  /**
+   * BACKGROUND WORK — drop a completed background task and refresh the sidebar count. If
+   * the foreground turn is live or other tasks remain, the session simply stays green. If
+   * this drained the LAST task with no live turn, we do NOT idle synchronously — a
+   * completion frequently wakes a follow-up turn, so we ARM a short settle ({@link
+   * bgSettleAt}) that the idle monitor confirms (a woken turn cancels it via markActive).
+   * This avoids the active→idle→active flap and the spurious "finished" it would raise.
+   */
+  private removeBackgroundTask(entry: HeadlessTerminal, taskId: string): void {
+    if (!entry.backgroundTasks || !entry.backgroundTasks.delete(taskId)) return
+    this.emitEvent({ type: "background", id: entry.id })
+    const stillWorking = entry.foregroundActive === true || entry.backgroundTasks.size > 0
+    if (!stillWorking && entry.state === "active") entry.bgSettleAt = Date.now()
+  }
+
+  /**
+   * BACKGROUND WORK — outstanding background-task count for a terminal (0 for an unknown
+   * or non-headless terminal). SessionService.withEffectiveActivity reads this into the
+   * session snapshot so the sidebar renders the `⚙ N` badge.
+   */
+  backgroundCount(terminalId: string): number {
+    return this.headless.get(terminalId)?.backgroundTasks?.size ?? 0
   }
 
   /** Park a structured terminal idle; emits the SAME active→idle `state` event the

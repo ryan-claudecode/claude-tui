@@ -70,6 +70,53 @@ describe("parseStreamLine — captured-fixture happy paths", () => {
     expect(e.isError).toBeUndefined()
   })
 
+  // BACKGROUND WORK — a `run_in_background` launch's tool_result carries the task-id;
+  // the parser emits the tool_result AND an additional background_task_started.
+  it("emits background_task_started alongside a background-launch tool_result", () => {
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_bg",
+            content: "Command running in background with ID: b5n527j84. Output is being written to: C:\\x",
+          },
+        ],
+      },
+    })
+    const events = parseStreamLine(line)
+    expect(events.map((e) => e.kind)).toEqual(["tool_result", "background_task_started"])
+    const started = events[1]
+    if (started.kind !== "background_task_started") throw new Error("narrow")
+    expect(started.taskId).toBe("b5n527j84")
+  })
+
+  // BACKGROUND WORK — a <task-notification> user line surfaces as a user_message (→ the
+  // CAPP-118 completion chip) PLUS a background_task_done draining the outstanding-set.
+  it("emits user_message + background_task_done for a task-notification", () => {
+    const text = "<task-notification> <task-id>b5n527j84</task-id> <tool-use-id>toolu_bg</tool-use-id> </task-notification>"
+    const line = JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text }] },
+    })
+    const events = parseStreamLine(line)
+    expect(events.map((e) => e.kind)).toEqual(["user_message", "background_task_done"])
+    const done = events[1]
+    if (done.kind !== "background_task_done") throw new Error("narrow")
+    expect(done.taskId).toBe("b5n527j84")
+  })
+
+  it("does NOT surface an ordinary (non-task-notification) user text block", () => {
+    // A non-injected user text line stays dropped live (unchanged behavior).
+    const line = JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "hello there" }] },
+    })
+    expect(parseStreamLine(line)).toEqual([])
+  })
+
   it("parses a terminal result event", () => {
     const events = parseStreamLine(fx.RESULT)
     expect(events).toHaveLength(1)
