@@ -960,8 +960,16 @@ test("CAPP-111 / S4: each block has a STATICALLY-VISIBLE top-right expand button
   //     buttons — statically visible, no text label span, with the title/aria-label.
   await composer.fill("__TOOLS_TURN__")
   await composer.press("Enter")
-  // Two tool rows render (Edit + Bash). They settle to done.
+  // Two tool rows render (Edit + Bash). They settle to done. Since 52187f6 a run of
+  // ≥TOOL_GROUP_MIN_RUN(2) consecutive tools collapses into a <details> tool GROUP
+  // (collapsed by default), so the rows exist but sit hidden behind the group's
+  // statically-visible summary — expand it first (the summary IS the no-hover-reveal
+  // affordance), then assert the per-row buttons exactly as before.
   await expect(win.locator(".agent-tool")).toHaveCount(2, { timeout: 15_000 })
+  const groupSummary = win.locator(".agent-tool-group-summary")
+  await expect(groupSummary).toBeVisible({ timeout: 15_000 })
+  await expect(groupSummary).toContainText(/2 tool calls/i)
+  await groupSummary.click()
   const toolBtns = win.locator(".agent-tool .agent-block-expand")
   await expect(toolBtns).toHaveCount(2, { timeout: 15_000 })
   for (let i = 0; i < 2; i++) {
