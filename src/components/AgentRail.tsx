@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import type { TranscriptBlock } from "../lib/agentTranscript"
-import { sumCost, formatCost, deriveNow, formatElapsed } from "../lib/agentRail"
+import { formatCost, deriveNow, formatElapsed, type RailCost } from "../lib/agentRail"
 
 interface Props {
   /** Effective open/collapsed (from useAgentRail → effectiveRailOpen). Open = full
@@ -20,9 +19,10 @@ interface Props {
   /** The active terminal's effective activity string (self-reported or the parsed
    *  last tool-call line) — the SAME signal the sidebar dot reads. */
   activity?: string | null
-  /** The active terminal's folded transcript blocks, for the session-cumulative COST
-   *  sum. Sourced renderer-side from the shared transcript cache (see App.tsx). */
-  blocks: readonly TranscriptBlock[]
+  /** CAPP-129 — the active terminal's DURABLE per-terminal cost total (conversation-
+   *  lineage, surviving respawns + app restarts). Derived in App.tsx from the active
+   *  terminal ref via `railCostFromTerminal`. */
+  cost: RailCost
 }
 
 /**
@@ -47,10 +47,9 @@ export default function AgentRail({
   terminalId,
   busy,
   activity,
-  blocks,
+  cost,
 }: Props) {
   const now = deriveNow({ hasTerminal, busy, activity })
-  const cost = sumCost(blocks)
   const costLabel = formatCost(cost)
 
   // Live elapsed clock for the NOW line — runs ONLY while busy. Re-anchors on the
@@ -162,18 +161,18 @@ export default function AgentRail({
         )}
       </div>
 
-      {/* COST — spend for the active terminal's CURRENT SPAWN, summed renderer-side from
-          the per-turn ResultCost (CAPP-125: per-turn deltas off the cumulative
-          total_cost_usd, so no triangular overcount). Pinned to the footer; present only
-          when there is turn data. Labeled "this spawn": it resets on a respawn/interrupt
-          and misses scrolled-out turns (design doc Q5) — a glance number, not an audit. */}
+      {/* COST — CAPP-129: the DURABLE per-terminal total, read off the active terminal's
+          SessionService ref (per-turn deltas accumulated in the main process; CAPP-125
+          cumulative→delta so no triangular overcount). It is the conversation-LINEAGE total
+          — it SURVIVES respawns/interrupts/model-switches AND app restarts (no longer the
+          per-spawn figure). Pinned to the footer; present only when there is turn data. */}
       <div className="agent-rail-footer">
         <div className="agent-rail-section-label">
-          COST <span className="agent-rail-cost-scope">· this spawn</span>
+          COST <span className="agent-rail-cost-scope">· this terminal</span>
         </div>
         <div
           className="agent-rail-cost"
-          title="Spend for this terminal's current spawn (per-turn, summed). Resets on respawn/interrupt."
+          title="Total spend for this terminal's conversation — across every respawn and app restart (per-turn, summed)."
         >
           {costLabel ?? "—"}
         </div>

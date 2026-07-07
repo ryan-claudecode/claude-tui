@@ -12,6 +12,12 @@ import type { RenderingEngine } from "../config"
 import type { NotificationLevel } from "./notifications"
 import { LineBuffer, parseStreamLine } from "./streamEvents"
 import { readTranscriptEvents } from "./transcriptHistory"
+// CAPP-129 — REUSE the exact CAPP-125 cost extractor/delta semantics (pure, zero React/
+// Electron imports; type-only StreamEvent) instead of forking the token/cost math. The
+// main build already imports from src/lib at runtime (electron/mcp/tools/panels.ts →
+// questionSubmit; transcriptHistory folds through agentTranscript), so this is an
+// established cross-boundary import, not a new one.
+import { extractCost, toPerTurnCost } from "../../src/lib/agentTranscript"
 import {
   HEADLESS_FLAGS,
   DEFAULT_MODEL,
@@ -621,6 +627,17 @@ interface HeadlessTerminal {
    * so this is always undefined here — present only for shape consistency.
    */
   isLogin?: boolean
+  /**
+   * CAPP-129 — the RAW cumulative `total_cost_usd` reported by the LAST `result` this
+   * proc emitted, so the next turn's PER-TURN cost is `current − this` (via
+   * {@link toPerTurnCost}). CAPP-125 TRAP: `total_cost_usd` is cumulative PER PROCESS,
+   * so summing it triangular-overcounts — we accumulate DELTAS only. This baseline is
+   * PER-ENTRY: a respawn/`--resume` mints a FRESH HeadlessTerminal, so it resets to
+   * undefined and the resumed proc's first delta is its own raw cumulative (which, per
+   * the CAPP-125 fixtures, excludes the pre-resume history — no double-count). Undefined
+   * until the first cost-bearing result.
+   */
+  lastCumulativeCostUsd?: number
 }
 
 /** Per-session activity snapshot for the "which session needs me?" view. */
@@ -663,6 +680,16 @@ export type TerminalEvent =
    * payload beyond `id` — consumers read the count via {@link TerminalService.backgroundCount}.
    */
   | { type: "background"; id: string }
+  /**
+   * CAPP-129 — a turn-complete PER-TURN cost delta for a HEADLESS terminal, attributed
+   * to its owning terminal. Emitted on the SAME `onEvent` seam right after the turn's
+   * `result` (before the CAPP-130 queue flush). SessionService folds it into the durable
+   * per-terminal + per-session rolling totals. `costUsd`/`totalTokens` are already
+   * PER-TURN (the cumulative→delta conversion happened upstream via {@link toPerTurnCost});
+   * either may be undefined when the result reported neither, but the event still fires so
+   * the "N turns" count advances. xterm terminals have no result stream → they never emit.
+   */
+  | { type: "cost"; id: string; costUsd?: number; totalTokens?: number }
   /**
    * BO-1: a typed event parsed from a HEADLESS terminal's stream-json stdout,
    * attributed to its owning terminal. Emitted on the SAME `onEvent` seam as the
@@ -2031,6 +2058,13 @@ export class TerminalService {
         // (which, holding active for background, deliberately does NOT re-emit here).
         this.emitForegroundState(entry, "idle")
         this.reconcileHeadless(entry)
+        // CAPP-129 — emit this turn's PER-TURN cost delta BEFORE the CAPP-130 queue flush
+        // (so event order reads turn-complete → cost → next queued turn). `total_cost_usd`
+        // is CUMULATIVE per process (the CAPP-125 trap), so convert to a delta off THIS
+        // proc's last cumulative (undefined baseline on a fresh spawn/resume → the raw
+        // cumulative, which excludes pre-resume history). REUSE extractCost/toPerTurnCost —
+        // never a forked copy of the math. `totalTokens` is already per-turn (top-level usage).
+        this.emitTurnCost(entry, event)
         // CAPP-130 — the foreground turn ended: auto-flush ONE queued message FIFO.
         // Deferred a tick (avoids re-entrancy inside this handler). NEVER flush while a
         // permission is still pending at result-time (stdin would buffer unread); the
@@ -2042,6 +2076,35 @@ export class TerminalService {
         break
       // needs_auth/unknown/user_message carry no activity signal.
     }
+  }
+
+  /**
+   * CAPP-129 — compute a turn's PER-TURN cost delta off a `result` event and emit it on
+   * the onEvent seam for SessionService to fold into the durable rolling totals.
+   *
+   * THE CAPP-125 TRAP: `result.total_cost_usd` is CUMULATIVE per process, so summing it
+   * across turns triangular-overcounts. We keep the LAST raw cumulative per HeadlessTerminal
+   * ({@link HeadlessTerminal.lastCumulativeCostUsd}) and delta off it via the SHARED
+   * {@link toPerTurnCost} (reset-safe: a lower cumulative — a fresh `--resume` proc —
+   * contributes its own cost, never a negative). A respawn mints a fresh entry, so the
+   * baseline is undefined and the first delta is that proc's raw cumulative (which excludes
+   * pre-resume history per the CAPP-125 fixtures — no double-count across the re-point).
+   *
+   * `totalTokens` comes straight from {@link extractCost} (top-level `usage`, already
+   * per-turn — safe as-is). Emits even when neither field is present so the session's
+   * per-turn count still advances; SessionService guards a (defensive) negative delta to 0.
+   */
+  private emitTurnCost(entry: HeadlessTerminal, event: StreamEvent): void {
+    if (event.kind !== "result") return
+    const raw = extractCost(event.raw)
+    const perTurn = toPerTurnCost(raw, entry.lastCumulativeCostUsd ?? 0)
+    if (perTurn.cumulativeCostUsd != null) entry.lastCumulativeCostUsd = perTurn.cumulativeCostUsd
+    this.emitEvent({
+      type: "cost",
+      id: entry.id,
+      costUsd: perTurn.costUsd,
+      totalTokens: perTurn.totalTokens,
+    })
   }
 
   /**

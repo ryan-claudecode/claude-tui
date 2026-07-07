@@ -50,7 +50,8 @@ import { useSplitView } from "./hooks/useSplitView"
 import { useOverlays } from "./hooks/useOverlays"
 import { useTheme } from "./hooks/useTheme"
 import { useAgentRail } from "./hooks/useAgentRail"
-import { useAgentCost } from "./hooks/useAgentCost"
+import { railCostFromTerminal } from "./lib/agentRail"
+import { sumSessionsCost } from "./lib/costRollup"
 import { usePanels, type PanelState } from "./hooks/usePanels"
 
 // Normalize an unknown thrown value into a human-readable message for toasts.
@@ -443,12 +444,14 @@ export default function App() {
     [activeTerminals, activeTerminalId],
   )
   const railBusy = isTerminalBusy(activeTerminalId)
-  // COST source: a per-terminal accumulator of turn-complete `result` blocks (folded
-  // from the SAME stream events, keyed by terminal id so it's robust from the first
-  // turn with no convo-id dependency). `sumCost` (the tested helper) sums it in the
-  // rail. Accepted v1 limitation (design doc Q5): renderer-side, resets on respawn /
-  // misses scrolled-out turns — a glance number, not an audit.
-  const railBlocks = useAgentCost(activeTerminalId)
+  // CAPP-129 — COST source: the ACTIVE terminal's DURABLE per-terminal rolling total
+  // (SessionService ref fields, accumulated in the main process across every respawn and
+  // persisted). Read straight off the terminal ref in the session snapshot — no longer a
+  // renderer-side per-spawn sum, so it survives interrupt/restart/model-switch + app restart.
+  const railCost = useMemo(
+    () => railCostFromTerminal(activeTerminalForRail),
+    [activeTerminalForRail],
+  )
 
   // BO-10 — the stop/interrupt handbrake: kill + resume the SAME conversation. The
   // respawn mints a new terminal id, so re-point the active selection at it (like
@@ -623,6 +626,11 @@ export default function App() {
     () => filterAttentionByWorkspace(attentionEntries, activeWorkspaceId, sessions),
     [attentionEntries, activeWorkspaceId, sessions],
   )
+  // CAPP-129 — the ACTIVE workspace's durable cost rollup: Σ the per-session totals over
+  // the ALREADY-SCOPED sessions, so it mirrors the SESSIONS filter exactly (a specific
+  // workspace sums only its own sessions; "All" sums everything, incl. untagged). The
+  // workspace header renders it as subtle "$X total" text, only when > 0.
+  const workspaceCostUsd = useMemo(() => sumSessionsCost(scopedSessions), [scopedSessions])
 
   // CAPP-80 — the transient RESUMING section's rows, derived purely from the live
   // (post-reopen) sessions + the hook's tracked-token set + restore order. The list
@@ -1138,6 +1146,7 @@ export default function App() {
         workspaces={workspaces}
         activeWorkspace={activeWorkspace}
         workspaceScoped={activeWorkspaceId != null}
+        workspaceCostUsd={workspaceCostUsd}
         onSelectAllWorkspaces={() => setActiveWorkspace(null)}
         onSelectWorkspace={(id) => setActiveWorkspace(id)}
         onNewWorkspace={() => setCreateWorkspaceOpen(true)}
@@ -1260,7 +1269,7 @@ export default function App() {
         terminalId={activeTerminalId}
         busy={railBusy}
         activity={activeTerminalForRail?.activity}
-        blocks={railBlocks}
+        cost={railCost}
       />
     </div>
   )

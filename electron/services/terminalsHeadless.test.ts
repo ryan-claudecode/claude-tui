@@ -261,6 +261,106 @@ describe("createHeadless — parses the stream into typed events on the onEvent 
   })
 })
 
+// CAPP-129 — the per-turn COST delta emitted off a `result` (the CAPP-125 cumulative→delta
+// conversion, done with the SHARED extractCost/toPerTurnCost — never a forked copy).
+describe("CAPP-129 — emits a per-turn cost delta on each result (cumulative→delta)", () => {
+  const costEvents = (events: TerminalEvent[]) =>
+    events.filter((e) => e.type === "cost") as Extract<TerminalEvent, { type: "cost" }>[]
+
+  // A minimal well-formed `result` NDJSON line with a cumulative cost + per-turn usage.
+  function resultLine(totalCostUsd: number, input = 0, output = 0): string {
+    return JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      total_cost_usd: totalCostUsd,
+      usage: {
+        input_tokens: input,
+        output_tokens: output,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+    })
+  }
+
+  it("a single result emits ONE cost event with the raw cumulative (first turn) + per-turn tokens", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    // fx.RESULT: total_cost_usd 0.18570375; usage input 8647 + output 4 + cc 22779 + cr 0.
+    spawned[0].emitStdout(`${fx.RESULT}\n`)
+
+    const costs = costEvents(events)
+    expect(costs).toHaveLength(1)
+    expect(costs[0].id).toBe(info.id)
+    expect(costs[0].costUsd).toBeCloseTo(0.18570375, 9)
+    expect(costs[0].totalTokens).toBe(8647 + 4 + 22779 + 0)
+  })
+
+  it("two results on ONE proc: the 2nd cost is the DELTA, not the cumulative (triangular-overcount pin)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    svc.createHeadless("t", process.cwd())
+    // Cumulatives 0.10 then 0.25 → per-turn deltas 0.10 then 0.15 (NOT 0.10 + 0.25).
+    spawned[0].emitStdout(`${resultLine(0.1, 100, 50)}\n`)
+    spawned[0].emitStdout(`${resultLine(0.25, 80, 40)}\n`)
+
+    const costs = costEvents(events)
+    expect(costs.map((c) => c.costUsd?.toFixed(4))).toEqual(["0.1000", "0.1500"])
+    // Σ of the per-turn deltas = the last cumulative (0.25), never the triangular 0.35.
+    const sum = costs.reduce((a, c) => a + (c.costUsd ?? 0), 0)
+    expect(sum).toBeCloseTo(0.25, 9)
+    // tokens are per-turn (top-level usage), summed straight.
+    expect(costs.map((c) => c.totalTokens)).toEqual([150, 120])
+  })
+
+  it("reset-safe: a LOWER cumulative (a resume/reset) contributes its OWN cost, never negative", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${resultLine(0.2, 10, 5)}\n`)
+    spawned[0].emitStdout(`${resultLine(0.05, 10, 5)}\n`) // cumulative dropped → its own 0.05
+
+    const costs = costEvents(events)
+    expect(costs[0].costUsd).toBeCloseTo(0.2, 9)
+    expect(costs[1].costUsd).toBeCloseTo(0.05, 9) // NOT 0.05 − 0.2 (never negative)
+  })
+
+  it("a cost-less result still emits a cost event (so the turn count advances)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    svc.createHeadless("t", process.cwd())
+    // No total_cost_usd / no usage → the event fires with undefined money.
+    spawned[0].emitStdout(`${JSON.stringify({ type: "result", subtype: "success", is_error: false })}\n`)
+    const costs = costEvents(events)
+    expect(costs).toHaveLength(1)
+    expect(costs[0].costUsd).toBeUndefined()
+    expect(costs[0].totalTokens).toBeUndefined()
+  })
+
+  it("ORDER PIN — the cost event is emitted BEFORE the CAPP-130 queue flush writes to stdin", async () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    const proc = spawned[0]
+    // Make the foreground busy so a send ENQUEUES (rather than firing immediately).
+    proc.emitStdout(`${fx.ASSISTANT_TEXT_DELTA}\n`)
+    expect(svc.submitAgentInput(info.id, { text: "flush-me" })).toBe("queued")
+
+    // The turn completes: this emits the cost event synchronously and SCHEDULES the flush.
+    proc.emitStdout(`${resultLine(0.1, 10, 5)}\n`)
+
+    // Synchronously: the cost event has fired, but the queued message is NOT yet on stdin
+    // (the flush is deferred a microtask) — so cost precedes flush.
+    expect(costEvents(events)).toHaveLength(1)
+    expect(proc.written.join("")).not.toContain("flush-me")
+
+    // After the microtask, the flush drains the queue onto stdin.
+    await Promise.resolve()
+    expect(proc.written.join("")).toContain("flush-me")
+  })
+})
+
 describe("BO-7 — retains the init catalog (slash commands + skills) per terminal", () => {
   it("captures slash_commands + skills off the init line, exposed via getCatalog (live)", () => {
     const { svc, spawned } = makeHeadlessService()

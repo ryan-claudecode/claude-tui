@@ -46,6 +46,14 @@ export interface Terminal {
    *  worksession snapshot's `withEffectiveActivity`). Drives the sidebar `⚙ N` badge and
    *  keeps the session dot green while > 0. Undefined/0 for xterm terminals. */
   backgroundCount?: number
+  /** CAPP-129 — DURABLE per-terminal rolling cost totals (from TerminalRef; flow via the
+   *  `{...t}` spread). `costUsd` = Σ USD, `costTokens` = Σ billed tokens, `costTurns` =
+   *  turn count — across the terminal's whole conversation lineage, surviving respawns and
+   *  app restarts. The Agent Rail COST footer reads these off the ACTIVE terminal.
+   *  Undefined for xterm / until the first turn. */
+  costUsd?: number
+  costTokens?: number
+  costTurns?: number
 }
 
 export interface WorkSession {
@@ -58,6 +66,14 @@ export interface WorkSession {
    *  every worksession:updated / list() snapshot via the service's `...s` spread.
    *  WS-D filters the sidebar's SESSIONS section on it. */
   workspaceId?: string
+  /** CAPP-129 — DURABLE per-session rolling cost total: Σ across ALL the session's
+   *  terminals (including killed/closed/handed-off ones — independent counters, so history
+   *  is never lost). Rides in every worksession snapshot via the service's `...s` spread.
+   *  Drives the compact per-row cost in the sidebar and the workspace-header rollup.
+   *  Undefined until the first costed turn / for legacy sessions. */
+  costUsd?: number
+  costTokens?: number
+  costTurns?: number
 }
 
 // Normalize an unknown thrown value into a human-readable message for toasts.

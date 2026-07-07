@@ -628,6 +628,23 @@ body {
   color: var(--text-3);
   letter-spacing: 0.9px;
   text-transform: uppercase;
+  /* CAPP-129 — the caption + the durable cost rollup sit on one row (total right-aligned). */
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+/* CAPP-129 — the active workspace's durable cost rollup: subtle, always visible (no
+   hover-reveal), tabular so the digits don't jitter. Not uppercase/tracked like the caption. */
+.workspace-total {
+  font-family: var(--font-body, inherit);
+  font-weight: 500;
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  text-transform: none;
+  color: var(--text-4, var(--text-3));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .workspace-pill {
@@ -1112,6 +1129,17 @@ body {
   font-size: 11px;
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
+}
+/* CAPP-129 — the DURABLE per-session cost total, compact + right-aligned on the row.
+   Muted at rest, tabular so it doesn't jitter, statically visible (no hover-reveal);
+   shown only when the session has spend (> 0). */
+.session-cost {
+  flex: none;
+  font-size: 10px;
+  opacity: 0.65;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 /* BACKGROUND WORK — the "⚙ N" badge on a session row: background tasks still running
    after the foreground turn ended (the session dot stays green alongside it). Accent-
@@ -3870,8 +3898,9 @@ body {
   color: var(--text-3);
 }
 
-/* CAPP-125 — the honest "· this spawn" qualifier on the COST label: the number covers
-   only the current spawn (resets on respawn/interrupt), so say so, quietly. */
+/* CAPP-129 — the honest "· this terminal" qualifier on the COST label: the number is the
+   durable conversation-lineage total (surviving respawns + app restarts), scoped to the
+   active terminal (vs the per-session / per-workspace rollups). Said quietly. */
 .agent-rail-cost-scope {
   font-weight: 500;
   letter-spacing: 0.4px;

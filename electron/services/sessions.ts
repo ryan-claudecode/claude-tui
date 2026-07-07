@@ -108,6 +108,20 @@ export interface TerminalRef {
    * a normal terminal). reopenTerminal also skips it defensively.
    */
   isLogin?: boolean
+  /**
+   * CAPP-129 — the DURABLE per-terminal rolling COST total: Σ of every turn's per-turn
+   * cost across this ref's whole CONVERSATION LINEAGE. A respawn (Stop/restart/model/
+   * effort/ultracode/engine switch, `--resume`) mutates the SAME ref in place, so these
+   * accumulate ACROSS the re-point; only the runtime `ref.id` changes. Persisted (survives
+   * app restart) and additive/optional (a legacy ref loads with them undefined → treated as
+   * 0). A HANDOFF pushes a NEW ref (new conversation), which starts at zero — the SESSION
+   * total retains the retired terminal's history. `costUsd` = summed USD, `costTokens` =
+   * summed billed tokens, `costTurns` = turn-complete results counted. Surfaced to the
+   * renderer (Agent Rail COST footer) via `withEffectiveActivity`'s `...t` spread.
+   */
+  costUsd?: number
+  costTokens?: number
+  costTurns?: number
 }
 
 /**
@@ -135,6 +149,17 @@ export interface WorkSession {
    * bump is needed. Capped at ~500 entries via {@link SessionService.logEvent}.
    */
   eventLog?: SessionEvent[]
+  /**
+   * CAPP-129 — the DURABLE per-session rolling COST total: Σ across ALL of this session's
+   * terminals, INCLUDING killed/closed/handed-off ones. Kept as INDEPENDENT session-level
+   * counters (not re-derived by summing live refs) precisely so closing or killing a
+   * terminal — which drops its ref — never subtracts spent history. Persisted (survives app
+   * restart) and additive/optional (a legacy session loads with them undefined → 0). The
+   * WORKSPACE total is Σ these across a workspace's sessions, derived renderer-side.
+   */
+  costUsd?: number
+  costTokens?: number
+  costTurns?: number
   createdAt: number
   updatedAt: number
 }
@@ -265,7 +290,7 @@ export interface TerminalLike {
    *  optional pre-kill snapshot for the kill-before-spawn seam. Optional for test mocks. */
   transferAgentQueue?(oldId: string, newId: string, carried?: import("./streamProtocol").QueuedAgentInput[]): void
   getOutput(id: string, maxChars?: number): string | null
-  onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo" | "renamed" | "stream" | "background"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string; name?: string; event?: unknown }) => void): () => void
+  onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo" | "renamed" | "stream" | "background" | "cost"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string; name?: string; event?: unknown; costUsd?: number; totalTokens?: number }) => void): () => void
 }
 
 interface MainWinLike {
@@ -324,6 +349,11 @@ export class SessionService {
         // re-emit the session snapshot so the sidebar `⚙ N` badge tracks it live.
         const s = this.sessionOf(e.id)
         if (s) this.emit("worksession:updated", this.withEffectiveActivity(s))
+      }
+      else if (e.type === "cost" && e.id) {
+        // CAPP-129 — fold a turn's per-turn cost delta into the durable per-terminal +
+        // per-session rolling totals (mirrors the recordConversationId seam).
+        this.recordCost(e.id, e.costUsd, e.totalTokens)
       }
       else if (e.type === "convo" && e.id && e.ccConversationId) {
         this.recordConversationId(e.id, e.ccConversationId)
@@ -413,6 +443,40 @@ export class SessionService {
     if (!t || t.ccConversationId === ccConversationId) return
     t.ccConversationId = ccConversationId
     this.persist(s)
+  }
+
+  /**
+   * CAPP-129 — fold a turn's PER-TURN cost delta (already cumulative→delta-converted in
+   * TerminalService via the shared toPerTurnCost) into the DURABLE rolling totals, at two
+   * INDEPENDENT scopes:
+   *  - the owning terminal's REF (per-terminal / conversation-lineage total — accumulates
+   *    across every respawn re-point because the ref is mutated in place), and
+   *  - the SESSION record (its own counters — NOT re-summed from live refs, so closing or
+   *    killing a terminal never subtracts its spent history).
+   * Then persist + emit `worksession:updated` (same fold-state path every mutator uses) so
+   * the sidebar/rail reflect the new totals live and they survive an app restart.
+   *
+   * `costTurns` advances on EVERY turn-complete result (even a cost-less/error one) so the
+   * "N turns" hint stays honest. DEFENSIVE: a negative delta — which toPerTurnCost's
+   * reset-safe math never actually emits — contributes 0, so a total can only ever grow.
+   */
+  private recordCost(terminalId: string, costUsd?: number, totalTokens?: number): void {
+    const s = this.sessionOf(terminalId)
+    if (!s) return
+    const t = s.terminals.find((x) => x.id === terminalId)
+    if (!t) return
+    const addUsd = costUsd != null && costUsd > 0 ? costUsd : 0
+    const addTok = totalTokens != null && totalTokens > 0 ? totalTokens : 0
+    // Per-terminal (conversation-lineage) totals on the ref.
+    t.costTurns = (t.costTurns ?? 0) + 1
+    if (addUsd > 0) t.costUsd = (t.costUsd ?? 0) + addUsd
+    if (addTok > 0) t.costTokens = (t.costTokens ?? 0) + addTok
+    // Independent SESSION totals (history is never lost when a terminal closes/dies).
+    s.costTurns = (s.costTurns ?? 0) + 1
+    if (addUsd > 0) s.costUsd = (s.costUsd ?? 0) + addUsd
+    if (addTok > 0) s.costTokens = (s.costTokens ?? 0) + addTok
+    this.persist(s)
+    this.emit("worksession:updated", this.withEffectiveActivity(s))
   }
 
   /**

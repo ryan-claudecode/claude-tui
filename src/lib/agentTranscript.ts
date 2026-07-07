@@ -76,8 +76,9 @@ export interface ResultCost {
    * resultCostSemantics.fixtures.ts — turn2 carries turn1 + turn2), so summing it across
    * turns triangular-overcounts. {@link extractCost} still returns the RAW cumulative in
    * this field; {@link toPerTurnCost} (applied where result blocks fold — reduceTranscript
-   * + useAgentCost) converts it to the per-turn delta so the rail's {@link sumCost} is a
-   * plain, correct sum and the inline CostChip shows this turn alone.
+   * here, and the CAPP-129 main-process cost accumulator TerminalService.emitTurnCost)
+   * converts it to the per-turn delta so the inline CostChip shows this turn alone and the
+   * durable rolling totals sum correctly.
    */
   costUsd?: number
   /**
@@ -245,8 +246,9 @@ function lastAssistantText(blocks: TranscriptBlock[]): string | undefined {
 }
 
 /** Pull token / cost / duration off a `result` event's raw payload (best-effort).
- *  Exported so the Agent Rail's per-terminal cost accumulator (useAgentCost) folds
- *  the EXACT same ResultCost the transcript reducer does — no divergent token math.
+ *  Exported so every cost consumer — the transcript reducer's inline CostChip AND the
+ *  CAPP-129 main-process rolling-total accumulator — folds the EXACT same ResultCost, with
+ *  no divergent token math.
  *
  *  CAPP-125: the `costUsd` returned here is the RAW `total_cost_usd`, which is
  *  CUMULATIVE per process (see the fixtures). Callers that SUM across turns MUST first
@@ -320,7 +322,9 @@ export function toPerTurnCost(raw: ResultCost, prevCumulativeUsd: number): Resul
  * CAPP-125 — the raw cumulative cost carried by the most recent result block that
  * reported one, or 0 when none has yet. This is the `prevCumulativeUsd` baseline
  * {@link toPerTurnCost} deltas the next turn against — recovered by scanning the ordered
- * blocks so neither fold site (reduceTranscript, useAgentCost) has to thread state.
+ * blocks so the reduceTranscript fold site doesn't have to thread state. (The CAPP-129
+ * main-process accumulator threads its own per-proc baseline instead, off the same
+ * toPerTurnCost.)
  */
 export function lastCumulativeCostUsd(blocks: readonly TranscriptBlock[]): number {
   for (let i = blocks.length - 1; i >= 0; i--) {
@@ -724,7 +728,8 @@ export function reduceTranscript(state: TranscriptState, event: StreamEvent): Tr
         resultText.trim() === lastAssistant.trim()
       // CAPP-125 — `total_cost_usd` is cumulative per process, so store this turn's
       // PER-TURN delta (baselined off the last result block's raw cumulative) — the
-      // inline CostChip then shows this turn alone and the rail's sumCost sums correctly.
+      // inline CostChip then shows this turn alone (the durable rolling totals are
+      // accumulated separately in the main process, CAPP-129).
       const cost = toPerTurnCost(extractCost(event.raw), lastCumulativeCostUsd(blocks))
       const block: ResultBlock = {
         kind: "result",

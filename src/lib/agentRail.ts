@@ -6,8 +6,9 @@
  *
  * The rail itself (src/components/AgentRail.tsx) is a thin lens over EXISTING seams —
  * it owns no backend. This module holds the three decisions worth proving:
- *   1. {@link sumCost} — session-cumulative COST footer (sum the per-turn ResultCost
- *      already parsed in agentTranscript.ts across the active terminal's blocks).
+ *   1. {@link railCostFromTerminal} — the COST footer, read off the ACTIVE terminal's
+ *      DURABLE per-terminal totals (CAPP-129 SessionService ref fields) so it survives
+ *      respawns AND app restarts. (Superseded the CAPP-125 renderer-side per-spawn sum.)
  *   2. {@link deriveNow} + {@link formatElapsed} — the NOW line's action + running
  *      elapsed while busy, and a calm rest state otherwise.
  *   3. {@link effectiveRailOpen} — the open/collapsed derivation from the saved pref,
@@ -18,60 +19,44 @@
  * deliberately covers only the v1 surface.
  */
 
-import type { ResultCost, TranscriptBlock } from "./agentTranscript"
-
 // ---------------------------------------------------------------------------
-// COST — session-cumulative spend for the active terminal.
+// COST — the DURABLE per-terminal total for the active terminal (CAPP-129).
 // ---------------------------------------------------------------------------
 
-/** The summed cost surface the rail's COST footer renders. */
+/** The cost surface the rail's COST footer renders. */
 export interface RailCost {
-  /** Total USD across all result turns that reported a cost (undefined if none did). */
+  /** Total USD across the terminal's conversation lineage (undefined if none reported). */
   costUsd?: number
-  /** Total billed tokens across all result turns (undefined if none reported). */
+  /** Total billed tokens across the lineage (undefined if none reported). */
   totalTokens?: number
-  /** How many turn-complete `result` blocks contributed (the "N turns" hint). */
+  /** How many turn-complete results contributed (the "N turns" hint). */
   turns: number
 }
 
+/** The DURABLE per-terminal cost fields the rail reads (a subset of the renderer's
+ *  Terminal / the SessionService TerminalRef, flowing via `withEffectiveActivity`'s spread). */
+export interface TerminalCostFields {
+  costUsd?: number
+  costTokens?: number
+  costTurns?: number
+}
+
 /**
- * Sum the per-turn {@link ResultCost} across an active terminal's transcript blocks
- * into one spawn-cumulative figure for the rail's COST footer. Each turn-complete
- * `result` block carries THIS TURN's own cost + tokens; this folds them.
- *
- * CAPP-125 — the block's `costUsd` is the PER-TURN DELTA, not the raw
- * `result.total_cost_usd` (which is CUMULATIVE per process — live-proven in
- * resultCostSemantics.fixtures.ts). The cumulative→delta conversion happens upstream at
- * the fold ({@link toPerTurnCost} in useAgentCost / reduceTranscript), so summing here is
- * correct. Summing the RAW cumulatives instead triangular-overcounts (Σ of the running
- * totals showed ~$105 for a ~$26 spawn — the CAPP-125 bug). `totalTokens` was always
- * per-turn (built from the top-level `usage` object), so it was already summed correctly.
- *
- * Deliberate v1 limitation (design doc Q5 / risk 4): this is a RENDERER-side sum over
- * the in-memory folded blocks, so it counts only the CURRENT spawn — it resets on a
- * respawn/interrupt (the terminal mints a fresh id, useAgentCost prunes the old) and
- * misses turns scrolled out of the cache. That's accepted for a glance number — a
- * durable per-session total (a SessionService field) is a later option. The footer is
- * labeled "this spawn" so the window it measures is honest.
- *
- * Pure + tolerant: a block with no `result`/`cost`, or a cost with all-undefined
- * fields, simply contributes nothing. `costUsd`/`totalTokens` stay `undefined` (not
- * `0`) until at least one turn reports them, so the footer can show "—" rather than a
- * misleading "$0.0000" before any turn lands.
+ * CAPP-129 — map the ACTIVE terminal's DURABLE rolling cost totals (SessionService
+ * TerminalRef fields, surfaced to the renderer) into the {@link RailCost} the footer
+ * formats. This REPLACES the old renderer-side per-spawn sum ({@link sumCost}, deleted):
+ * the totals are now accumulated in the main process across every respawn re-point AND
+ * persisted, so the footer is the honest CONVERSATION-LINEAGE total — not a figure that
+ * resets on interrupt/restart. Pure + tolerant: a null/absent terminal or all-undefined
+ * fields yield `{ turns: 0 }`, so the footer shows "—" (never a misleading "$0.0000")
+ * until the first turn lands.
  */
-export function sumCost(blocks: readonly TranscriptBlock[]): RailCost {
-  let costUsd: number | undefined
-  let totalTokens: number | undefined
-  let turns = 0
-  for (const b of blocks) {
-    if (b.kind !== "result") continue
-    turns++
-    const cost: ResultCost | undefined = b.cost
-    if (!cost) continue
-    if (cost.costUsd != null) costUsd = (costUsd ?? 0) + cost.costUsd
-    if (cost.totalTokens != null) totalTokens = (totalTokens ?? 0) + cost.totalTokens
+export function railCostFromTerminal(t: TerminalCostFields | null | undefined): RailCost {
+  return {
+    costUsd: t?.costUsd,
+    totalTokens: t?.costTokens,
+    turns: t?.costTurns ?? 0,
   }
-  return { costUsd, totalTokens, turns }
 }
 
 /** Format a token count compactly: 12_400 → "12.4k", 980 → "980", 2_000_000 → "2.0M". */

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
-  sumCost,
+  railCostFromTerminal,
   formatTokens,
   formatCost,
   formatElapsed,
@@ -8,63 +8,39 @@ import {
   effectiveRailOpen,
   RAIL_WIDTH_FLOOR,
 } from "./agentRail"
-import type { TranscriptBlock } from "./agentTranscript"
 
-// Helpers to build the minimal block shapes sumCost reads.
-function resultBlock(
-  id: string,
-  cost?: { costUsd?: number; totalTokens?: number },
-): TranscriptBlock {
-  return { kind: "result", id, isError: false, cost }
-}
-function assistantBlock(id: string, text = "hi"): TranscriptBlock {
-  return { kind: "assistant", id, text }
-}
-
-describe("sumCost", () => {
-  it("empty transcript: no cost, no tokens, zero turns", () => {
-    expect(sumCost([])).toEqual({ costUsd: undefined, totalTokens: undefined, turns: 0 })
+describe("railCostFromTerminal (CAPP-129 — durable per-terminal totals → RailCost)", () => {
+  it("maps a terminal's durable ref fields onto the RailCost surface", () => {
+    expect(
+      railCostFromTerminal({ costUsd: 0.0234, costTokens: 12400, costTurns: 3 }),
+    ).toEqual({ costUsd: 0.0234, totalTokens: 12400, turns: 3 })
   })
 
-  it("ignores non-result blocks entirely", () => {
-    expect(sumCost([assistantBlock("b0"), assistantBlock("b1")])).toEqual({
+  it("a null/undefined terminal → an empty cost (turns 0, money undefined)", () => {
+    expect(railCostFromTerminal(null)).toEqual({
+      costUsd: undefined,
+      totalTokens: undefined,
+      turns: 0,
+    })
+    expect(railCostFromTerminal(undefined)).toEqual({
       costUsd: undefined,
       totalTokens: undefined,
       turns: 0,
     })
   })
 
-  it("sums costUsd + totalTokens across multiple result turns", () => {
-    const blocks = [
-      assistantBlock("b0"),
-      resultBlock("b1", { costUsd: 0.01, totalTokens: 6200 }),
-      assistantBlock("b2"),
-      resultBlock("b3", { costUsd: 0.0134, totalTokens: 6200 }),
-    ]
-    const sum = sumCost(blocks)
-    expect(sum.turns).toBe(2)
-    expect(sum.costUsd).toBeCloseTo(0.0234, 6)
-    expect(sum.totalTokens).toBe(12400)
+  it("absent cost fields stay undefined (footer shows '—', not a misleading $0) but turns defaults to 0", () => {
+    expect(railCostFromTerminal({})).toEqual({
+      costUsd: undefined,
+      totalTokens: undefined,
+      turns: 0,
+    })
   })
 
-  it("counts a result turn that reported NO cost (turns increments, money stays undefined)", () => {
-    // A turn-complete result with no cost still counts as a turn; if NO turn reports a
-    // cost, costUsd/totalTokens stay undefined (not a misleading 0).
-    const sum = sumCost([resultBlock("b0"), resultBlock("b1")])
-    expect(sum.turns).toBe(2)
-    expect(sum.costUsd).toBeUndefined()
-    expect(sum.totalTokens).toBeUndefined()
-  })
-
-  it("mixes turns where only some report cost", () => {
-    const sum = sumCost([
-      resultBlock("b0", { costUsd: 0.02 }), // no tokens
-      resultBlock("b1", { totalTokens: 500 }), // no cost
-      resultBlock("b2"), // neither
-    ])
-    expect(sum.turns).toBe(3)
-    expect(sum.costUsd).toBeCloseTo(0.02, 6)
-    expect(sum.totalTokens).toBe(500)
+  it("a terminal with turns but no money keeps turns (formatCost then shows just 'N turns')", () => {
+    const cost = railCostFromTerminal({ costTurns: 2 })
+    expect(cost).toEqual({ costUsd: undefined, totalTokens: undefined, turns: 2 })
+    expect(formatCost(cost)).toBe("2 turns")
   })
 })
 

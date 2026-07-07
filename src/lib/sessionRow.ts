@@ -8,6 +8,9 @@ export interface RowTerminal {
 export interface RowSession {
   status: string
   terminals: RowTerminal[]
+  /** CAPP-129 — the DURABLE per-session rolling cost total (USD). Undefined/0 until the
+   *  first costed turn; the row shows a compact "$X" only when > 0. */
+  costUsd?: number
 }
 
 export interface SessionRowView {
@@ -17,6 +20,9 @@ export interface SessionRowView {
   /** BACKGROUND WORK — total outstanding background tasks across the session's terminals;
    *  drives the `⚙ N` badge. 0 ⇒ no badge. */
   background: number
+  /** CAPP-129 — the durable per-session cost total (USD), passed through for the compact
+   *  right-aligned "$X" on the row. 0 ⇒ no cost text (never a misleading "$0.00"). */
+  cost: number
 }
 
 /**
@@ -43,5 +49,6 @@ export function deriveSessionRow(s: RowSession): SessionRowView {
     : busy?.lastState === "active" ? (busy.activity ?? "Working")
     : background > 0 ? "Working in background"
     : "Idle"
-  return { dot, count, activity, background }
+  const cost = s.costUsd != null && s.costUsd > 0 ? s.costUsd : 0
+  return { dot, count, activity, background, cost }
 }

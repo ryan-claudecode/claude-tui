@@ -1,5 +1,6 @@
 import { useState, useCallback, type CSSProperties } from "react"
 import { deriveSessionRow } from "../lib/sessionRow"
+import { formatCompactMoney } from "../lib/costRollup"
 import { formatWaitTime } from "../lib/attentionRow"
 import { commitRenameValue } from "../lib/renameValue"
 import type { ResumingRow } from "../lib/resumingList"
@@ -10,7 +11,7 @@ import WorkspaceSwitcher from "./WorkspaceSwitcher"
 import SchedulesList from "./SchedulesList"
 
 interface TerminalRow { id: string; name: string; lastState: string; activity?: string; backgroundCount?: number }
-interface SessionRow { id: string; name: string; status: string; terminals: TerminalRow[] }
+interface SessionRow { id: string; name: string; status: string; terminals: TerminalRow[]; costUsd?: number }
 
 interface Props {
   sessions: SessionRow[]
@@ -45,6 +46,9 @@ interface Props {
   workspaces: WorkspaceSummary[]
   activeWorkspace: WorkspaceSummary | null
   workspaceScoped: boolean
+  /** CAPP-129 — the active workspace's durable cost rollup (Σ its scoped sessions'
+   *  totals). Shown as subtle "$X total" in the workspace header, only when > 0. */
+  workspaceCostUsd: number
   onSelectAllWorkspaces: () => void
   onSelectWorkspace: (id: string) => void
   onNewWorkspace: () => void
@@ -80,7 +84,7 @@ export default function Sidebar({
   schedules, onNewSchedule, onOpenSchedule, onToggleSchedule, onRunSchedule,
   onNewSession, onKillSession, onKillSessionById, onSelectSession, onRenameSession,
   resumingRows, onFocusResuming, onStopResuming, onDismissResuming,
-  workspaces, activeWorkspace, workspaceScoped,
+  workspaces, activeWorkspace, workspaceScoped, workspaceCostUsd,
   onSelectAllWorkspaces, onSelectWorkspace, onNewWorkspace, onRenameWorkspace, onDeleteWorkspace,
   onSetWorkspaceDir, onRestoreConversation, onOpenContextInspector,
 }: Props) {
@@ -157,6 +161,7 @@ export default function Sidebar({
       <WorkspaceSwitcher
         workspaces={workspaces}
         active={activeWorkspace}
+        totalCostUsd={workspaceCostUsd}
         onSelectAll={onSelectAllWorkspaces}
         onSelectWorkspace={onSelectWorkspace}
         onNewWorkspace={onNewWorkspace}
@@ -217,7 +222,7 @@ export default function Sidebar({
           )
         )}
         {sessions.map((s, i) => {
-          const { dot, count, activity, background } = deriveSessionRow(s)
+          const { dot, count, activity, background, cost } = deriveSessionRow(s)
           const selected = activeSessionId === s.id
           return (
             <div
@@ -263,6 +268,15 @@ export default function Sidebar({
                     aria-label={`${background} background task${background === 1 ? "" : "s"} running`}
                   >
                     ⚙ {background}
+                  </span>
+                )}
+                {cost > 0 && (
+                  <span
+                    className="session-cost"
+                    title={`Total spend for this session: ${formatCompactMoney(cost)}`}
+                    aria-label={`Session cost ${formatCompactMoney(cost)}`}
+                  >
+                    {formatCompactMoney(cost)}
                   </span>
                 )}
                 <button

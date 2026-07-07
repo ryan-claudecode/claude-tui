@@ -2,12 +2,17 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import type { WorkspaceSummary } from "../hooks/useWorkspaces"
 import { colorFor } from "../lib/workspaceColors"
 import { dirBasename } from "../lib/workspaceForm"
+import { formatCompactMoney } from "../lib/costRollup"
 import { menuNav } from "../lib/menuNav"
 
 interface Props {
   workspaces: WorkspaceSummary[]
   /** The active workspace, or null for "All" mode. */
   active: WorkspaceSummary | null
+  /** CAPP-129 — the active workspace's durable cost rollup (Σ its scoped sessions'
+   *  totals; in "All" mode Σ every session). Rendered as subtle "$X total" in the
+   *  section header, ALWAYS VISIBLE (no hover-reveal), only when > 0. */
+  totalCostUsd: number
   onSelectAll: () => void
   onSelectWorkspace: (id: string) => void
   onNewWorkspace: () => void
@@ -65,6 +70,7 @@ type Option =
 export default function WorkspaceSwitcher({
   workspaces,
   active,
+  totalCostUsd,
   onSelectAll,
   onSelectWorkspace,
   onNewWorkspace,
@@ -192,7 +198,19 @@ export default function WorkspaceSwitcher({
 
   return (
     <div className="workspace-switcher" ref={rootRef}>
-      <div className="workspace-section-header">WORKSPACE</div>
+      <div className="workspace-section-header">
+        <span>WORKSPACE</span>
+        {/* CAPP-129 — the active workspace's durable cost rollup, subtle + always visible
+            (no hover-reveal), only when there's spend. In "All" mode it totals everything. */}
+        {totalCostUsd > 0 && (
+          <span
+            className="workspace-total"
+            title={`Total spend across ${isAllActive ? "all workspaces" : `the "${active!.name}" workspace`}: ${formatCompactMoney(totalCostUsd)}`}
+          >
+            {formatCompactMoney(totalCostUsd)} total
+          </span>
+        )}
+      </div>
 
       {/* The selector: pill + its dropdown, in a relative wrapper so the menu
           anchors below the PILL (not the whole workspace area). */}

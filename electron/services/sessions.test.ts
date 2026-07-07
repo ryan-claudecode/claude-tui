@@ -584,6 +584,151 @@ describe("SessionService convo recording", () => {
   })
 })
 
+// CAPP-129 — durable rolling COST totals. TerminalService computes the per-turn delta
+// (the CAPP-125 cumulative→delta conversion — tested at the terminals level in
+// terminalsHeadless.test.ts) and emits a `cost` onEvent; SessionService folds it into the
+// durable per-terminal + per-session totals here. These tests drive the fold with known
+// per-turn deltas via `term.emit({ type: "cost", ... })`.
+describe("SessionService cost accumulation (CAPP-129)", () => {
+  // Register a headless terminal into a fresh session and return the handles.
+  function withHeadless(now = () => 1000) {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id, undefined, undefined, "opus")
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured", model: "opus" })
+    return { term, svc, s, head }
+  }
+
+  it("accumulates per-turn deltas onto BOTH the terminal ref and the session (not cumulatives)", () => {
+    const { term, svc, s, head } = withHeadless()
+    // Two turns' PER-TURN deltas (already delta-converted upstream).
+    term.emit({ type: "cost", id: head.id, costUsd: 0.013738, totalTokens: 6200 })
+    term.emit({ type: "cost", id: head.id, costUsd: 0.0126501, totalTokens: 6300 })
+
+    const ref = svc.get(s.id)!.terminals.find((t) => t.id === head.id)!
+    expect(ref.costUsd).toBeCloseTo(0.0263881, 9) // Σ deltas, NOT the triangular cumulative sum
+    expect(ref.costTokens).toBe(12500)
+    expect(ref.costTurns).toBe(2)
+    // Session totals mirror (single terminal).
+    const sess = svc.get(s.id)!
+    expect(sess.costUsd).toBeCloseTo(0.0263881, 9)
+    expect(sess.costTokens).toBe(12500)
+    expect(sess.costTurns).toBe(2)
+  })
+
+  it("a cost-less/error turn advances the turn count without changing money", () => {
+    const { term, svc, s, head } = withHeadless()
+    term.emit({ type: "cost", id: head.id, costUsd: 0.02, totalTokens: 500 })
+    term.emit({ type: "cost", id: head.id }) // no cost/tokens (an errored turn)
+    const ref = svc.get(s.id)!.terminals.find((t) => t.id === head.id)!
+    expect(ref.costUsd).toBeCloseTo(0.02, 9)
+    expect(ref.costTokens).toBe(500)
+    expect(ref.costTurns).toBe(2)
+  })
+
+  it("a (defensive) negative delta contributes 0 — a total never shrinks", () => {
+    const { term, svc, s, head } = withHeadless()
+    term.emit({ type: "cost", id: head.id, costUsd: 0.05, totalTokens: 1000 })
+    term.emit({ type: "cost", id: head.id, costUsd: -0.9, totalTokens: -50 })
+    const ref = svc.get(s.id)!.terminals.find((t) => t.id === head.id)!
+    expect(ref.costUsd).toBeCloseTo(0.05, 9) // unchanged by the negative
+    expect(ref.costTokens).toBe(1000)
+    expect(ref.costTurns).toBe(2) // turn still counted
+  })
+
+  it("the per-terminal total KEEPS ACCUMULATING across a respawn re-point (same ref, new id)", () => {
+    const { term, svc, s, head } = withHeadless()
+    term.emit({ type: "convo", id: head.id, ccConversationId: "conv-keep" })
+    term.emit({ type: "cost", id: head.id, costUsd: 0.01, totalTokens: 100 })
+
+    // Respawn (a model switch) mutates the SAME ref in place → new runtime id.
+    const r = svc.setTerminalModel(s.id, head.id, "sonnet")!
+    const newId = r.terminalId
+    expect(newId).not.toBe(head.id)
+
+    // A turn on the resumed proc accumulates onto the SAME ref (its per-terminal total grows).
+    term.emit({ type: "cost", id: newId, costUsd: 0.02, totalTokens: 200 })
+    const ref = svc.get(s.id)!.terminals.find((t) => t.id === newId)!
+    expect(ref.costUsd).toBeCloseTo(0.03, 9) // 0.01 (pre-respawn) + 0.02 (post-respawn)
+    expect(ref.costTokens).toBe(300)
+    expect(ref.costTurns).toBe(2)
+  })
+
+  it("the SESSION total survives closing a terminal (history is never subtracted)", () => {
+    const { term, svc, s, head } = withHeadless()
+    term.emit({ type: "cost", id: head.id, costUsd: 0.04, totalTokens: 800 })
+    expect(svc.get(s.id)!.costUsd).toBeCloseTo(0.04, 9)
+
+    svc.closeTerminal(s.id, head.id)
+    const sess = svc.get(s.id)!
+    expect(sess.terminals.find((t) => t.id === head.id)).toBeUndefined() // ref dropped
+    expect(sess.costUsd).toBeCloseTo(0.04, 9) // but the session total is retained
+    expect(sess.costTokens).toBe(800)
+    expect(sess.costTurns).toBe(1)
+  })
+
+  it("a HANDOFF zeroes the new ref's per-terminal cost but the SESSION total is retained", () => {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id)
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured" })
+    term.emit({ type: "cost", id: head.id, costUsd: 0.03, totalTokens: 600 })
+
+    // Handoff pushes a NEW ref (new conversation lineage).
+    const r = svc.handoffTerminal(s.id, head.id)!
+    const newRef = svc.get(s.id)!.terminals.find((t) => t.id === r.terminalId)!
+    // The new ref starts at zero per-terminal cost (a fresh conversation).
+    expect(newRef.costUsd).toBeUndefined()
+    expect(newRef.costTurns).toBeUndefined()
+    // The SESSION total retains the retired terminal's history.
+    expect(svc.get(s.id)!.costUsd).toBeCloseTo(0.03, 9)
+    expect(svc.get(s.id)!.costTurns).toBe(1)
+
+    // A turn on the new ref adds to its own (fresh) per-terminal total AND the session.
+    term.emit({ type: "cost", id: r.terminalId, costUsd: 0.005, totalTokens: 50 })
+    expect(svc.get(s.id)!.terminals.find((t) => t.id === r.terminalId)!.costUsd).toBeCloseTo(0.005, 9)
+    expect(svc.get(s.id)!.costUsd).toBeCloseTo(0.035, 9)
+  })
+
+  it("persists the ref + session cost fields and reloads them (round-trip; legacy tolerant)", () => {
+    const { term, svc, s, head } = withHeadless()
+    term.emit({ type: "cost", id: head.id, costUsd: 0.0263881, totalTokens: 12500 })
+
+    // A fresh service loads the persisted JSON.
+    const svc2 = new SessionService({ dir, now: () => 2000 })
+    svc2.load()
+    const loaded = svc2.get(s.id)!
+    expect(loaded.costUsd).toBeCloseTo(0.0263881, 9)
+    expect(loaded.costTokens).toBe(12500)
+    expect(loaded.costTurns).toBe(1)
+    const ref = loaded.terminals.find((t) => t.id === head.id)!
+    expect(ref.costUsd).toBeCloseTo(0.0263881, 9)
+    expect(ref.costTokens).toBe(12500)
+    expect(ref.costTurns).toBe(1)
+  })
+
+  it("a legacy session JSON with NO cost fields loads cleanly (undefined, no migration)", () => {
+    const legacy = {
+      id: "legacy-cost",
+      name: "Old",
+      status: "active",
+      terminals: [{ id: "t1", name: "x", cwd: "/r", lastState: "idle" }],
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    writeFileSync(join(dir, "legacy-cost.json"), JSON.stringify(legacy, null, 2))
+    const svc = new SessionService({ dir, now: () => 2 })
+    svc.load()
+    const loaded = svc.get("legacy-cost")!
+    expect(loaded.costUsd).toBeUndefined()
+    expect(loaded.terminals[0].costUsd).toBeUndefined()
+  })
+})
+
 // CAPP-113 — the resolved-model echo: the headless `init` stream event reports the
 // RESOLVED full model id; SessionService records it onto the terminal ref (the
 // picker's tooltip). Mirrors the convo-recording seam above (same onEvent stream).

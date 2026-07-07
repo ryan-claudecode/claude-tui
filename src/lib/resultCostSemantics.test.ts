@@ -7,7 +7,6 @@ import {
   type ResultCost,
   type TranscriptBlock,
 } from "./agentTranscript"
-import { sumCost } from "./agentRail"
 import type { StreamEvent } from "../../electron/services/streamProtocol"
 import {
   P1_TURN1_RESULT_RAW,
@@ -16,13 +15,35 @@ import {
 } from "./resultCostSemantics.fixtures"
 
 /**
- * CAPP-125 — proves the rail COST footer no longer triangular-overcounts, driven by the
- * LIVE-captured wire semantics (resultCostSemantics.fixtures.ts):
+ * CAPP-125 — proves the cumulative→delta fold no longer triangular-overcounts, driven by
+ * the LIVE-captured wire semantics (resultCostSemantics.fixtures.ts):
  *   • `result.total_cost_usd` is CUMULATIVE per process,
  *   • the top-level `usage` object is PER-TURN,
  *   • `--resume` in a fresh process RESETS the cumulative counter.
- * The fold (toPerTurnCost) converts cost cumulative→delta so sumCost sums correctly.
+ * The fold (toPerTurnCost) converts cost cumulative→delta so the PER-TURN deltas sum to the
+ * true total. (CAPP-129 retired the renderer-side `sumCost`; the durable rolling totals are
+ * now accumulated in the main process from these same per-turn deltas. This test asserts the
+ * fold semantics via a local reduce over the folded blocks, so the CAPP-125 pin is intact.)
  */
+
+/** The per-turn-delta sum a consumer folds off the transcript blocks — the exact reduction
+ *  both the (deleted) rail `sumCost` and the main-process CAPP-129 accumulator perform. */
+function sumResultDeltas(blocks: readonly TranscriptBlock[]): {
+  costUsd?: number
+  totalTokens?: number
+  turns: number
+} {
+  let costUsd: number | undefined
+  let totalTokens: number | undefined
+  let turns = 0
+  for (const b of blocks) {
+    if (b.kind !== "result") continue
+    turns++
+    if (b.cost?.costUsd != null) costUsd = (costUsd ?? 0) + b.cost.costUsd
+    if (b.cost?.totalTokens != null) totalTokens = (totalTokens ?? 0) + b.cost.totalTokens
+  }
+  return { costUsd, totalTokens, turns }
+}
 
 // Build the `result` StreamEvent the transport hands the reducer (raw = the payload).
 function resultEvent(raw: Record<string, unknown>): StreamEvent {
@@ -169,7 +190,7 @@ describe("lastCumulativeCostUsd — the prev baseline recovered from ordered blo
   })
 })
 
-describe("foldTranscript + sumCost — the end-to-end rail COST footer (no overcount)", () => {
+describe("foldTranscript + per-turn-delta sum — the end-to-end cost total (no overcount)", () => {
   it("two turns in one process: the footer shows the true spawn total, not the triangular sum", () => {
     const blocks = foldTranscript([resultEvent(P1_TURN1_RESULT_RAW), resultEvent(P1_TURN2_RESULT_RAW)])
     const results = blocks.filter((b) => b.kind === "result")
@@ -180,7 +201,7 @@ describe("foldTranscript + sumCost — the end-to-end rail COST footer (no overc
     expect((results[1] as { cost?: ResultCost }).cost?.costUsd).toBeCloseTo(TURN2_DELTA, 9)
 
     // The rail sum equals the LAST cumulative (the true spawn spend) — 0.0263881.
-    const sum = sumCost(blocks)
+    const sum = sumResultDeltas(blocks)
     expect(sum.turns).toBe(2)
     expect(sum.costUsd).toBeCloseTo(TURN2_CUMULATIVE, 9)
 
@@ -192,7 +213,7 @@ describe("foldTranscript + sumCost — the end-to-end rail COST footer (no overc
 
   it("tokens (per-turn) are summed across both turns (unchanged, already correct)", () => {
     const blocks = foldTranscript([resultEvent(P1_TURN1_RESULT_RAW), resultEvent(P1_TURN2_RESULT_RAW)])
-    const sum = sumCost(blocks)
+    const sum = sumResultDeltas(blocks)
     const t1 = 10 + 458 + 4461 + 25160
     const t2 = 10 + 106 + 4574 + 29621
     expect(sum.totalTokens).toBe(t1 + t2)
@@ -206,7 +227,7 @@ describe("foldTranscript + sumCost — the end-to-end rail COST footer (no overc
       resultEvent(P1_TURN2_RESULT_RAW),
       resultEvent(P2_RESUME_RESULT_RAW),
     ])
-    const sum = sumCost(blocks)
+    const sum = sumResultDeltas(blocks)
     expect(sum.turns).toBe(3)
     expect(sum.costUsd).toBeCloseTo(TURN2_CUMULATIVE + RESUME_COST, 9)
     // The reset turn contributed its own cost, not a negative — so the total is > process1's.
@@ -222,7 +243,7 @@ describe("foldTranscript + sumCost — the end-to-end rail COST footer (no overc
     for (let i = 1; i <= 8; i++) {
       events.push(resultEvent({ subtype: "success", is_error: false, total_cost_usd: perTurn * i }))
     }
-    const sum = sumCost(foldTranscript(events))
+    const sum = sumResultDeltas(foldTranscript(events))
     expect(sum.turns).toBe(8)
     expect(sum.costUsd).toBeCloseTo(perTurn * 8, 6) // $23.20 — the true total
 
