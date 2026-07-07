@@ -569,6 +569,19 @@ interface HeadlessTerminal {
    */
   permissionPending?: boolean
   /**
+   * CAPP-131 — the LAST foreground state pushed to the RENDERER on the
+   * `terminal:state` channel ({@link emitForegroundState}), so that emit can be
+   * deduped and, crucially, kept FOREGROUND-ONLY. The renderer's
+   * `useGeneratingTerminals` gates the composer Send off this channel, so it must
+   * track the foreground turn ONLY — never the background-work hold that keeps the
+   * EFFECTIVE machine ({@link state}) active. Deduping on THIS field (not
+   * {@link state}) is what lets a foreground turn re-emit "active" to the renderer
+   * even while a background task already holds `state` active (the latent
+   * Send-gating bug). Seeded "idle" on spawn to match the terminal's spawn state
+   * (createHeadless returns `state:"idle"`), so the renderer's initial view agrees.
+   */
+  fgEmitted?: "active" | "idle"
+  /**
    * BACKGROUND WORK — true while the FOREGROUND turn is generating (set on any activity
    * event, cleared on `result`). Separated from {@link backgroundTasks} so the effective
    * state is a clean OR: the terminal is "active" (green) while EITHER the foreground turn
@@ -1532,6 +1545,10 @@ export class TerminalService {
       // terminal pinned "active" (pulsing green) forever. Park it idle on spawn;
       // the first message flips it active via the normal idle→active edge.
       state: "idle",
+      // CAPP-131 — the renderer's initial view of a freshly-spawned structured
+      // terminal is "idle" (the returned info carries state:"idle"), so seed the
+      // foreground-emit dedupe to match; the first foreground activity emits "active".
+      fgEmitted: "idle",
       lastActivity: Date.now(),
       activeSince: undefined,
     }
@@ -1671,7 +1688,13 @@ export class TerminalService {
       .trim()
     if (text) this.emitEvent({ type: "stream", id, event: { kind: "user_message", text } })
     // A new user message starts a new turn — flip the structured terminal active
-    // (parity with the PTY path's markActive on input).
+    // (parity with the PTY path's markActive on input). CAPP-131: mark the FOREGROUND
+    // live from the moment we write to stdin (not just on the first assistant delta).
+    // This closes the pre-first-delta hole where `foregroundActive` stayed false, so a
+    // background task starting between send and first-delta could mask the foreground
+    // turn; it also means markActiveHeadless re-emits foreground "active" to the
+    // renderer even when a background hold already has the effective state active.
+    entry.foregroundActive = true
     this.markActiveHeadless(entry)
     return true
   }
@@ -1812,22 +1835,52 @@ export class TerminalService {
         // the `finished`/`asked` transition, so the "needs you?" signal fires when the
         // WHOLE thing is actually done, not at the foreground turn's end.
         entry.foregroundActive = false
+        // CAPP-131 — the FOREGROUND turn is done: tell the renderer idle NOW so the
+        // composer Send re-enables immediately, EVEN IF a background task still holds
+        // the effective state active. (This was THE bug: `result` during background
+        // work left the terminal in the renderer's generating set, so Send stayed
+        // disabled though stdin was writable and the foreground was idle.) The
+        // effective machine + AttentionService are handled by reconcileHeadless below
+        // (which, holding active for background, deliberately does NOT re-emit here).
+        this.emitForegroundState(entry, "idle")
         this.reconcileHeadless(entry)
         break
       // needs_auth/unknown/user_message carry no activity signal.
     }
   }
 
+  /**
+   * CAPP-131 — the FOREGROUND-ONLY renderer `terminal:state` emit for a structured
+   * terminal. The renderer's `useGeneratingTerminals` gates the composer Send off this
+   * channel, so it must follow the FOREGROUND turn only — never the background-work hold
+   * that keeps the EFFECTIVE machine ({@link HeadlessTerminal.state}) active. Deduped on
+   * {@link HeadlessTerminal.fgEmitted} (NOT `state`): that both suppresses redundant
+   * pushes AND lets a foreground turn emit "active" while a background task already holds
+   * `state` active (the latent bug — there'd be no idle→active edge to fire on otherwise).
+   * The effective machine + AttentionService ride the separate `emitEvent({type:"state"})`
+   * bus, which is unchanged. The PTY path keeps its own raw sendToRenderer.
+   */
+  private emitForegroundState(entry: HeadlessTerminal, state: "active" | "idle"): void {
+    if (entry.fgEmitted === state) return
+    entry.fgEmitted = state
+    this.sendToRenderer("terminal:state", entry.id, state)
+  }
+
   /** Flip a structured terminal active on new activity; emits state only on the
    *  idle→active edge (mirrors the PTY `markActive`). Real activity also cancels any
-   *  pending background settle (a woken follow-up turn keeps the session green). */
+   *  pending background settle (a woken follow-up turn keeps the session green).
+   *  CAPP-131 — every caller (sendAgentMessage, the activity cases of
+   *  onStructuredEvent, resolvePermission) is genuine FOREGROUND activity, so the
+   *  renderer emit here is the foreground-only push; it sits OUTSIDE the idle→active
+   *  guard so a foreground turn resuming under a background hold (state already active)
+   *  still tells the renderer "active". */
   private markActiveHeadless(entry: HeadlessTerminal): void {
     entry.lastActivity = Date.now()
     entry.bgSettleAt = undefined
+    this.emitForegroundState(entry, "active")
     if (entry.state === "idle") {
       entry.state = "active"
       entry.activeSince = entry.lastActivity
-      this.sendToRenderer("terminal:state", entry.id, "active")
       this.emitEvent({ type: "state", id: entry.id, state: "active" })
     }
   }
@@ -1847,7 +1900,13 @@ export class TerminalService {
       if (entry.state === "idle") {
         entry.state = "active"
         entry.activeSince = entry.activeSince ?? Date.now()
-        this.sendToRenderer("terminal:state", entry.id, "active")
+        // CAPP-131 — NO renderer emit here: this active edge is BACKGROUND-ONLY (a
+        // background task started while the foreground was idle; a foreground turn
+        // takes the markActiveHeadless path instead). The renderer's Send-gating
+        // generating set must track the FOREGROUND turn only — the sidebar/TabBar
+        // green dot is driven independently off the effective machine (this emitEvent
+        // → lastState) and the backgroundCount badge. Emitting "active" to the
+        // renderer here is exactly what wedged Send off during background-only work.
         this.emitEvent({ type: "state", id: entry.id, state: "active" })
       }
     } else {
@@ -1899,7 +1958,13 @@ export class TerminalService {
     const promptDetected = entry.permissionPending === true
     entry.permissionPending = false
     entry.activeSince = undefined
-    this.sendToRenderer("terminal:state", entry.id, "idle")
+    // CAPP-131 — foreground-only renderer emit (deduped). On the whole-work idle edge
+    // (foreground result already emitted idle, then a background drain settles here)
+    // this is a no-op push; on the permission-park edge (markAwaitingPermission →
+    // idleHeadless while fgEmitted="active") it's the LIVE emit that hands the composer
+    // busy-ownership to the pending-permission queue, exactly as before. The effective
+    // machine + AttentionService ride the unchanged emitEvent bus below.
+    this.emitForegroundState(entry, "idle")
     this.emitEvent({ type: "state", id: entry.id, state: "idle", burstMs, promptDetected })
   }
 
@@ -2110,7 +2175,11 @@ export class TerminalService {
    * the state machine.
    */
   private signalAsked(entry: HeadlessTerminal): void {
-    this.sendToRenderer("terminal:state", entry.id, "idle")
+    // CAPP-131 — foreground-only renderer emit (deduped). A permission requested while
+    // the terminal is already idle: fgEmitted is already "idle", so this is a no-op
+    // push to the renderer (the composer hands busy-ownership to the pending-permission
+    // queue regardless); the emitEvent below still raises the tier-2 "asked".
+    this.emitForegroundState(entry, "idle")
     this.emitEvent({ type: "state", id: entry.id, state: "idle", burstMs: 0, promptDetected: true })
   }
 

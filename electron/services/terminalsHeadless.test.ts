@@ -1812,3 +1812,169 @@ describe("BACKGROUND WORK — hold green past `result` while a background task r
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// CAPP-131 — the renderer `terminal:state` emit is FOREGROUND-ONLY.
+//
+// The background-work green-state feature (fe612fc) made `entry.state` mean
+// "foreground turn OR background task outstanding". The renderer's
+// useGeneratingTerminals gates the composer Send off the `terminal:state` channel,
+// so following the EFFECTIVE machine there wedged Send off during background-only
+// work even though the foreground was idle and stdin was writable. The fix SPLITS
+// the signal: the renderer `terminal:state` emit is foreground-only (deduped on
+// fgEmitted), while the effective machine keeps riding the separate
+// emitEvent({type:"state"}) bus → SessionService.lastState (sidebar/TabBar green
+// dot) + AttentionService. These tests pin the split: `sent` (attachFakeWin) is the
+// RENDERER channel; `events` (collect) is the effective-machine bus.
+// ---------------------------------------------------------------------------
+describe("CAPP-131 — renderer terminal:state is FOREGROUND-ONLY (composer Send-gating)", () => {
+  const bgStart = (id: string) =>
+    JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tu",
+            content: `Command running in background with ID: ${id}. Output is being written to: C:\\x`,
+          },
+        ],
+      },
+    }) + "\n"
+  const notif = (id: string) =>
+    JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: `<task-notification> <task-id>${id}</task-id> </task-notification>` }],
+      },
+    }) + "\n"
+  // The RENDERER channel (window.webContents.send). args = [id, state].
+  const rendererStates = (sent: Array<{ channel: string; args: unknown[] }>, id: string) =>
+    sent.filter((s) => s.channel === "terminal:state" && s.args[0] === id).map((s) => s.args[1] as string)
+  // The EFFECTIVE-machine bus (onEvent {type:"state"}). Drives lastState + attention.
+  const busStates = (events: TerminalEvent[], id: string) =>
+    events.filter((e) => e.type === "state" && e.id === id).map((e) => (e as { state: string }).state)
+
+  it("a: foreground `result` with a background task running emits renderer 'idle' (Send re-enabled), holds the effective machine active, and fires NO attention idle", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const sent = attachFakeWin(svc)
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    svc.sendAgentMessage(info.id, userMessage("go")) // foreground turn starts
+    spawned[0].emitStdout(bgStart("bg1")) // a background task launches (still mid-turn)
+    spawned[0].emitStdout(`${fx.RESULT}\n`) // foreground turn ends; bg still running
+
+    // Renderer (Send-gating): active on send, idle on the foreground result → Send re-enabled.
+    expect(rendererStates(sent, info.id)).toEqual(["active", "idle"])
+    // Effective machine (sidebar/TabBar green dot via lastState) STAYS active — held by bg.
+    expect(busStates(events, info.id)).toEqual(["active"])
+    expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("active")
+    expect(svc.backgroundCount(info.id)).toBe(1)
+    // Attention must NOT fire early: no idle on the effective bus while bg is outstanding.
+    expect(events.some((e) => e.type === "state" && e.id === info.id && (e as { state: string }).state === "idle")).toBe(false)
+  })
+
+  it("b: a foreground generating turn emits renderer 'active' (busy) — the busy path is unchanged", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const sent = attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    svc.sendAgentMessage(info.id, userMessage("go"))
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`) // still generating
+    // One 'active' push (the second activity is deduped on fgEmitted).
+    expect(rendererStates(sent, info.id)).toEqual(["active"])
+    expect(svc.isBusy(info.id)).toBe(true)
+  })
+
+  it("c: a permission park emits renderer 'idle' AND an effective-bus idle carrying promptDetected (attention classifies 'asked')", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const sent = attachFakeWin(svc)
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    svc.sendAgentMessage(info.id, userMessage("go"))
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`) // mid-turn active
+    svc.markAwaitingPermission(info.id) // parks on a permission prompt
+
+    // Renderer: active (turn) → idle (park); the composer hands busy-ownership to the
+    // pending-permission queue on this idle (unchanged behavior).
+    expect(rendererStates(sent, info.id)).toEqual(["active", "idle"])
+    // Effective bus: the idle carries promptDetected so it classifies 'asked', not 'finished'.
+    const idle = events.find(
+      (e) => e.type === "state" && e.id === info.id && (e as { state: string }).state === "idle",
+    ) as Extract<TerminalEvent, { type: "state" }> | undefined
+    expect(idle).toBeDefined()
+    expect(idle!.promptDetected).toBe(true)
+  })
+
+  it("d: THE LATENT BUG — a foreground send while a background task holds the effective state active STILL re-emits renderer 'active'", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const sent = attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    // Turn 1: launch a background task, then the foreground result parks the renderer idle
+    // while the effective machine stays active (held by the bg task).
+    svc.sendAgentMessage(info.id, userMessage("go"))
+    spawned[0].emitStdout(bgStart("bg1"))
+    spawned[0].emitStdout(`${fx.RESULT}\n`)
+    expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("active") // effective held active
+    expect(rendererStates(sent, info.id)).toEqual(["active", "idle"]) // renderer idle → Send enabled
+
+    // Turn 2: send again WHILE the bg task still holds the effective state active. The OLD
+    // code skipped the renderer 'active' (it deduped on entry.state, which never had an
+    // idle→active edge here), leaving Send disabled. Deduping on fgEmitted re-emits 'active'.
+    svc.sendAgentMessage(info.id, userMessage("more"))
+    expect(rendererStates(sent, info.id)).toEqual(["active", "idle", "active"])
+    expect(svc.isBusy(info.id)).toBe(true)
+  })
+
+  it("e: after a background drain settles, the effective machine idles ONCE and the renderer idle is deduped (no duplicate push)", () => {
+    vi.useFakeTimers()
+    try {
+      const { svc, spawned } = makeHeadlessService()
+      const sent = attachFakeWin(svc)
+      const events = collect(svc)
+      ;(svc as unknown as { startIdleMonitor: () => void }).startIdleMonitor()
+      const info = svc.createHeadless("t", process.cwd())
+      svc.sendAgentMessage(info.id, userMessage("go"))
+      spawned[0].emitStdout(bgStart("bg1"))
+      spawned[0].emitStdout(`${fx.RESULT}\n`) // renderer idle; effective held active
+      spawned[0].emitStdout(notif("bg1")) // bg done → settling
+      vi.advanceTimersByTime(3000) // settle grace elapses → effective idle
+
+      // Effective machine: exactly one active then one idle (the whole-work idle edge).
+      expect(busStates(events, info.id)).toEqual(["active", "idle"])
+      // Renderer: 'idle' pushed ONCE (at the foreground result); the settle idle is deduped.
+      expect(rendererStates(sent, info.id)).toEqual(["active", "idle"])
+      expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("idle")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("f: a pure background_task_started while the terminal is idle greens the effective machine but emits NO renderer 'active'", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const sent = attachFakeWin(svc)
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    // Drive one complete foreground turn so the terminal is genuinely idle (renderer + effective).
+    svc.sendAgentMessage(info.id, userMessage("go"))
+    spawned[0].emitStdout(`${fx.RESULT}\n`)
+    expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("idle")
+    expect(rendererStates(sent, info.id)).toEqual(["active", "idle"])
+
+    // A PURE background-task start — the reconcile defensive edge, with no accompanying
+    // foreground tool_result (a real bgStart line carries a tool_result, which IS foreground
+    // activity; here we isolate the background-only edge). It must re-green the EFFECTIVE
+    // machine (sidebar dot via lastState) but must NOT push 'active' to the renderer's
+    // Send-gating channel.
+    const entry = (svc as unknown as { headless: Map<string, unknown> }).headless.get(info.id)
+    ;(svc as unknown as { addBackgroundTask: (e: unknown, id: string) => void }).addBackgroundTask(entry, "bg1")
+
+    expect(svc.getActivity().find((x) => x.id === info.id)!.state).toBe("active") // effective green
+    expect(svc.backgroundCount(info.id)).toBe(1)
+    // The effective bus DID emit active (drives lastState → the green dot)…
+    expect(busStates(events, info.id)).toEqual(["active", "idle", "active"])
+    // …but the renderer's Send-gating channel did NOT get a new 'active'.
+    expect(rendererStates(sent, info.id)).toEqual(["active", "idle"])
+  })
+})
