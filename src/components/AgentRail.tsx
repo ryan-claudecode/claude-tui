@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react"
 import { formatCost, deriveNow, formatElapsed, type RailCost } from "../lib/agentRail"
+import {
+  shouldPinToNewest,
+  outputGlyph,
+  outputRowAction,
+  formatOutputTime,
+} from "../lib/agentRailOutputs"
+import type { RailOutput } from "../../electron/services/streamProtocol"
 
 interface Props {
   /** Effective open/collapsed (from useAgentRail → effectiveRailOpen). Open = full
@@ -23,6 +30,14 @@ interface Props {
    *  lineage, surviving respawns + app restarts). Derived in App.tsx from the active
    *  terminal ref via `railCostFromTerminal`. */
   cost: RailCost
+  /** CAPP-132 — the ACTIVE SESSION's durable OUTPUTS feed (all its terminals),
+   *  chronological FIFO. Unlike NOW/COST (active-terminal-scoped) this is session-scoped.
+   *  The section is ABSENT when empty. */
+  outputs: RailOutput[]
+  /** CAPP-132 — remove one output entry (the row ✕). */
+  onRemoveOutput: (outputId: string) => void
+  /** CAPP-132 — clear the whole OUTPUTS feed (the section header Clear button). */
+  onClearOutputs: () => void
 }
 
 /**
@@ -48,6 +63,9 @@ export default function AgentRail({
   busy,
   activity,
   cost,
+  outputs,
+  onRemoveOutput,
+  onClearOutputs,
 }: Props) {
   const now = deriveNow({ hasTerminal, busy, activity })
   const costLabel = formatCost(cost)
@@ -96,9 +114,9 @@ export default function AgentRail({
     )
   }
 
-  // The resting "All quiet" copy shows only when EVERY surface is empty — NOW idle
-  // and no cost yet.
-  const empty = now.state === "idle" && costLabel == null
+  // The resting "All quiet" copy shows only when EVERY surface is empty — NOW idle,
+  // no cost yet, AND no outputs in the session's feed.
+  const empty = now.state === "idle" && costLabel == null && outputs.length === 0
 
   return (
     <aside className="agent-rail" aria-label="Agent Rail">
@@ -142,6 +160,18 @@ export default function AgentRail({
           )}
         </section>
 
+        {/* OUTPUTS (CAPP-132) — the SESSION's durable FIFO feed of deliverables (links,
+            files, notes), chronological (oldest top → newest bottom). Absent when empty;
+            no arrival animation (stable ids as keys, monotonic list). Sits between NOW and
+            COST. See docs/roadmap/rail-outputs-feed-design.md §6. */}
+        {outputs.length > 0 && (
+          <OutputsSection
+            outputs={outputs}
+            onRemove={onRemoveOutput}
+            onClear={onClearOutputs}
+          />
+        )}
+
         {/* ── LATER-PHASE SEAMS (docs/roadmap/agent-rail-design.md §3) ──────────────
             Phase 4 — AWAITING (tier-2/3 only): tier-tinted dismissable rows scoped
               to the active terminal (tier-1 filtered out), with an inline mini-
@@ -178,5 +208,131 @@ export default function AgentRail({
         </div>
       </div>
     </aside>
+  )
+}
+
+/**
+ * CAPP-132 — the OUTPUTS section: a header (label + count + always-visible Clear) and a
+ * scrollable, chronological FIFO list (oldest top → newest bottom) with a max-height so
+ * COST stays pinned. Autoscroll follows the newest entry ONLY while the user is pinned to
+ * the bottom (a scroll-up de-arms it — pure {@link shouldPinToNewest} decision). No
+ * hover-reveal (every control is always visible); no arrival animation (stable ids as keys).
+ */
+function OutputsSection({
+  outputs,
+  onRemove,
+  onClear,
+}: {
+  outputs: RailOutput[]
+  onRemove: (id: string) => void
+  onClear: () => void
+}) {
+  const listRef = useRef<HTMLDivElement>(null)
+  const pinnedRef = useRef(true)
+
+  // Follow the newest entry while pinned to the bottom; leave the viewport alone if the
+  // user scrolled up to read history. Re-runs when the list grows (or an entry is removed).
+  useEffect(() => {
+    const el = listRef.current
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
+  }, [outputs.length])
+
+  const onScroll = () => {
+    const el = listRef.current
+    if (!el) return
+    pinnedRef.current = shouldPinToNewest({
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    })
+  }
+
+  return (
+    <section className="agent-rail-section agent-rail-outputs">
+      <div className="agent-rail-outputs-head">
+        <span className="agent-rail-section-label">
+          OUTPUTS <span className="agent-rail-outputs-count">{outputs.length}</span>
+        </span>
+        <button
+          type="button"
+          className="agent-rail-outputs-clear"
+          onClick={onClear}
+          title="Clear all outputs"
+        >
+          Clear
+        </button>
+      </div>
+      <div className="agent-rail-outputs-list" ref={listRef} onScroll={onScroll}>
+        {outputs.map((o) => (
+          <OutputRow key={o.id} output={o} onRemove={() => onRemove(o.id)} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+/** One OUTPUTS row: kind glyph + title + compact time, an always-visible primary action
+ *  (link → open externally; file → reveal in the OS file manager; note → inline expand),
+ *  and an always-visible ✕ remove. No hover-reveal. */
+function OutputRow({ output, onRemove }: { output: RailOutput; onRemove: () => void }) {
+  const [expanded, setExpanded] = useState(false)
+  const action = outputRowAction(output)
+
+  const runAction = () => {
+    if (output.kind === "link" && output.url) void window.api.openExternalUrl(output.url)
+    else if (output.kind === "file" && output.path) void window.api.revealPath(output.path)
+  }
+
+  return (
+    <div className={`agent-rail-output kind-${output.kind}`}>
+      <div className="agent-rail-output-main">
+        <span className="agent-rail-output-glyph" aria-hidden="true">
+          {outputGlyph(output.kind)}
+        </span>
+        <span className="agent-rail-output-title" title={output.url ?? output.path ?? output.title}>
+          {output.title}
+        </span>
+        <span className="agent-rail-output-time" aria-hidden="true">
+          {formatOutputTime(output.ts)}
+        </span>
+      </div>
+      <div className="agent-rail-output-actions">
+        {output.kind === "note" ? (
+          <button
+            type="button"
+            className="agent-rail-output-action"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            title={expanded ? "Collapse note" : "Expand note"}
+          >
+            <span className="agent-rail-output-chevron" aria-hidden="true">
+              {expanded ? "▾" : "▸"}
+            </span>
+            {expanded ? "Hide" : "Show"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="agent-rail-output-action"
+            onClick={runAction}
+            title={output.kind === "link" ? "Open in browser" : "Reveal in file manager"}
+          >
+            {action.label}
+          </button>
+        )}
+        <button
+          type="button"
+          className="agent-rail-output-remove"
+          onClick={onRemove}
+          title="Remove from outputs"
+          aria-label="Remove output"
+        >
+          ✕
+        </button>
+      </div>
+      {output.kind === "note" && expanded && output.text && (
+        <pre className="agent-rail-output-note">{output.text}</pre>
+      )}
+    </div>
   )
 }

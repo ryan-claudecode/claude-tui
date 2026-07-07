@@ -51,7 +51,7 @@ export function registerTools(
   identity: TerminalIdentity = {},
 ) {
   registerSessionTools(server, sessions, attention, workSessions, workspaces, identity)
-  registerWorkSessionTools(server, workSessions, panels, identity)
+  registerWorkSessionTools(server, workSessions, panels, sessions, identity)
   registerPanelTools(server, panels, files, sessions, identity)
   registerPermissionTools(server, sessions, identity, (m, l, t) => notifications.notify(m, l, t))
   registerGitTools(server, git, sessions)

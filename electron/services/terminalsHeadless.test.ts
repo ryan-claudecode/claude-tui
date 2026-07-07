@@ -361,6 +361,121 @@ describe("CAPP-129 — emits a per-turn cost delta on each result (cumulative→
   })
 })
 
+// CAPP-132 — the OUTPUTS derivation: Write/Edit/NotebookEdit tool_uses buffer file drafts
+// per turn; the turn's `result` text yields link drafts; the whole turn flushes as ONE
+// `{type:"output"}` batch (files then links). An explicit post_output forwards immediately
+// AND suppresses a matching derived draft at the flush (explicit beats derived).
+describe("CAPP-132 — derives OUTPUTS from the stream and forwards explicit posts", () => {
+  const outputEvents = (events: TerminalEvent[]) =>
+    events.filter((e) => e.type === "output") as Extract<TerminalEvent, { type: "output" }>[]
+
+  function toolUseLine(name: string, input: unknown, id = "tu-1"): string {
+    return JSON.stringify({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] },
+    })
+  }
+  function resultLineText(text?: string): string {
+    return JSON.stringify({ type: "result", subtype: "success", is_error: false, ...(text != null ? { result: text } : {}) })
+  }
+
+  it("a Write tool_use + a result-with-link → ONE output batch, files THEN links", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${toolUseLine("Write", { file_path: "/repo/src/x.ts" })}\n`)
+    spawned[0].emitStdout(`${resultLineText("Done. See [the PR](https://github.com/o/r/pull/7).")}\n`)
+
+    const outs = outputEvents(events)
+    expect(outs).toHaveLength(1)
+    expect(outs[0].id).toBe(info.id)
+    expect(outs[0].outputs.map((o) => o.kind)).toEqual(["file", "link"])
+    expect(outs[0].outputs[0]).toMatchObject({ kind: "file", title: "x.ts", path: "/repo/src/x.ts", source: "derived" })
+    expect(outs[0].outputs[1]).toMatchObject({ kind: "link", title: "the PR", url: "https://github.com/o/r/pull/7", source: "derived" })
+  })
+
+  it("coalesces a Write then an Edit of the SAME file into ONE derived entry", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${toolUseLine("Write", { file_path: "/repo/a.ts" }, "tu-1")}\n`)
+    spawned[0].emitStdout(`${toolUseLine("Edit", { file_path: "/repo/a.ts" }, "tu-2")}\n`)
+    spawned[0].emitStdout(`${resultLineText("done")}\n`)
+    const outs = outputEvents(events)
+    expect(outs).toHaveLength(1)
+    expect(outs[0].outputs.filter((o) => o.kind === "file")).toHaveLength(1)
+  })
+
+  it("a turn with no deliverables emits NO output event", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${resultLineText("just some prose, no files or links")}\n`)
+    expect(outputEvents(events)).toHaveLength(0)
+  })
+
+  it("NotebookEdit derives from notebook_path; a non-file tool is ignored", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${toolUseLine("Bash", { command: "ls" }, "tu-1")}\n`)
+    spawned[0].emitStdout(`${toolUseLine("NotebookEdit", { notebook_path: "/repo/nb.ipynb" }, "tu-2")}\n`)
+    spawned[0].emitStdout(`${resultLineText("done")}\n`)
+    const outs = outputEvents(events)
+    expect(outs).toHaveLength(1)
+    expect(outs[0].outputs.map((o) => o.path)).toEqual(["/repo/nb.ipynb"])
+  })
+
+  it("postExplicitOutput forwards IMMEDIATELY (mid-turn) and SUPPRESSES the matching derived draft at result", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    // Explicit post for /repo/x.ts — forwards NOW (before any result).
+    svc.postExplicitOutput(info.id, { kind: "file", title: "The report", path: "/repo/x.ts", source: "agent" })
+    // Mid-turn the stream also touches x.ts (would derive) AND y.ts (survives).
+    spawned[0].emitStdout(`${toolUseLine("Write", { file_path: "/repo/x.ts" }, "tu-1")}\n`)
+    spawned[0].emitStdout(`${toolUseLine("Write", { file_path: "/repo/y.ts" }, "tu-2")}\n`)
+    spawned[0].emitStdout(`${resultLineText("done")}\n`)
+
+    const outs = outputEvents(events)
+    expect(outs).toHaveLength(2)
+    // #1 — the explicit post, forwarded immediately with source:"agent" and its better title.
+    expect(outs[0].outputs).toEqual([
+      { kind: "file", title: "The report", path: "/repo/x.ts", source: "agent" },
+    ])
+    // #2 — the result flush drops x.ts (suppressed by the explicit post); y.ts survives.
+    expect(outs[1].outputs.map((o) => o.path)).toEqual(["/repo/y.ts"])
+  })
+
+  it("ORDER PIN — at result, the cost event is emitted BEFORE the outputs batch", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${toolUseLine("Write", { file_path: "/repo/x.ts" })}\n`)
+    spawned[0].emitStdout(`${resultLineText("done https://a.io")}\n`)
+    const costIdx = events.findIndex((e) => e.type === "cost")
+    const outIdx = events.findIndex((e) => e.type === "output")
+    expect(costIdx).toBeGreaterThanOrEqual(0)
+    expect(outIdx).toBeGreaterThan(costIdx)
+  })
+
+  it("caps at 10 derived files per turn and appends ONE 'and N more files' note", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const events = collect(svc)
+    svc.createHeadless("t", process.cwd())
+    for (let i = 0; i < 13; i++) {
+      spawned[0].emitStdout(`${toolUseLine("Write", { file_path: `/repo/f${i}.ts` }, `tu-${i}`)}\n`)
+    }
+    spawned[0].emitStdout(`${resultLineText("done")}\n`)
+    const outs = outputEvents(events)
+    expect(outs).toHaveLength(1)
+    const batch = outs[0].outputs
+    expect(batch.filter((o) => o.kind === "file")).toHaveLength(10)
+    const note = batch.find((o) => o.kind === "note")
+    expect(note?.title).toBe("…and 3 more files")
+  })
+})
+
 describe("BO-7 — retains the init catalog (slash commands + skills) per terminal", () => {
   it("captures slash_commands + skills off the init line, exposed via getCatalog (live)", () => {
     const { svc, spawned } = makeHeadlessService()

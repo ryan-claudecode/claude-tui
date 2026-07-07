@@ -729,6 +729,126 @@ describe("SessionService cost accumulation (CAPP-129)", () => {
   })
 })
 
+// CAPP-132 — the OUTPUTS feed: TerminalService derives/forwards `{type:"output"}` events
+// (tested at the terminals level); SessionService maps terminal→session, mints id/ts,
+// appends with FIFO eviction, persists, and emits the DEDICATED worksession:outputs-changed
+// (NEVER folding outputs into the worksession:updated snapshot).
+describe("SessionService OUTPUTS feed (CAPP-132)", () => {
+  function withHeadless(now = () => 1000) {
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now })
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id)
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured" })
+    return { term, svc, s, head }
+  }
+
+  it("appends drafts with a minted uuid + ts and the stamped terminalId", () => {
+    const { term, svc, s, head } = withHeadless(() => 4242)
+    term.emit({
+      type: "output",
+      id: head.id,
+      outputs: [
+        { kind: "file", title: "x.ts", path: "/repo/x.ts", source: "derived" },
+        { kind: "link", title: "PR", url: "https://gh.com/pr/1", source: "agent" },
+      ],
+    })
+    const outs = svc.getOutputs(s.id)
+    expect(outs).toHaveLength(2)
+    expect(outs[0]).toMatchObject({ kind: "file", title: "x.ts", path: "/repo/x.ts", source: "derived", ts: 4242, terminalId: head.id })
+    expect(outs[1]).toMatchObject({ kind: "link", title: "PR", url: "https://gh.com/pr/1", source: "agent" })
+    // ids are minted, non-empty, and distinct.
+    expect(outs[0].id).toBeTruthy()
+    expect(outs[0].id).not.toBe(outs[1].id)
+  })
+
+  it("caps the feed at 200 with FIFO eviction from the head (oldest dropped)", () => {
+    const { term, svc, s, head } = withHeadless()
+    for (let i = 0; i < 205; i++) {
+      term.emit({ type: "output", id: head.id, outputs: [{ kind: "note", title: `n${i}`, text: "t", source: "derived" }] })
+    }
+    const outs = svc.getOutputs(s.id)
+    expect(outs).toHaveLength(200)
+    // The first 5 (n0..n4) were evicted; the feed now starts at n5 and ends at n204.
+    expect(outs[0].title).toBe("n5")
+    expect(outs[199].title).toBe("n204")
+  })
+
+  it("caps an over-long note text at 2000 chars", () => {
+    const { term, svc, s, head } = withHeadless()
+    term.emit({ type: "output", id: head.id, outputs: [{ kind: "note", title: "big", text: "x".repeat(5000), source: "agent" }] })
+    expect(svc.getOutputs(s.id)[0].text!.length).toBe(2000)
+  })
+
+  it("ignores an output event for a terminal it does not own", () => {
+    const { term, svc, s } = withHeadless()
+    term.emit({ type: "output", id: "not-mine", outputs: [{ kind: "note", title: "x", text: "y", source: "derived" }] })
+    expect(svc.getOutputs(s.id)).toHaveLength(0)
+  })
+
+  it("removeOutput drops one entry; clearOutputs empties the feed (both persist + emit)", () => {
+    const sends: Array<{ ch: string; args: unknown[] }> = []
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.setMainWindow({ isDestroyed: () => false, webContents: { send: (ch: string, ...args: unknown[]) => sends.push({ ch, args }) } } as any)
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id)
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured" })
+
+    term.emit({ type: "output", id: head.id, outputs: [
+      { kind: "file", title: "a.ts", path: "/repo/a.ts", source: "derived" },
+      { kind: "file", title: "b.ts", path: "/repo/b.ts", source: "derived" },
+    ] })
+    const first = svc.getOutputs(s.id)[0]
+    svc.removeOutput(s.id, first.id)
+    expect(svc.getOutputs(s.id).map((o) => o.title)).toEqual(["b.ts"])
+    svc.clearOutputs(s.id)
+    expect(svc.getOutputs(s.id)).toEqual([])
+    // The dedicated channel fired for the append + remove + clear.
+    const outputsChanged = sends.filter((m) => m.ch === "worksession:outputs-changed")
+    expect(outputsChanged.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it("outputs are NOT present in the worksession:updated snapshot payload (dedicated channel only)", () => {
+    const sends: Array<{ ch: string; args: unknown[] }> = []
+    const term = new FakeTerminals()
+    const svc = new SessionService({ dir, now: () => 1000 })
+    svc.setMainWindow({ isDestroyed: () => false, webContents: { send: (ch: string, ...args: unknown[]) => sends.push({ ch, args }) } } as any)
+    svc.attachTerminals(term as any)
+    const s = svc.create()
+    const head = term.createHeadless(undefined, "/repo", s.id)
+    svc.addTerminal(s.id, { id: head.id, name: head.name, cwd: head.cwd, lastState: "active", engine: "structured" })
+    term.emit({ type: "output", id: head.id, outputs: [{ kind: "note", title: "n", text: "t", source: "derived" }] })
+
+    // Trigger a worksession:updated (an activity self-report) and assert its snapshot
+    // carries NO outputs field even though the session's feed is non-empty.
+    svc.setTerminalActivity(s.id, head.id, "working")
+    const updated = sends.filter((m) => m.ch === "worksession:updated").map((m) => m.args[0] as any)
+    expect(updated.length).toBeGreaterThan(0)
+    for (const snap of updated) expect("outputs" in snap).toBe(false)
+    // But the feed itself is intact via the accessor.
+    expect(svc.getOutputs(s.id)).toHaveLength(1)
+  })
+
+  it("persists the feed and reloads it (round-trip; legacy JSON with no outputs loads clean)", () => {
+    const { term, svc, s, head } = withHeadless()
+    term.emit({ type: "output", id: head.id, outputs: [{ kind: "link", title: "PR", url: "https://gh.com/pr/1", source: "agent" }] })
+
+    const svc2 = new SessionService({ dir, now: () => 2000 })
+    svc2.load()
+    expect(svc2.getOutputs(s.id).map((o) => o.url)).toEqual(["https://gh.com/pr/1"])
+
+    // A legacy session file with no `outputs` key loads to an empty feed (no migration).
+    const legacy = { id: "legacy-out", name: "Old", status: "active", terminals: [], createdAt: 1, updatedAt: 1 }
+    writeFileSync(join(dir, "legacy-out.json"), JSON.stringify(legacy))
+    const svc3 = new SessionService({ dir, now: () => 3000 })
+    svc3.load()
+    expect(svc3.getOutputs("legacy-out")).toEqual([])
+  })
+})
+
 // CAPP-113 — the resolved-model echo: the headless `init` stream event reports the
 // RESOLVED full model id; SessionService records it onto the terminal ref (the
 // picker's tooltip). Mirrors the convo-recording seam above (same onEvent stream).

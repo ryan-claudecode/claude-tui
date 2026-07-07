@@ -4,10 +4,12 @@ import {
   PERMISSION_REQUEST_CHANNEL,
   PERMISSION_RESOLVED_CHANNEL,
   AGENT_QUEUE_CHANGED_CHANNEL,
+  OUTPUTS_CHANGED_CHANNEL,
   type TerminalStreamPayload,
   type PermissionRequest,
   type PermissionDecision,
   type QueuedAgentInput,
+  type RailOutput,
 } from "./services/streamProtocol"
 import type { SttProgress } from "./stt/protocol"
 
@@ -273,6 +275,26 @@ const mainApi = {
     ipcRenderer.on(AGENT_QUEUE_CHANGED_CHANNEL, handler)
     return () => ipcRenderer.removeListener(AGENT_QUEUE_CHANGED_CHANNEL, handler)
   },
+
+  // CAPP-132 — the Agent Rail OUTPUTS feed (per work session). getSessionOutputs pulls
+  // the current FIFO snapshot (on mount / active-session switch); onSessionOutputsChanged
+  // pushes the new snapshot per session (per-instance disposer, mirroring onStreamEvent so
+  // a subscriber tears down without clobbering siblings); remove/clear act on one/all entries.
+  getSessionOutputs: (sessionId: string) => ipcRenderer.invoke("worksession:get-outputs", sessionId),
+  removeSessionOutput: (sessionId: string, outputId: string) =>
+    ipcRenderer.invoke("worksession:remove-output", sessionId, outputId),
+  clearSessionOutputs: (sessionId: string) => ipcRenderer.invoke("worksession:clear-outputs", sessionId),
+  onSessionOutputsChanged: (callback: (sessionId: string, outputs: RailOutput[]) => void) => {
+    const handler = (_e: unknown, sessionId: string, outputs: RailOutput[]) => callback(sessionId, outputs)
+    ipcRenderer.on(OUTPUTS_CHANGED_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(OUTPUTS_CHANGED_CHANNEL, handler)
+  },
+  // CAPP-132 — the OUTPUTS row open/reveal actions. openExternalUrl opens a link in the
+  // default browser (main-side restricted to http/https); revealPath shows a file in the OS
+  // file manager (main-side no-op if the path no longer exists). Same ShellService the
+  // open_external / reveal_path MCP tools use.
+  openExternalUrl: (url: string) => ipcRenderer.invoke("app:open-external", url),
+  revealPath: (path: string) => ipcRenderer.invoke("app:reveal-path", path),
 
   // BO-7 — the structured composer's `/`-picker catalog (slash commands + skills)
   // captured off the headless `init` event. Returns null until init arrives.

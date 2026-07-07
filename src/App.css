@@ -3990,6 +3990,148 @@ body {
   color: var(--text-3);
 }
 
+/* OUTPUTS (CAPP-132) — the SESSION's durable FIFO feed of deliverables (links / files /
+   notes), between NOW and COST. A header (label + count + always-visible Clear) over a
+   scrollable, capped-height list so COST stays pinned. No hover-reveal; no arrival
+   animation (stable ids as keys, monotonic list). */
+.agent-rail-outputs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+.agent-rail-outputs-count {
+  font-weight: 600;
+  color: var(--text-4, var(--text-3));
+  letter-spacing: 0.4px;
+}
+.agent-rail-outputs-clear {
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.agent-rail-outputs-clear:hover {
+  color: var(--text-0);
+  background: var(--bg-3);
+}
+.agent-rail-outputs-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-height: 260px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding-right: 2px;
+}
+
+.agent-rail-output {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-2, transparent);
+}
+.agent-rail-output-main {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+}
+.agent-rail-output-glyph {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+}
+.agent-rail-output-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-1);
+}
+.agent-rail-output-time {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.agent-rail-output-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-1);
+}
+.agent-rail-output-action {
+  background: transparent;
+  border: none;
+  padding: 1px 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.agent-rail-output-action:hover {
+  background: var(--bg-3);
+}
+.agent-rail-output-chevron {
+  font-size: 9px;
+  line-height: 1;
+}
+.agent-rail-output-remove {
+  background: transparent;
+  border: none;
+  padding: 1px 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.agent-rail-output-remove:hover {
+  color: var(--text-0);
+  background: var(--bg-3);
+}
+.agent-rail-output-note {
+  margin: 2px 0 0;
+  padding: var(--s-2);
+  max-height: 160px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-3);
+  border-radius: var(--r-sm);
+  scrollbar-width: thin;
+}
+.agent-rail-output-action:focus-visible,
+.agent-rail-output-remove:focus-visible,
+.agent-rail-outputs-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* COST — session-cumulative spend, pinned to the footer with a top divider. */
 .agent-rail-footer {
   flex-shrink: 0;

@@ -1,7 +1,9 @@
 import { ipcMain, BrowserWindow } from "electron"
+import { existsSync } from "fs"
 import type { TerminalService } from "../services/terminals"
 import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
+import type { ShellService } from "../services/shell"
 import {
   getThemeMode,
   setThemeMode,
@@ -18,12 +20,14 @@ export function registerAppHandlers(deps: {
   sessionService: TerminalService
   workspaceService: WorkspaceService
   appService: AppService
+  shellService: ShellService
 }) {
   const {
     config,
     sessionService,
     workspaceService,
     appService,
+    shellService,
   } = deps
 
   // Workspace IPC. Now backed by the durable registry (WS-A): the renderer
@@ -95,4 +99,20 @@ export function registerAppHandlers(deps: {
   ipcMain.handle("app:save-image", (_e, base64: string, filename: string) =>
     appService.saveDroppedImage(base64, filename),
   )
+
+  // CAPP-132 — renderer accessors for the Agent Rail OUTPUTS row actions: hand a
+  // deliverable off to the OS via the SAME ShellService methods the open_external /
+  // reveal_path MCP tools call (never a second implementation). Restricted for the
+  // renderer path: only http/https URLs open externally; only an EXISTING path is
+  // revealed (a stale entry pointing at a deleted file is a quiet no-op).
+  ipcMain.handle("app:open-external", async (_e, url: string) => {
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+      return { ok: false, error: "Only http/https URLs can be opened externally" }
+    }
+    return shellService.openExternal(url)
+  })
+  ipcMain.handle("app:reveal-path", (_e, path: string) => {
+    if (typeof path !== "string" || !path.trim() || !existsSync(path)) return { ok: false }
+    return shellService.revealPath(path)
+  })
 }

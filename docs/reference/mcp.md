@@ -84,6 +84,8 @@ Drive the same view actions a user triggers by keyboard/menu — so Claude can a
 
 `create_work_session` / `list_work_sessions` / `work_session_status`, `register_terminal`, `set_terminal_activity`. Spawned terminals bind identity via the SSE URL (`?sid=&tid=`) so these tools default to the caller's own ids. Durable KNOWLEDGE lives in Claude's native memory (CLAUDE.md / CLAUDE.local.md / auto-memory), not the app (retrenched in R3a). Container model + resume-fidelity detail: `docs/reference/services.md` (§SessionService).
 
+- `post_output` (CAPP-132) — post a DELIVERABLE (`kind: "link" | "file" | "note"` + `title`, plus `url` / `path` / `text` per kind) to the calling session's durable OUTPUTS feed, surfaced in the Agent Rail's OUTPUTS section (FIFO, capped 200/session). Identity-bound — the terminal id defaults to the caller's own — and routes to `TerminalService.postExplicitOutput`, which forwards it immediately AND suppresses a matching stream-DERIVED draft this turn (explicit beats derived). For ARTIFACTS the user opens/keeps (PR link, report file, findings note), NOT progress chatter. Files (Write/Edit/NotebookEdit) and result-text links are ALSO captured automatically with no agent cooperation; `post_output` just gives the important ones a proper title. Never a blocking gate (tier-1 contract untouched). Design: `docs/roadmap/rail-outputs-feed-design.md`.
+
 ### Context Inspector (workspaces group)
 
 `inspect_workspace_context` — READ-ONLY, identity-bound to the caller's OWNING session's workspace, never `getActiveId`. Full detail: `docs/reference/services.md` (§ContextInspectorService).

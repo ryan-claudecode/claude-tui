@@ -468,6 +468,9 @@ export async function setupIpc(win: BrowserWindow) {
     sessionService,
     workspaceService,
     appService,
+    // CAPP-132 — the OUTPUTS row open/reveal actions wrap the SAME ShellService the
+    // open_external / reveal_path MCP tools use (app:open-external / app:reveal-path).
+    shellService,
   })
 
   // Cleanup

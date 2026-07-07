@@ -60,6 +60,18 @@ export function registerWorkSessionHandlers(deps: {
   ipcMain.handle("worksession:handoff", (_e, sessionId: string, terminalId: string) =>
     workSessionService.handoffTerminal(sessionId, terminalId),
   )
+  // CAPP-132 — the Agent Rail OUTPUTS feed: read the current FIFO snapshot (mount /
+  // active-session switch), remove one entry (the row ✕), or clear the whole feed
+  // (the section header Clear). Live updates ride the worksession:outputs-changed push.
+  ipcMain.handle("worksession:get-outputs", (_e, sessionId: string) =>
+    workSessionService.getOutputs(sessionId),
+  )
+  ipcMain.handle("worksession:remove-output", (_e, sessionId: string, outputId: string) =>
+    workSessionService.removeOutput(sessionId, outputId),
+  )
+  ipcMain.handle("worksession:clear-outputs", (_e, sessionId: string) =>
+    workSessionService.clearOutputs(sessionId),
+  )
   // CAPP-39 gate ② — launch a one-time INTERACTIVE `claude /login` terminal (the
   // structured engine can't show the OAuth UI). Lands beside the caller's session.
   ipcMain.handle("worksession:start-login", (_e, sessionId?: string) =>

@@ -352,6 +352,55 @@ export interface QueuedAgentInput {
 export const AGENT_QUEUE_CHANGED_CHANNEL = "terminal:agent-queue-changed" as const
 
 // ---------------------------------------------------------------------------
+// Rail OUTPUTS feed (CAPP-132) — a durable FIFO history of the DELIVERABLES a
+// work session's agents produce (links, files, short notes), surfaced in the
+// Agent Rail's OUTPUTS section. Two capture paths: DERIVED from the stream we
+// already parse (Write/Edit/NotebookEdit tool_uses + result-text links) and
+// EXPLICIT via the identity-bound `post_output` MCP tool. Durable on the
+// work-session JSON. Design: docs/roadmap/rail-outputs-feed-design.md.
+// ---------------------------------------------------------------------------
+
+/** One deliverable in a work session's OUTPUTS feed. */
+export interface RailOutput {
+  /** uuid, minted by SessionService when the entry is appended. */
+  id: string
+  /** epoch ms the entry was appended. */
+  ts: number
+  /** the minting terminal (display-only; runtime ids are ephemeral). */
+  terminalId: string
+  kind: "link" | "file" | "note"
+  /** display label — basename / link text / note title. */
+  title: string
+  /** kind=link — the URL to open externally. */
+  url?: string
+  /** kind=file — the absolute path to reveal. */
+  path?: string
+  /** kind=note — a short markdown body (capped ~2000 chars). */
+  text?: string
+  /** EXPLICIT `post_output` (agent) vs stream-DERIVED (the safety net). */
+  source: "agent" | "derived"
+}
+
+/**
+ * A rail-output BEFORE SessionService stamps id/ts/terminalId — the shape that
+ * rides the `{type:"output"}` service seam (a turn's derived drafts, or one
+ * explicit `post_output` entry). SessionService mints the id + ts and stamps the
+ * terminalId from the event's terminal id.
+ */
+export type RailOutputDraft = Omit<RailOutput, "id" | "ts" | "terminalId">
+
+/** Renderer push channel: a work session's OUTPUTS feed changed. Payload is
+ *  `(sessionId, RailOutput[])` — the full FIFO snapshot after the change. */
+export const OUTPUTS_CHANGED_CHANNEL = "worksession:outputs-changed" as const
+
+/** FIFO cap on a session's persisted OUTPUTS feed (oldest evicted past this). */
+export const MAX_OUTPUTS_PER_SESSION = 200
+
+/** Defensive caps on a stored output's text/title (an explicit post could be huge). */
+export const MAX_OUTPUT_TEXT = 2000
+export const MAX_OUTPUT_TITLE = 500
+
+// ---------------------------------------------------------------------------
 // Permission contract — FINALIZED in BO-3 against the REAL wire shape captured
 // live (see docs/spikes/bo3-permission-prompt.md + permissionWire.fixtures.ts).
 //

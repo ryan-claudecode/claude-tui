@@ -1,8 +1,18 @@
 import { readdirSync, unlinkSync } from "fs"
+import { randomUUID } from "node:crypto"
 import { join } from "path"
 import { homedir } from "os"
 import { parseActivityLine } from "./terminals"
-import { modelSupportsXhigh, type AgentCatalog } from "./streamProtocol"
+import {
+  modelSupportsXhigh,
+  OUTPUTS_CHANGED_CHANNEL,
+  MAX_OUTPUTS_PER_SESSION,
+  MAX_OUTPUT_TEXT,
+  MAX_OUTPUT_TITLE,
+  type AgentCatalog,
+  type RailOutput,
+  type RailOutputDraft,
+} from "./streamProtocol"
 import {
   listFolderConversations as listFolderConversationsRaw,
   type FolderConversation,
@@ -160,6 +170,17 @@ export interface WorkSession {
   costUsd?: number
   costTokens?: number
   costTurns?: number
+  /**
+   * CAPP-132 — the durable OUTPUTS feed: a FIFO history of the DELIVERABLES this
+   * session's agents produced (links / files / short notes), surfaced in the Agent Rail's
+   * OUTPUTS section. Capped at {@link MAX_OUTPUTS_PER_SESSION} with FIFO eviction from the
+   * head. Persisted (survives respawns + app restart) and additive/optional (a legacy
+   * session loads with it undefined → treated as empty; no migration). Kept OUT of the
+   * `worksession:updated` snapshot (stripped by {@link SessionService.withEffectiveActivity})
+   * — it rides its own `worksession:outputs-changed` channel so a hot activity emit never
+   * carries the feed. Never a blocking gate (tier-1 contract untouched).
+   */
+  outputs?: RailOutput[]
   createdAt: number
   updatedAt: number
 }
@@ -224,6 +245,13 @@ const MIGRATIONS: Migration[] = []
 
 /** Cap on a session's durable eventLog audit trail. */
 const MAX_EVENTS = 500
+
+/** CAPP-132 — hard length cap for a stored output title/text (defensive: an explicit
+ *  post_output could carry an arbitrarily long string). Pure. */
+function capText(s: unknown, max: number): string {
+  const v = typeof s === "string" ? s : String(s ?? "")
+  return v.length > max ? v.slice(0, max) : v
+}
 
 /** The slice of TerminalService the container drives. */
 export interface TerminalLike {
@@ -290,7 +318,7 @@ export interface TerminalLike {
    *  optional pre-kill snapshot for the kill-before-spawn seam. Optional for test mocks. */
   transferAgentQueue?(oldId: string, newId: string, carried?: import("./streamProtocol").QueuedAgentInput[]): void
   getOutput(id: string, maxChars?: number): string | null
-  onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo" | "renamed" | "stream" | "background" | "cost"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string; name?: string; event?: unknown; costUsd?: number; totalTokens?: number }) => void): () => void
+  onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo" | "renamed" | "stream" | "background" | "cost" | "output"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string; name?: string; event?: unknown; costUsd?: number; totalTokens?: number; outputs?: import("./streamProtocol").RailOutputDraft[] }) => void): () => void
 }
 
 interface MainWinLike {
@@ -354,6 +382,12 @@ export class SessionService {
         // CAPP-129 — fold a turn's per-turn cost delta into the durable per-terminal +
         // per-session rolling totals (mirrors the recordConversationId seam).
         this.recordCost(e.id, e.costUsd, e.totalTokens)
+      }
+      else if (e.type === "output" && e.id && Array.isArray(e.outputs)) {
+        // CAPP-132 — append the turn's (or an explicit post's) DELIVERABLE drafts to the
+        // durable OUTPUTS feed (mints id/ts, evicts past the cap, persists + emits the
+        // dedicated worksession:outputs-changed). Mirrors the recordCost fold seam.
+        this.recordOutputs(e.id, e.outputs)
       }
       else if (e.type === "convo" && e.id && e.ccConversationId) {
         this.recordConversationId(e.id, e.ccConversationId)
@@ -477,6 +511,68 @@ export class SessionService {
     if (addTok > 0) s.costTokens = (s.costTokens ?? 0) + addTok
     this.persist(s)
     this.emit("worksession:updated", this.withEffectiveActivity(s))
+  }
+
+  /**
+   * CAPP-132 — append a batch of DELIVERABLE drafts to the owning session's durable
+   * OUTPUTS feed. Mints a uuid + ts PER entry, stamps the minting terminalId (from the
+   * event id), caps the title/text defensively, appends in order, then FIFO-evicts past
+   * {@link MAX_OUTPUTS_PER_SESSION} (drops the oldest). Persists and emits the DEDICATED
+   * `worksession:outputs-changed` (outputs never ride the `worksession:updated` snapshot).
+   * A draft for an unknown terminal / unknown kind is skipped (defensive).
+   */
+  private recordOutputs(terminalId: string, drafts: RailOutputDraft[]): void {
+    const s = this.sessionOf(terminalId)
+    if (!s || drafts.length === 0) return
+    if (!s.outputs) s.outputs = []
+    let appended = 0
+    for (const d of drafts) {
+      if (!d || (d.kind !== "link" && d.kind !== "file" && d.kind !== "note")) continue
+      const entry: RailOutput = {
+        id: randomUUID(),
+        ts: this.now(),
+        terminalId,
+        kind: d.kind,
+        title: capText(d.title, MAX_OUTPUT_TITLE) || "(untitled)",
+        source: d.source === "agent" ? "agent" : "derived",
+      }
+      if (typeof d.url === "string" && d.url.trim()) entry.url = d.url.trim()
+      if (typeof d.path === "string" && d.path.trim()) entry.path = d.path.trim()
+      if (typeof d.text === "string" && d.text) entry.text = capText(d.text, MAX_OUTPUT_TEXT)
+      s.outputs.push(entry)
+      appended++
+    }
+    if (appended === 0) return
+    if (s.outputs.length > MAX_OUTPUTS_PER_SESSION) {
+      s.outputs.splice(0, s.outputs.length - MAX_OUTPUTS_PER_SESSION)
+    }
+    this.persist(s)
+    this.emit(OUTPUTS_CHANGED_CHANNEL, s.id, s.outputs)
+  }
+
+  /** CAPP-132 — the current OUTPUTS feed for a session (empty when none / unknown). */
+  getOutputs(sessionId: string): RailOutput[] {
+    return this.sessions.get(sessionId)?.outputs ?? []
+  }
+
+  /** CAPP-132 — remove one output by id; persists + emits outputs-changed (no-op if absent). */
+  removeOutput(sessionId: string, outputId: string): void {
+    const s = this.sessions.get(sessionId)
+    if (!s || !s.outputs) return
+    const next = s.outputs.filter((o) => o.id !== outputId)
+    if (next.length === s.outputs.length) return
+    s.outputs = next
+    this.persist(s)
+    this.emit(OUTPUTS_CHANGED_CHANNEL, s.id, s.outputs)
+  }
+
+  /** CAPP-132 — clear the whole OUTPUTS feed; persists + emits (no-op when already empty). */
+  clearOutputs(sessionId: string): void {
+    const s = this.sessions.get(sessionId)
+    if (!s || !s.outputs || s.outputs.length === 0) return
+    s.outputs = []
+    this.persist(s)
+    this.emit(OUTPUTS_CHANGED_CHANNEL, s.id, s.outputs)
   }
 
   /**
@@ -1394,9 +1490,14 @@ export class SessionService {
 
   /** A copy of the session with each terminal's activity resolved for display. */
   private withEffectiveActivity(s: WorkSession): WorkSession {
+    // CAPP-132 — the OUTPUTS feed rides its OWN dedicated channel
+    // (worksession:outputs-changed); STRIP it here so a hot `worksession:updated`
+    // activity emit never carries the (potentially large) feed. `{...s}` would
+    // otherwise spread it — this destructure is the explicit strip.
+    const { outputs: _outputs, ...rest } = s
     return {
-      ...s,
-      terminals: s.terminals.map((t) => ({
+      ...rest,
+      terminals: rest.terminals.map((t) => ({
         ...t,
         activity: this.effectiveActivity(s.id, t.id),
         // BACKGROUND WORK — stamp the live outstanding-task count (compute-only; never

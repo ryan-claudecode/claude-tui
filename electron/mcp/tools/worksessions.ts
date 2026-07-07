@@ -2,12 +2,15 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import type { SessionService } from "../../services/sessions"
 import type { PanelService } from "../../services/panels"
+import type { TerminalService } from "../../services/terminals"
+import type { RailOutputDraft } from "../../services/streamProtocol"
 import type { TerminalIdentity } from "./shared"
 
 export function registerWorkSessionTools(
   server: McpServer,
   workSessions: SessionService,
   panels: PanelService,
+  terminals: TerminalService,
   identity: TerminalIdentity = {},
 ) {
   // Work sessions — the durable *container* that groups many terminals (conversation
@@ -118,4 +121,36 @@ export function registerWorkSessionTools(
     },
   )
 
+  // CAPP-132 — post a DELIVERABLE to the work session's OUTPUTS feed in the Agent Rail.
+  // Identity-bound like set_terminal_activity: the terminal id defaults to the caller's own
+  // (resolved from the SSE connection identity), so an agent just posts { kind, title, ... }.
+  // Routes to TerminalService.postExplicitOutput (forwards on the same output seam +
+  // suppresses a matching DERIVED draft this turn — explicit beats derived).
+  const err = (text: string) => ({ content: [{ type: "text" as const, text }] })
+  server.tool(
+    "post_output",
+    "Post a DELIVERABLE to your work session's OUTPUTS feed in the Agent Rail — a link, a file, or a short findings note the user will want to open or keep (the PR link, the report file you wrote, a summary of findings). This is for ARTIFACTS, not progress: do NOT post 'starting X' / 'running the tests' chatter (use set_terminal_activity for live status). Ids default to your own terminal. kind='link' requires url; kind='file' requires an absolute path; kind='note' requires text.",
+    {
+      kind: z.enum(["link", "file", "note"]),
+      title: z.string().describe("Short display label, e.g. 'PR #128', 'findings.md', 'Summary of the audit'"),
+      url: z.string().optional().describe("kind=link — the URL to open"),
+      path: z.string().optional().describe("kind=file — the absolute path to reveal"),
+      text: z.string().optional().describe("kind=note — a short markdown body"),
+      session_id: z.string().optional(),
+      terminal_id: z.string().optional(),
+    },
+    async ({ kind, title, url, path, text, terminal_id }) => {
+      const tid = terminal_id ?? identity.terminalId
+      if (!tid) return err("No terminal identity bound to this connection — pass terminal_id.")
+      if (kind === "link" && !(url && url.trim())) return err("kind='link' requires a url.")
+      if (kind === "file" && !(path && path.trim())) return err("kind='file' requires a path.")
+      if (kind === "note" && !(text && text.trim())) return err("kind='note' requires text.")
+      const draft: RailOutputDraft = { kind, title: (title ?? "").trim() || "(untitled)", source: "agent" }
+      if (kind === "link") draft.url = url!.trim()
+      if (kind === "file") draft.path = path!.trim()
+      if (kind === "note") draft.text = text!
+      terminals.postExplicitOutput(tid, draft)
+      return err(`Posted ${kind} "${draft.title}" to the OUTPUTS rail.`)
+    },
+  )
 }

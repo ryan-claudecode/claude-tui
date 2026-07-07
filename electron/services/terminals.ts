@@ -34,7 +34,15 @@ import {
   type QueuedAgentInput,
   type PermissionRequest,
   type PermissionDecision,
+  type RailOutputDraft,
 } from "./streamProtocol"
+import {
+  newTurnBuffer,
+  addFileTouch,
+  suppressDerived,
+  flushTurn,
+  type TurnOutputBuffer,
+} from "./outputDerivation"
 import {
   classifySlashInput,
   UI_SLASH_COMMAND_CHANNEL,
@@ -638,6 +646,14 @@ interface HeadlessTerminal {
    * until the first cost-bearing result.
    */
   lastCumulativeCostUsd?: number
+  /**
+   * CAPP-132 — the current turn's DERIVED-output accumulator (file drafts from
+   * Write/Edit/NotebookEdit tool_uses, plus the suppress-set an explicit post_output
+   * writes so a matching derived draft is dropped at the turn flush). Reset on spawn
+   * (a fresh entry starts with an empty buffer) and after each `result` flush. Undefined
+   * only transiently before the first derivation; treated as an empty buffer.
+   */
+  derivedOutputs?: TurnOutputBuffer
 }
 
 /** Per-session activity snapshot for the "which session needs me?" view. */
@@ -690,6 +706,17 @@ export type TerminalEvent =
    * the "N turns" count advances. xterm terminals have no result stream → they never emit.
    */
   | { type: "cost"; id: string; costUsd?: number; totalTokens?: number }
+  /**
+   * CAPP-132 — a batch of DELIVERABLE drafts (links/files/notes) for the OUTPUTS
+   * feed, attributed to its owning terminal (`id`). Emitted on the SAME `onEvent`
+   * seam: DERIVED drafts flush as ONE batch at a turn's `result` (right after the
+   * CAPP-129 cost emit, before the CAPP-130 queue flush); an EXPLICIT `post_output`
+   * forwards a single-entry batch IMMEDIATELY (mid-turn). SessionService maps the
+   * terminal→session, mints an id + ts per draft, appends to the durable feed, and
+   * emits the dedicated `worksession:outputs-changed`. Drafts carry no id/ts/terminalId
+   * (SessionService stamps them). Never a blocking gate (tier-1 contract untouched).
+   */
+  | { type: "output"; id: string; outputs: RailOutputDraft[] }
   /**
    * BO-1: a typed event parsed from a HEADLESS terminal's stream-json stdout,
    * attributed to its owning terminal. Emitted on the SAME `onEvent` seam as the
@@ -1598,6 +1625,8 @@ export class TerminalService {
       fgEmitted: "idle",
       lastActivity: Date.now(),
       activeSince: undefined,
+      // CAPP-132 — fresh (empty) OUTPUTS turn buffer per spawn (reset-on-spawn).
+      derivedOutputs: newTurnBuffer(),
     }
     this.headless.set(id, entry)
 
@@ -2007,9 +2036,15 @@ export class TerminalService {
     if (fragment) this.captureOutput(entry.id, fragment)
 
     switch (event.kind) {
+      case "tool_use":
+        entry.foregroundActive = true
+        this.markActiveHeadless(entry)
+        // CAPP-132 — DERIVE a file draft from a Write/Edit/NotebookEdit tool_use into
+        // this turn's buffer (coalesced + first-touch order; flushed at `result`).
+        this.deriveFileOutput(entry, event)
+        break
       case "assistant_delta":
       case "thinking_delta":
-      case "tool_use":
       case "tool_result":
         entry.foregroundActive = true
         this.markActiveHeadless(entry)
@@ -2065,6 +2100,10 @@ export class TerminalService {
         // cumulative, which excludes pre-resume history). REUSE extractCost/toPerTurnCost —
         // never a forked copy of the math. `totalTokens` is already per-turn (top-level usage).
         this.emitTurnCost(entry, event)
+        // CAPP-132 — flush this turn's DERIVED OUTPUTS as ONE batch (files in touch
+        // order, then links from the final text), right AFTER the cost emit and BEFORE
+        // the queue flush (order: cost → outputs → queue-flush). Never a blocking gate.
+        this.emitTurnOutputs(entry, event)
         // CAPP-130 — the foreground turn ended: auto-flush ONE queued message FIFO.
         // Deferred a tick (avoids re-entrancy inside this handler). NEVER flush while a
         // permission is still pending at result-time (stdin would buffer unread); the
@@ -2105,6 +2144,58 @@ export class TerminalService {
       costUsd: perTurn.costUsd,
       totalTokens: perTurn.totalTokens,
     })
+  }
+
+  /**
+   * CAPP-132 — derive a FILE draft from a Write/Edit/NotebookEdit tool_use into the
+   * terminal's current turn buffer. `event.input` is `unknown` (the raw tool args), so
+   * we read `file_path`/`notebook_path` DEFENSIVELY — a missing/non-string field is
+   * skipped (never throws). The same path touched twice in a turn coalesces to ONE draft
+   * (addFileTouch keeps first-touch order). Other tool names are ignored (deliverables,
+   * not a play-by-play of every tool call).
+   */
+  private deriveFileOutput(entry: HeadlessTerminal, event: StreamEvent): void {
+    if (event.kind !== "tool_use") return
+    if (event.name !== "Write" && event.name !== "Edit" && event.name !== "NotebookEdit") return
+    const input = event.input
+    if (!input || typeof input !== "object") return
+    const rec = input as Record<string, unknown>
+    const filePath = rec.file_path ?? rec.notebook_path
+    if (!entry.derivedOutputs) entry.derivedOutputs = newTurnBuffer()
+    addFileTouch(entry.derivedOutputs, filePath)
+  }
+
+  /**
+   * CAPP-132 — at a turn's `result`, FLUSH the whole turn buffer into ONE `{type:"output"}`
+   * batch (files in touch order, then links extracted from the final assistant text, minus
+   * anything an explicit post suppressed; per-turn noise caps applied). Then RESET the buffer
+   * (reset-after-flush). Emits nothing when the turn produced no deliverables.
+   */
+  private emitTurnOutputs(entry: HeadlessTerminal, event: StreamEvent): void {
+    if (event.kind !== "result") return
+    const buf = entry.derivedOutputs ?? newTurnBuffer()
+    const resultText = typeof event.result === "string" ? event.result : ""
+    const drafts = flushTurn(buf, resultText)
+    entry.derivedOutputs = newTurnBuffer() // reset for the next turn
+    if (drafts.length > 0) this.emitEvent({ type: "output", id: entry.id, outputs: drafts })
+  }
+
+  /**
+   * CAPP-132 — the EXPLICIT `post_output` path (design §4.B), routed here by the MCP tool.
+   * (a) Forwards the entry IMMEDIATELY on the same `{type:"output"}` seam, so an agent post
+   * appears MID-turn (not deferred to `result`), and (b) records its dedupe key in the current
+   * turn buffer's suppress set so the result-flush DROPS a matching derived draft (explicit
+   * beats derived — the agent's title wins). Works for xterm terminals too (they have no
+   * headless entry / turn buffer, so only the forward happens — path B only, per the design).
+   */
+  postExplicitOutput(terminalId: string, entry: RailOutputDraft): boolean {
+    const h = this.headless.get(terminalId)
+    if (h) {
+      if (!h.derivedOutputs) h.derivedOutputs = newTurnBuffer()
+      suppressDerived(h.derivedOutputs, entry)
+    }
+    this.emitEvent({ type: "output", id: terminalId, outputs: [entry] })
+    return true
   }
 
   /**

@@ -7,6 +7,7 @@ import type {
   AgentCatalog,
   StreamEvent,
   QueuedAgentInput,
+  RailOutput,
 } from "../electron/services/streamProtocol"
 // CAPP-113 — the config-extensible model option derivation (pure, zero-dep) + the
 // built-in alias list, shared with the picker so the effective list can't drift.
@@ -50,6 +51,7 @@ import { useSplitView } from "./hooks/useSplitView"
 import { useOverlays } from "./hooks/useOverlays"
 import { useTheme } from "./hooks/useTheme"
 import { useAgentRail } from "./hooks/useAgentRail"
+import { useSessionOutputs } from "./hooks/useSessionOutputs"
 import { railCostFromTerminal } from "./lib/agentRail"
 import { sumSessionsCost } from "./lib/costRollup"
 import { usePanels, type PanelState } from "./hooks/usePanels"
@@ -238,6 +240,17 @@ declare global {
       onConfigModelsChanged: (callback: (models: any) => void) => void
       // Agent Rail (v1) — persist the rail's open/collapsed pref (GLOBAL).
       setAgentRailOpen: (open: boolean) => Promise<void>
+      // CAPP-132 — the Agent Rail OUTPUTS feed (per work session): pull the current FIFO
+      // snapshot, subscribe to live changes, remove one entry / clear all, and the row
+      // open/reveal actions (main-side restricted to http/https URLs / existing paths).
+      getSessionOutputs: (sessionId: string) => Promise<RailOutput[]>
+      removeSessionOutput: (sessionId: string, outputId: string) => Promise<void>
+      clearSessionOutputs: (sessionId: string) => Promise<void>
+      onSessionOutputsChanged: (
+        callback: (sessionId: string, outputs: RailOutput[]) => void,
+      ) => (() => void) | void
+      openExternalUrl: (url: string) => Promise<{ ok: boolean; error?: string }>
+      revealPath: (path: string) => Promise<{ ok: boolean }>
       // Window controls (frameless)
       windowMinimize: () => void
       windowMaximize: () => void
@@ -452,6 +465,13 @@ export default function App() {
     () => railCostFromTerminal(activeTerminalForRail),
     [activeTerminalForRail],
   )
+  // CAPP-132 — the OUTPUTS feed is SESSION-scoped (all the active session's terminals),
+  // unlike NOW/COST which are active-terminal-scoped. Pull + subscribe per active session.
+  const {
+    outputs: railOutputs,
+    remove: removeRailOutput,
+    clear: clearRailOutputs,
+  } = useSessionOutputs(activeSessionId)
 
   // BO-10 — the stop/interrupt handbrake: kill + resume the SAME conversation. The
   // respawn mints a new terminal id, so re-point the active selection at it (like
@@ -1270,6 +1290,9 @@ export default function App() {
         busy={railBusy}
         activity={activeTerminalForRail?.activity}
         cost={railCost}
+        outputs={railOutputs}
+        onRemoveOutput={removeRailOutput}
+        onClearOutputs={clearRailOutputs}
       />
     </div>
   )

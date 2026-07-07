@@ -385,6 +385,67 @@ test("Agent Rail (v1): renders, toggles open/closed, and the COST footer sums a 
   expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
 })
 
+test("Agent Rail OUTPUTS (CAPP-132): a DERIVED file + link land in the feed; ✕ removes one", async () => {
+  // CAPP-132 — the OUTPUTS section captures DELIVERABLES with zero agent cooperation:
+  // a Write/Edit tool_use derives a file entry, and a markdown link in the turn's result
+  // text derives a link entry. Both fake sentinels already exist: __TOOLS_TURN__ emits an
+  // Edit of src/x.ts (→ file "x.ts"), and a normal turn's result carries
+  // "[the docs](https://example.com)" (→ link "the docs"). Assert the section is ABSENT
+  // until a deliverable lands, both entries then render (file then link, FIFO), and the
+  // row ✕ removes one. All hermetic (fakeStream — no real claude.exe).
+  tempHome = await mkdtemp(join(tmpdir(), "claudetui-rail-outputs-"))
+  await seedStructuredConfig(tempHome)
+
+  app = await _electron.launch({
+    args: [".", `--user-data-dir=${join(tempHome, "electron-data")}`],
+    env: { ...process.env, USERPROFILE: tempHome, CLAUDETUI_FAKE_STREAM: "1", CI: "1" },
+  })
+
+  const win: Page = await app.firstWindow()
+  const pageErrors: string[] = []
+  win.on("pageerror", (err) => pageErrors.push(String(err)))
+
+  await win.waitForSelector("#root", { timeout: 30_000 })
+  await expect(win.locator(".sidebar-brand")).toContainText("ClaudeTUI", { timeout: 30_000 })
+
+  // The OUTPUTS section is ABSENT entirely until the first deliverable (calm rail).
+  await expect(win.locator(".agent-rail-outputs")).toHaveCount(0)
+
+  await win.locator(".sidebar-action", { hasText: "+ New session" }).click()
+  const composer = win.locator(".agent-composer textarea")
+  await expect(composer).toBeVisible({ timeout: 15_000 })
+
+  // Turn 1 — a tools turn writes src/x.ts → a DERIVED file entry titled by its basename.
+  await composer.fill("__TOOLS_TURN__")
+  await composer.press("Enter")
+  const outputs = win.locator(".agent-rail-outputs")
+  await expect(outputs.locator(".agent-rail-output-title", { hasText: "x.ts" })).toBeVisible({
+    timeout: 15_000,
+  })
+
+  // Turn 2 — a normal turn whose result carries a markdown link → a DERIVED link entry.
+  await composer.fill("hi")
+  await composer.press("Enter")
+  await expect(outputs.locator(".agent-rail-output-title", { hasText: "the docs" })).toBeVisible({
+    timeout: 15_000,
+  })
+
+  // Both entries are in the feed (file + link), with their kind glyphs + open/reveal actions.
+  await expect(outputs.locator(".agent-rail-output")).toHaveCount(2, { timeout: 15_000 })
+  await expect(outputs.locator(".agent-rail-outputs-count")).toContainText("2")
+
+  // Remove the file entry via its ✕ — the feed drops to a single (link) row.
+  await outputs
+    .locator(".agent-rail-output", { hasText: "x.ts" })
+    .locator(".agent-rail-output-remove")
+    .click()
+  await expect(outputs.locator(".agent-rail-output")).toHaveCount(1, { timeout: 15_000 })
+  await expect(outputs.locator(".agent-rail-output-title", { hasText: "x.ts" })).toHaveCount(0)
+  await expect(outputs.locator(".agent-rail-output-title", { hasText: "the docs" })).toBeVisible()
+
+  expect(pageErrors, `uncaught renderer errors:\n${pageErrors.join("\n")}`).toEqual([])
+})
+
 test("structured engine: both split panes render a usable composer (not blank xterm)", async () => {
   tempHome = await mkdtemp(join(tmpdir(), "claudetui-structured-split-"))
   await seedStructuredConfig(tempHome)
