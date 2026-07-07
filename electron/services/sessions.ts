@@ -256,6 +256,14 @@ export interface TerminalLike {
   abortPendingPermissionAndDrain(id: string, message: string): Promise<boolean>
   kill(id: string): boolean
   write(id: string, data: string): void
+  /** CAPP-130 — the current queued-composer-input snapshot (empty when none). The
+   *  respawn seam snapshots it BEFORE kill (kill drops the queue) so it can be carried
+   *  onto the fresh id. Optional so test mocks that don't model queuing can omit it. */
+  getAgentQueue?(id: string): import("./streamProtocol").QueuedAgentInput[]
+  /** CAPP-130 — carry a terminal's queue across a respawn re-point onto the fresh id
+   *  (queued messages survive interrupt/restart/switch/handoff). `carried` is an
+   *  optional pre-kill snapshot for the kill-before-spawn seam. Optional for test mocks. */
+  transferAgentQueue?(oldId: string, newId: string, carried?: import("./streamProtocol").QueuedAgentInput[]): void
   getOutput(id: string, maxChars?: number): string | null
   onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo" | "renamed" | "stream" | "background"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string; name?: string; event?: unknown }) => void): () => void
 }
@@ -668,6 +676,10 @@ export class SessionService {
       ? this.terminals.createHeadless(undefined, old.cwd, s.id, undefined, undefined, old.model, old.effort, old.ultracode)
       : this.terminals.create(undefined, old.cwd, s.id)
     s.terminals.push({ id: info.id, name: info.name, cwd: info.cwd, lastState: info.state as TerminalRef["lastState"], engine: info.engine, model: info.model, effort: info.effort, ultracode: info.ultracode })
+    // CAPP-130 — carry queued composer messages onto the continued terminal (queued
+    // messages survive a handoff — "the user still wants it said"). The replacement is
+    // already spawned, so transfer the LIVE queue before the kill drops it.
+    this.terminals.transferAgentQueue?.(terminalId, info.id)
     this.terminals.kill(terminalId)
     old.lastState = "dead"
     s.status = "active"
@@ -1035,12 +1047,21 @@ export class SessionService {
     ultracode: boolean | undefined,
   ): { id: string; name: string; cwd: string; state: string; engine?: RenderingEngine; model?: string; effort?: string; ultracode?: boolean } {
     const cc = ref.ccConversationId
-    this.terminals!.kill(ref.id)
+    const oldId = ref.id
+    // CAPP-130 — carry any queued composer messages across the respawn. kill() drops the
+    // queue, so snapshot it BEFORE the kill and re-install it onto the fresh id after the
+    // spawn (queued messages survive interrupt/restart/model-switch/engine-switch).
+    const carriedQueue = this.terminals!.getAgentQueue?.(oldId)
+    this.terminals!.kill(oldId)
     const info =
       targetEngine === "structured"
         ? this.terminals!.createHeadless(ref.name, ref.cwd, s.id, cc, undefined, model, effort, ultracode)
         : this.terminals!.createXterm(ref.name, ref.cwd, s.id, cc, model, effort, ultracode)
     ref.id = info.id
+    // CAPP-130 — transfer onto the fresh id (flushes the head onto the fresh idle proc).
+    if (carriedQueue && carriedQueue.length) {
+      this.terminals!.transferAgentQueue?.(oldId, info.id, carriedQueue)
+    }
     ref.lastState = info.state as TerminalRef["lastState"]
     ref.engine = info.engine
     // PRESERVE the last structured model+effort across an xterm round-trip: an xterm

@@ -5767,6 +5767,59 @@ body {
 }
 .composer-chip-x:hover { color: var(--red); }
 
+/* CAPP-130 — queued messages (typed while the agent is busy). A statically-visible
+   FIFO stack above the input; every control shown at rest (no hover-reveal). Reuses
+   the attachment-chip tokens with a faint accent tint so "waiting to send" reads
+   distinct from an attachment. */
+.composer-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin-bottom: var(--s-1);
+}
+.composer-queue-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: 12px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--r-sm);
+  padding: 3px 8px;
+}
+.composer-queue-index {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  min-width: 12px;
+  text-align: center;
+}
+.composer-queue-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-queue-attach {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.composer-queue-x {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+.composer-queue-x:hover { color: var(--red); }
+
 .composer-row {
   display: flex;
   align-items: flex-end;

@@ -3,15 +3,9 @@ import type { BrowserWindow } from "electron"
 import type { TerminalService } from "../services/terminals"
 import {
   TERMINAL_STREAM_CHANNEL,
-  agentMessageFromInput,
   type TerminalStreamPayload,
   type PermissionDecision,
 } from "../services/streamProtocol"
-import {
-  classifySlashInput,
-  UI_SLASH_COMMAND_CHANNEL,
-  type UiSlashCommandPayload,
-} from "../services/slashCommands"
 
 export function registerTerminalHandlers(deps: {
   sessionService: TerminalService
@@ -57,42 +51,27 @@ export function registerTerminalHandlers(deps: {
       sessionService.searchOutput(query, sessionId, limit),
   )
 
-  // BO-3 — the AgentComposer's human→agent input: fold { text, attachments } into
-  // a structured user message and route it to the headless stdin sink (NOT a PTY
-  // write). `send` (fire-and-forget) parity with terminal:write.
-  //
-  // BO-7 — intercept native-mapped built-in slash commands HERE, before folding for
-  // stdin. A "native" route fires an existing app affordance (via the renderer
-  // ui:slash-command event) instead of forwarding literal text to Claude; every
-  // other input — Claude built-ins (/clear, /compact, /context), skills, plugin
-  // skills, custom commands, and ordinary prose — forwards UNCHANGED (the slash is
-  // preserved) so Claude expands it itself.
-  //
-  // BO-6 HOOK (CAPP-40): `/model` is deliberately NOT a native route (see
-  // classifySlashInput) — the model picker + per-terminal --model is BO-6's. It
-  // currently passes through to Claude; BO-6 adds its `model` branch in the
-  // classifier and a matching arm in the renderer's ui:slash-command handler.
+  // BO-3 / CAPP-130 — the AgentComposer's human→agent input. THE SERVICE DECIDES:
+  // submitAgentInput queues the raw payload when the foreground turn is busy (or parked
+  // on a permission), else submits it immediately through the shared path — which folds
+  // { text, attachments } into a structured user message for the stdin sink OR fires a
+  // native-mapped app affordance (/config, /resume) via the renderer ui:slash-command
+  // event. Centralizing the queue/route decision in the service kills the renderer↔
+  // service race (the turn ending between the renderer's busy check and this IPC
+  // arriving) and lets the auto-flush reuse the EXACT same submit path a fresh send does.
+  // This handler is now a thin wrapper; `send` (fire-and-forget) parity with terminal:write.
   ipcMain.on(
     "agent:send-input",
     (_e, terminalId: string, msg: { text?: string; attachments?: string[] }) => {
-      const route = classifySlashInput(msg?.text ?? "")
-      if (route.kind === "native") {
-        if (!win.isDestroyed()) {
-          const payload: UiSlashCommandPayload = { command: route.command, terminalId }
-          win.webContents.send(UI_SLASH_COMMAND_CHANNEL, payload)
-        }
-        return
-      }
-      // BO-10 — never write to a stdin the agent can't read. While a permission
-      // prompt blocks the turn (the synchronous approve_tool MCP call), stdin is
-      // QUEUED unread — so a "sent" message would silently buffer and look lost
-      // (the dogfooding bug). The renderer disables Send on the same busy signal
-      // and keeps the text in the composer; this is the backend safety net. (Only
-      // the COMPOSER path is gated — handoff injects via
-      // TerminalService.write/sendAgentMessage directly and is unaffected.)
-      if (sessionService.hasPendingPermission(terminalId)) return
-      sessionService.sendAgentMessage(terminalId, agentMessageFromInput(msg ?? {}))
+      sessionService.submitAgentInput(terminalId, msg ?? {})
     },
+  )
+
+  // CAPP-130 — the composer's queued-message accessors: pull the current queue (on
+  // mount / terminal switch) and remove one item by its queued id (the chip's ✕).
+  ipcMain.handle("terminal:get-agent-queue", (_e, id: string) => sessionService.getAgentQueue(id))
+  ipcMain.handle("terminal:remove-queued-input", (_e, id: string, queuedId: string) =>
+    sessionService.removeQueuedInput(id, queuedId),
   )
 
   // BO-7 — the structured composer's `/`-picker catalog (slash commands + skills),

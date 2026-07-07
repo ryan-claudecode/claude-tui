@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import SlashCommandPicker from "./SlashCommandPicker"
+import QueuedMessages from "./QueuedMessages"
 import { useSlashPicker } from "../hooks/useSlashPicker"
+import { useAgentQueue } from "../hooks/useAgentQueue"
 import AgentModelPicker from "./AgentModelPicker"
 import AgentEffortPicker from "./AgentEffortPicker"
 import AgentUltracodeToggle from "./AgentUltracodeToggle"
@@ -42,6 +44,16 @@ export function dictationProgressLabel(p: SttProgress | null): string {
 export function dictationProgressPct(p: SttProgress | null): number {
   if (!p || p.phase !== "downloading" || !p.totalBytes || p.totalBytes <= 0) return 0
   return Math.max(0, Math.min(100, Math.round(((p.receivedBytes ?? 0) / p.totalBytes) * 100)))
+}
+
+/**
+ * CAPP-130 — the primary button's disabled predicate: enabled only when there's real
+ * content to submit (text OR ≥1 attachment). Independent of `busy` — while busy the
+ * button reads "Queue" and still submits (the service enqueues), so attachment-only
+ * queuing works exactly like an attachment-only send. Pure + exported for unit tests.
+ */
+export function composerSubmitDisabled(text: string, attachments: string[]): boolean {
+  return !text.trim() && attachments.length === 0
 }
 
 interface Props {
@@ -118,6 +130,11 @@ export default function AgentComposer({
   const [stopping, setStopping] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
+
+  // CAPP-130 — the per-terminal queue of messages typed while the agent was busy.
+  // They auto-flush FIFO (one per turn) backend-side; this surfaces them as removable
+  // chips above the input and drives the "N queued" hint.
+  const { queue, remove: removeQueued } = useAgentQueue(terminalId)
 
   // CAPP-120 (STT-1) — push-to-talk dictation. The mic inserts transcribed text at the
   // caret (never auto-submits); the model downloads on first enable via the inline overlay.
@@ -206,11 +223,11 @@ export default function AgentComposer({
   }, [text])
 
   const send = useCallback(() => {
-    // BO-10 — never send while busy: the message would write into a stdin the
-    // parked turn can't read (it buffers unread), so the composer would falsely
-    // report "sent". Stop the agent first. The button is disabled too; this guards
-    // the Enter path.
-    if (busy) return
+    // CAPP-130 — ALWAYS submit: the SERVICE decides queue-vs-send (send-while-busy
+    // enqueues, and the queue auto-flushes FIFO when the turn ends). This kills the
+    // old renderer↔service race (the BO-10 "never send while busy" guard is gone).
+    // Clearing the composer on queue works exactly like on send — the message now lives
+    // in the queue chip.
     const trimmed = text.trim()
     if (!trimmed && attachments.length === 0) return
     window.api.sendAgentInput(terminalId, { text: trimmed, attachments })
@@ -218,7 +235,7 @@ export default function AgentComposer({
     setAttachments([])
     // Keep focus for the next message.
     requestAnimationFrame(() => taRef.current?.focus())
-  }, [busy, text, attachments, terminalId])
+  }, [text, attachments, terminalId])
 
   // BO-10 — the handbrake. Kill the proc + resume the SAME conversation (the
   // aborted turn is dropped, the chat survives). The respawn mints a new terminal
@@ -616,6 +633,9 @@ export default function AgentComposer({
           stale={picker.stale}
         />
       )}
+      {/* CAPP-130 — queued messages (sent while busy), FIFO, each removable. Statically
+          visible above the input; sends automatically when the agent finishes. */}
+      <QueuedMessages queue={queue} onRemove={removeQueued} />
       {attachments.length > 0 && (
         <div className="composer-attachments">
           {attachments.map((p, i) => (
@@ -641,7 +661,7 @@ export default function AgentComposer({
           rows={1}
           placeholder={
             busy
-              ? "Agent is working — press Stop or Esc to interrupt"
+              ? "Agent is working — Enter to queue your next message (Stop or Esc to interrupt)"
               : "Message the agent…  (Enter to send, Shift+Enter for newline, drop an image to attach)"
           }
           value={text}
@@ -663,12 +683,15 @@ export default function AgentComposer({
         {/* CAPP-124 — the mic sits in the input row, immediately beside Send (the 2026
             chat convention), so first-time dictation is easy to find. Icon-only. */}
         {micAffordance}
+        {/* CAPP-130 — while busy the primary button ENQUEUES (explicit "Queue" label,
+            not a tooltip); enabled whenever there's content, so attachment-only queuing
+            works like an attachment-only send. Stop remains a separate button. */}
         <button
           className="composer-send"
           onClick={send}
-          disabled={busy || (!text.trim() && attachments.length === 0)}
+          disabled={composerSubmitDisabled(text, attachments)}
         >
-          Send
+          {busy ? "Queue" : "Send"}
         </button>
       </div>
       {/* Footer — the persistent hint strip on the LEFT; the session chrome (model +
@@ -681,10 +704,16 @@ export default function AgentComposer({
           NOT be an aria-live status (that would re-announce noisily). */}
       <div className="composer-footer">
         <div
-          className={`composer-hint${busy ? " busy" : ""}`}
-          {...(busy ? { role: "status", "aria-live": "polite" as const } : {})}
+          className={`composer-hint${busy || queue.length > 0 ? " busy" : ""}`}
+          {...(busy || queue.length > 0 ? { role: "status", "aria-live": "polite" as const } : {})}
         >
-          {busy ? (
+          {queue.length > 0 ? (
+            // CAPP-130 — queued-message count. Polite live region (rides the busy hint's
+            // aria treatment), so an enqueue is announced without being noisy.
+            <span className="composer-hint-busy">
+              {queue.length} queued — sends when the agent finishes
+            </span>
+          ) : busy ? (
             <span className="composer-hint-busy">
               {stopping
                 ? "Stopping — restoring the conversation…"

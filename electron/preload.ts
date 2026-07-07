@@ -3,9 +3,11 @@ import {
   TERMINAL_STREAM_CHANNEL,
   PERMISSION_REQUEST_CHANNEL,
   PERMISSION_RESOLVED_CHANNEL,
+  AGENT_QUEUE_CHANGED_CHANNEL,
   type TerminalStreamPayload,
   type PermissionRequest,
   type PermissionDecision,
+  type QueuedAgentInput,
 } from "./services/streamProtocol"
 import type { SttProgress } from "./stt/protocol"
 
@@ -255,6 +257,22 @@ const mainApi = {
   // AgentUserMessage and routes it to the headless stdin sink.
   sendAgentInput: (terminalId: string, msg: { text?: string; attachments?: string[] }) =>
     ipcRenderer.send("agent:send-input", terminalId, msg),
+
+  // CAPP-130 — queued messages. Sending while the agent is busy ENQUEUES the payload
+  // (the service decides); queued items auto-flush FIFO, one per turn, when the
+  // foreground goes idle. getAgentQueue pulls the current FIFO snapshot (on mount /
+  // terminal switch); removeQueuedInput drops one item by its queued id (the chip's ✕);
+  // onAgentQueueChanged pushes the new snapshot per terminal (per-instance disposer,
+  // mirroring onStreamEvent so a composer's listener tears down without clobbering siblings).
+  getAgentQueue: (terminalId: string) => ipcRenderer.invoke("terminal:get-agent-queue", terminalId),
+  removeQueuedInput: (terminalId: string, queuedId: string) =>
+    ipcRenderer.invoke("terminal:remove-queued-input", terminalId, queuedId),
+  onAgentQueueChanged: (callback: (terminalId: string, queue: QueuedAgentInput[]) => void) => {
+    const handler = (_e: unknown, terminalId: string, queue: QueuedAgentInput[]) =>
+      callback(terminalId, queue)
+    ipcRenderer.on(AGENT_QUEUE_CHANGED_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(AGENT_QUEUE_CHANGED_CHANNEL, handler)
+  },
 
   // BO-7 — the structured composer's `/`-picker catalog (slash commands + skills)
   // captured off the headless `init` event. Returns null until init arrives.

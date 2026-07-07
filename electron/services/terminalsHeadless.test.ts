@@ -1978,3 +1978,211 @@ describe("CAPP-131 — renderer terminal:state is FOREGROUND-ONLY (composer Send
     expect(rendererStates(sent, info.id)).toEqual(["active", "idle"])
   })
 })
+
+// ---------------------------------------------------------------------------
+// CAPP-130 — queued messages: send-while-busy ENQUEUES per terminal; the queue
+// auto-flushes FIFO, one per turn, when the foreground goes truly idle. THE
+// SERVICE DECIDES queue-vs-send (kills the renderer↔service race).
+// ---------------------------------------------------------------------------
+
+/** Run all pending microtasks (the deferred flush) + macrotask slack. */
+const tick = () => new Promise((r) => setTimeout(r, 0))
+
+/** The queue-changed snapshots pushed to the renderer for a terminal. */
+const queuePushes = (sent: Array<{ channel: string; args: unknown[] }>, id: string) =>
+  sent
+    .filter((s) => s.channel === "terminal:agent-queue-changed" && s.args[0] === id)
+    .map((s) => s.args[1] as Array<{ id: string; text?: string }>)
+
+/** The private foregroundActive flag for a terminal (read for the flush assertions). */
+const fgActive = (svc: TerminalService, id: string) =>
+  (svc as unknown as { headless: Map<string, { foregroundActive?: boolean }> }).headless.get(id)
+    ?.foregroundActive === true
+
+describe("CAPP-130 queued messages — submitAgentInput queue-vs-send + auto-flush", () => {
+  it("1: submit while GENERATING enqueues + emits a queue-changed snapshot; NOT written to stdin", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const sent = attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`) // mid-turn → foreground busy
+
+    const before = spawned[0].written.length
+    const r = svc.submitAgentInput(info.id, { text: "while busy" })
+    expect(r).toBe("queued")
+    expect(spawned[0].written.length).toBe(before) // NOT sent to stdin
+    expect(svc.getAgentQueue(info.id).map((q) => q.text)).toEqual(["while busy"])
+    // A queue-changed snapshot was pushed to the renderer carrying the item.
+    const pushes = queuePushes(sent, info.id)
+    expect(pushes.at(-1)).toHaveLength(1)
+    expect(pushes.at(-1)![0].text).toBe("while busy")
+  })
+
+  it("2: submit while PERMISSION-PARKED enqueues (busy includes pendingPermission)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`)
+    void svc.requestPermission({ terminalId: info.id, toolName: "Write", toolInput: {} })
+    expect(svc.hasPendingPermission(info.id)).toBe(true)
+
+    const r = svc.submitAgentInput(info.id, { text: "parked" })
+    expect(r).toBe("queued")
+    expect(svc.getAgentQueue(info.id).map((q) => q.text)).toEqual(["parked"])
+  })
+
+  it("3: a `result` while a permission is still pending does NOT flush (stdin would buffer unread)", async () => {
+    const { svc, spawned } = makeHeadlessService()
+    attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`)
+    svc.submitAgentInput(info.id, { text: "held" })
+    void svc.requestPermission({ terminalId: info.id, toolName: "Write", toolInput: {} })
+    const before = spawned[0].written.length
+
+    spawned[0].emitStdout(`${fx.RESULT}\n`) // result WITH a permission still pending
+    await tick()
+
+    expect(spawned[0].written.length).toBe(before) // nothing flushed
+    expect(svc.getAgentQueue(info.id).map((q) => q.text)).toEqual(["held"])
+  })
+
+  it("4: two queued → a `result` flushes exactly ONE (FIFO); the next `result` flushes the second", async () => {
+    const { svc, spawned } = makeHeadlessService()
+    attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`)
+    svc.submitAgentInput(info.id, { text: "first" })
+    svc.submitAgentInput(info.id, { text: "second" })
+
+    spawned[0].emitStdout(`${fx.RESULT}\n`)
+    await tick()
+    expect(spawned[0].written.some((w) => w.includes("first"))).toBe(true)
+    expect(spawned[0].written.some((w) => w.includes("second"))).toBe(false)
+    expect(svc.getAgentQueue(info.id).map((q) => q.text)).toEqual(["second"])
+
+    spawned[0].emitStdout(`${fx.RESULT}\n`)
+    await tick()
+    expect(spawned[0].written.some((w) => w.includes("second"))).toBe(true)
+    expect(svc.getAgentQueue(info.id)).toHaveLength(0)
+  })
+
+  it("5: submit while IDLE sends immediately (the race guard — service decides)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.INIT}\n`) // booted → idle, foreground not busy
+
+    const r = svc.submitAgentInput(info.id, { text: "now" })
+    expect(r).toBe("sent")
+    expect(spawned[0].written.some((w) => w.includes("now"))).toBe(true)
+    expect(svc.getAgentQueue(info.id)).toHaveLength(0)
+  })
+
+  it("6: transferAgentQueue across a respawn re-point preserves order + flushes onto the fresh idle terminal", async () => {
+    const { svc, spawned } = makeHeadlessService()
+    attachFakeWin(svc)
+    const a = svc.createHeadless("a", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`) // A busy
+    svc.submitAgentInput(a.id, { text: "one" })
+    svc.submitAgentInput(a.id, { text: "two" })
+
+    // The fresh respawn target (idle). Transfer A's queue onto B.
+    const b = svc.createHeadless("b", process.cwd())
+    svc.transferAgentQueue(a.id, b.id)
+    await tick() // transfer schedules a head-flush onto the fresh idle B
+
+    expect(svc.getAgentQueue(a.id)).toHaveLength(0) // moved off A
+    expect(spawned[1].written.some((w) => w.includes("one"))).toBe(true) // head booted B
+    expect(svc.getAgentQueue(b.id).map((q) => q.text)).toEqual(["two"]) // order preserved
+  })
+
+  it("7: kill clears the queue (+ emits an empty snapshot)", () => {
+    const { svc, spawned } = makeHeadlessService()
+    const sent = attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`)
+    svc.submitAgentInput(info.id, { text: "doomed" })
+    expect(svc.getAgentQueue(info.id)).toHaveLength(1)
+
+    svc.kill(info.id)
+    expect(svc.getAgentQueue(info.id)).toHaveLength(0)
+    expect(queuePushes(sent, info.id).at(-1)).toEqual([]) // empty snapshot pushed on drop
+  })
+
+  it("8: a flushed message emits the user_message echo + re-arms foregroundActive (rides CAPP-131)", async () => {
+    const { svc, spawned } = makeHeadlessService()
+    const sent = attachFakeWin(svc)
+    const events = collect(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`)
+    svc.submitAgentInput(info.id, { text: "queued turn" })
+
+    spawned[0].emitStdout(`${fx.RESULT}\n`) // foreground idle → schedule flush
+    await tick()
+
+    // The flushed send produces the SAME user_message echo a fresh send does.
+    const echoes = events.filter(
+      (e) => e.type === "stream" && e.event.kind === "user_message",
+    ) as Array<{ event: Extract<StreamEvent, { kind: "user_message" }> }>
+    expect(echoes.some((e) => e.event.text === "queued turn")).toBe(true)
+    // Foreground is live again (the flushed turn), and the renderer saw a fresh 'active'.
+    expect(fgActive(svc, info.id)).toBe(true)
+    expect(sent.filter((s) => s.channel === "terminal:state" && s.args[0] === info.id).map((s) => s.args[1]))
+      .toContain("active")
+  })
+
+  it("9a: a queued NON-native slash payload (/compact) flushes through the SAME intercept path (→ stdin)", async () => {
+    const { svc, spawned } = makeHeadlessService()
+    attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`)
+    svc.submitAgentInput(info.id, { text: "/compact" })
+
+    spawned[0].emitStdout(`${fx.RESULT}\n`)
+    await tick()
+    // /compact is a "send" route (forwarded to Claude) — it lands on stdin, exactly
+    // like a fresh send would route it.
+    expect(spawned[0].written.some((w) => w.includes("/compact"))).toBe(true)
+  })
+
+  it("9b: a NATIVE slash payload (/config) submitted while BUSY bypasses the queue and fires the app affordance immediately", async () => {
+    const { svc, spawned } = makeHeadlessService()
+    const sent = attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`) // foreground busy
+    const before = spawned[0].written.length
+
+    // Natives route to a renderer affordance and never touch stdin — no BO-10 hazard,
+    // so they must NOT wait behind the running turn (pre-queue behavior preserved).
+    expect(svc.submitAgentInput(info.id, { text: "/config" })).toBe("sent")
+    const uiPush = sent.find((s) => s.channel === "ui:slash-command")
+    expect(uiPush).toBeTruthy()
+    expect((uiPush!.args[0] as { command: string }).command).toBe("config")
+    expect(svc.getAgentQueue(info.id)).toHaveLength(0) // nothing queued
+    expect(spawned[0].written.length).toBe(before) // never touched stdin
+
+    // The still-busy turn ends cleanly with nothing to flush.
+    spawned[0].emitStdout(`${fx.RESULT}\n`)
+    await tick()
+    expect(spawned[0].written.length).toBe(before)
+  })
+
+  it("10: removeQueuedInput removes by id, and is a no-op (false) after the item flushed", async () => {
+    const { svc, spawned } = makeHeadlessService()
+    attachFakeWin(svc)
+    const info = svc.createHeadless("t", process.cwd())
+    spawned[0].emitStdout(`${fx.ASSISTANT_TOOL_USE}\n`)
+    svc.submitAgentInput(info.id, { text: "keep" })
+    svc.submitAgentInput(info.id, { text: "drop" })
+    const [keep, drop] = svc.getAgentQueue(info.id)
+
+    expect(svc.removeQueuedInput(info.id, drop.id)).toBe(true)
+    expect(svc.getAgentQueue(info.id).map((q) => q.text)).toEqual(["keep"])
+
+    // Flush "keep", then removing it is a no-op (already gone).
+    spawned[0].emitStdout(`${fx.RESULT}\n`)
+    await tick()
+    expect(svc.getAgentQueue(info.id)).toHaveLength(0)
+    expect(svc.removeQueuedInput(info.id, keep.id)).toBe(false)
+  })
+})

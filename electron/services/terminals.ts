@@ -17,15 +17,23 @@ import {
   DEFAULT_MODEL,
   ULTRACODE_SETTINGS,
   userMessage,
+  agentMessageFromInput,
+  AGENT_QUEUE_CHANGED_CHANNEL,
   PERMISSION_PROMPT_TOOL,
   PERMISSION_REQUEST_CHANNEL,
   PERMISSION_RESOLVED_CHANNEL,
   type StreamEvent,
   type AgentUserMessage,
   type AgentCatalog,
+  type QueuedAgentInput,
   type PermissionRequest,
   type PermissionDecision,
 } from "./streamProtocol"
+import {
+  classifySlashInput,
+  UI_SLASH_COMMAND_CHANNEL,
+  type UiSlashCommandPayload,
+} from "./slashCommands"
 
 /**
  * Encode an absolute cwd into the directory name Claude Code uses under
@@ -853,6 +861,18 @@ export class TerminalService {
   private headless = new Map<string, HeadlessTerminal>()
 
   /**
+   * CAPP-130 — per-terminal QUEUE of composer submissions typed while the
+   * foreground turn is busy. Holds the RAW payload (text/attachments), NOT a built
+   * AgentUserMessage, so a flushed item re-routes through the EXACT same submit path
+   * a fresh send does ({@link submitAgentInputNow}: slash-command classification +
+   * message-building). Auto-flushed FIFO, one per turn, at each `result` once the
+   * foreground is truly idle and no permission is parked. In-memory only (a restart
+   * drops it — auto-firing queued turns at launch would surprise the user). Dropped
+   * on kill/teardown; transferred across a respawn re-point ({@link transferAgentQueue}).
+   */
+  private agentQueues = new Map<string, QueuedAgentInput[]>()
+
+  /**
    * BO-3 — pending tool-permission prompts, keyed by request id. Mirrors
    * PanelService.pendingForms: the approve_tool MCP call stays open on this
    * resolver until the user decides (or the terminal exits → reject as deny).
@@ -1662,6 +1682,10 @@ export class TerminalService {
     }
     this.headless.delete(id)
     this.outputBuffers.delete(id)
+    // CAPP-130 — a killed/exited terminal drops its queue (a respawn snapshots it
+    // BEFORE the kill and re-installs onto the fresh id, so an interrupt/restart still
+    // preserves it — see transferAgentQueue).
+    this.dropAgentQueue(id)
     this.invalidateIdentityTokens(id)
     this._assigner?.cancel(id)
     this.emitEvent({ type: "exit", id })
@@ -1697,6 +1721,169 @@ export class TerminalService {
     entry.foregroundActive = true
     this.markActiveHeadless(entry)
     return true
+  }
+
+  // -------------------------------------------------------------------------
+  // CAPP-130 — queued composer input. Send-while-busy ENQUEUES (per terminal);
+  // queued messages auto-flush FIFO, one per turn, when the foreground goes idle.
+  // -------------------------------------------------------------------------
+
+  /**
+   * CAPP-130 — the ONE entry point for a composer submission (the `agent:send-input`
+   * IPC calls this). THE SERVICE DECIDES queue-vs-send, which kills the renderer↔
+   * service race where the turn ends between the renderer's busy check and the IPC
+   * arriving: if the FOREGROUND is busy (`foregroundActive` OR a parked permission —
+   * the exact window from the stdin write to the turn's `result`/permission park),
+   * the raw payload is ENQUEUED and a queue-changed event is emitted (returns
+   * "queued"); otherwise it submits immediately through the shared path (returns
+   * "sent", or false when the terminal is gone / the write fails).
+   *
+   * NATIVE slash commands (/config, /resume) BYPASS the queue entirely and fire
+   * immediately even while busy: they route to a renderer app affordance and never
+   * touch stdin, so the BO-10 buffer-unread hazard doesn't apply — and delaying
+   * "open the config UI" to the end of a turn would be a pointless regression from
+   * the pre-queue behavior (the old IPC handler fired them regardless of busy).
+   * (flushAgentQueue keeps its native-drain branch as forward-compat defense: if a
+   * command's classification changes to native while items sit queued, the flush
+   * still drains it without stranding the rest of the queue.)
+   */
+  submitAgentInput(id: string, payload: { text?: string; attachments?: string[] }): "sent" | "queued" | false {
+    if (classifySlashInput(payload?.text ?? "").kind === "native") {
+      return this.submitAgentInputNow(id, payload) === false ? false : "sent"
+    }
+    const entry = this.headless.get(id)
+    const foregroundBusy = (entry?.foregroundActive === true) || this.hasPendingPermission(id)
+    if (entry && entry.state !== "dead" && foregroundBusy) {
+      this.enqueueAgentInput(id, payload)
+      return "queued"
+    }
+    return this.submitAgentInputNow(id, payload) === false ? false : "sent"
+  }
+
+  /**
+   * CAPP-130 — the SHARED submit path both a fresh send and a queue flush funnel
+   * through, so a queued item routes EXACTLY like a fresh one. Classifies the input
+   * first (BO-7): a native-mapped built-in (/config, /resume) fires the renderer app
+   * affordance via `ui:slash-command` and does NOT touch stdin ("native"); everything
+   * else — Claude built-ins, skills, custom commands, prose — is folded into a
+   * structured user message and written to the stdin sink ("sent"). Returns false
+   * when the message could not be sent (unknown/dead terminal). Previously lived in
+   * the `agent:send-input` IPC handler; centralized here so the flush can reuse it.
+   */
+  private submitAgentInputNow(id: string, payload: { text?: string; attachments?: string[] }): "sent" | "native" | false {
+    const route = classifySlashInput(payload?.text ?? "")
+    if (route.kind === "native") {
+      const p: UiSlashCommandPayload = { command: route.command, terminalId: id }
+      this.sendToRenderer(UI_SLASH_COMMAND_CHANNEL, p)
+      return "native"
+    }
+    return this.sendAgentMessage(id, agentMessageFromInput(payload ?? {})) ? "sent" : false
+  }
+
+  /** CAPP-130 — append a raw payload to a terminal's queue + emit the changed snapshot. */
+  private enqueueAgentInput(id: string, payload: { text?: string; attachments?: string[] }): void {
+    const item: QueuedAgentInput = {
+      id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text: payload?.text,
+      attachments: payload?.attachments && payload.attachments.length ? [...payload.attachments] : undefined,
+      queuedAt: Date.now(),
+    }
+    const q = this.agentQueues.get(id) ?? []
+    q.push(item)
+    this.agentQueues.set(id, q)
+    this.emitAgentQueueChanged(id)
+  }
+
+  /** CAPP-130 — the current queued-input snapshot for a terminal (a copy; empty when
+   *  none). Backs the `terminal:get-agent-queue` pull the composer does on mount/switch. */
+  getAgentQueue(id: string): QueuedAgentInput[] {
+    return (this.agentQueues.get(id) ?? []).map((x) => ({ ...x }))
+  }
+
+  /** CAPP-130 — remove ONE queued item by its queued id. Returns false when the item
+   *  is unknown (already flushed / removed) — a safe no-op, so removing a mid-flight
+   *  item that just flushed does nothing. Emits queue-changed when it removes. */
+  removeQueuedInput(id: string, queuedId: string): boolean {
+    const q = this.agentQueues.get(id)
+    if (!q) return false
+    const i = q.findIndex((x) => x.id === queuedId)
+    if (i < 0) return false
+    q.splice(i, 1)
+    if (q.length === 0) this.agentQueues.delete(id)
+    this.emitAgentQueueChanged(id)
+    return true
+  }
+
+  /** CAPP-130 — emit the foreground-renderer queue-changed push for a terminal. */
+  private emitAgentQueueChanged(id: string): void {
+    this.sendToRenderer(AGENT_QUEUE_CHANGED_CHANNEL, id, this.getAgentQueue(id))
+  }
+
+  /** CAPP-130 — drop a terminal's queue (kill/teardown). Emits an (empty) snapshot
+   *  only if there was something to drop, so a plain kill of a queue-less terminal is
+   *  byte-quiet. */
+  private dropAgentQueue(id: string): void {
+    if (!this.agentQueues.has(id)) return
+    this.agentQueues.delete(id)
+    this.emitAgentQueueChanged(id)
+  }
+
+  /**
+   * CAPP-130 — carry a terminal's queue across a respawn re-point (Stop/interrupt,
+   * restart, model/effort/ultracode switch, engine switch, handoff — each mints a NEW
+   * terminal id and SessionService re-points the ref in place). Queued messages SURVIVE
+   * the respawn ("the user still wants it said"). Moves queue[oldId] → queue[newId] and
+   * flushes the head onto the fresh idle terminal (the fresh `claude -p` is dormant until
+   * stdin, so booting it with the queued message is the fire-and-forget the owner wants).
+   *
+   * `carried` is an OPTIONAL pre-captured snapshot for the seam where the respawn kill
+   * runs BEFORE the new spawn (respawnRefWithEngine): kill() drops queue[oldId], so that
+   * seam snapshots the queue with getAgentQueue() before the kill and passes it here. The
+   * handoff seam (spawn-before-kill) passes no snapshot and this reads the live queue[oldId].
+   */
+  transferAgentQueue(oldId: string, newId: string, carried?: QueuedAgentInput[]): void {
+    const q = carried ?? this.agentQueues.get(oldId) ?? []
+    if (this.agentQueues.has(oldId)) {
+      this.agentQueues.delete(oldId)
+      this.emitAgentQueueChanged(oldId)
+    }
+    if (q.length === 0 || oldId === newId) return
+    const existing = this.agentQueues.get(newId) ?? []
+    this.agentQueues.set(newId, [...existing, ...q.map((x) => ({ ...x }))])
+    this.emitAgentQueueChanged(newId)
+    // Boot the fresh idle terminal with the head (dormant-until-stdin fire-and-forget).
+    this.scheduleAgentQueueFlush(newId)
+  }
+
+  /**
+   * CAPP-130 — defer a flush past the current stream-event processing (queueMicrotask)
+   * to avoid re-entrancy inside {@link onStructuredEvent}. Test-observable: awaiting a
+   * tick (`await Promise.resolve()` / a 0ms timeout) runs the pending flush.
+   */
+  private scheduleAgentQueueFlush(id: string): void {
+    queueMicrotask(() => this.flushAgentQueue(id))
+  }
+
+  /**
+   * CAPP-130 — flush ONE queued message FIFO, if the terminal is live, the foreground
+   * is truly idle, and no permission is parked (writing to a permission-parked stdin
+   * would buffer unread — the BO-10 reason this was blocked). A flushed "send" flips
+   * `foregroundActive` true again, so the NEXT `result` flushes the next item (one per
+   * turn). A flushed "native" command starts no turn, so we drain the next head too.
+   */
+  private flushAgentQueue(id: string): void {
+    const entry = this.headless.get(id)
+    if (!entry || entry.state === "dead") return
+    if (entry.foregroundActive === true || this.hasPendingPermission(id)) return
+    const q = this.agentQueues.get(id)
+    if (!q || q.length === 0) return
+    const next = q.shift()!
+    if (q.length === 0) this.agentQueues.delete(id)
+    this.emitAgentQueueChanged(id)
+    const result = this.submitAgentInputNow(id, { text: next.text, attachments: next.attachments })
+    // A native command (fired an app affordance, no turn started) leaves the foreground
+    // idle → there's no `result` coming to drive the next flush, so drain the next head.
+    if (result === "native") this.scheduleAgentQueueFlush(id)
   }
 
   /** BO-5: is this terminal a HEADLESS (structured) one? Lets callers (e.g.
@@ -1844,6 +2031,14 @@ export class TerminalService {
         // (which, holding active for background, deliberately does NOT re-emit here).
         this.emitForegroundState(entry, "idle")
         this.reconcileHeadless(entry)
+        // CAPP-130 — the foreground turn ended: auto-flush ONE queued message FIFO.
+        // Deferred a tick (avoids re-entrancy inside this handler). NEVER flush while a
+        // permission is still pending at result-time (stdin would buffer unread); the
+        // flush itself re-checks that guard. The flushed send re-arms foregroundActive,
+        // so the next `result` flushes the next item — one message per turn.
+        if (!this.hasPendingPermission(entry.id) && (this.agentQueues.get(entry.id)?.length ?? 0) > 0) {
+          this.scheduleAgentQueueFlush(entry.id)
+        }
         break
       // needs_auth/unknown/user_message carry no activity signal.
     }
@@ -2320,6 +2515,7 @@ export class TerminalService {
     terminal.pty.kill()
     this.terminals.delete(id)
     this.outputBuffers.delete(id)
+    this.dropAgentQueue(id) // CAPP-130 — an xterm terminal has no composer queue, but stay symmetric.
     this.invalidateIdentityTokens(id)
     this._assigner?.cancel(id)
     // Emit the same `exit` event a PTY death would, so every subscriber (session
@@ -2639,6 +2835,7 @@ export class TerminalService {
     this.headless.clear()
     this.terminals.clear()
     this.outputBuffers.clear()
+    this.agentQueues.clear() // CAPP-130 — queues are in-memory only; drop them all on teardown.
     this.identityTokens.clear()
     this._assigner?.dispose()
     if (this.idleTimer) {

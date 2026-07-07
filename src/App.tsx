@@ -6,6 +6,7 @@ import type {
   PermissionDecision,
   AgentCatalog,
   StreamEvent,
+  QueuedAgentInput,
 } from "../electron/services/streamProtocol"
 // CAPP-113 — the config-extensible model option derivation (pure, zero-dep) + the
 // built-in alias list, shared with the picker so the effective list can't drift.
@@ -76,6 +77,12 @@ declare global {
       onStreamEvent: (callback: (payload: TerminalStreamPayload) => void) => () => void
       // BO-3: structured composer input + permission gate
       sendAgentInput: (terminalId: string, msg: { text?: string; attachments?: string[] }) => void
+      // CAPP-130: queued messages (send-while-busy enqueues; auto-flushes one per turn)
+      getAgentQueue: (terminalId: string) => Promise<QueuedAgentInput[]>
+      removeQueuedInput: (terminalId: string, queuedId: string) => Promise<boolean>
+      onAgentQueueChanged: (
+        callback: (terminalId: string, queue: QueuedAgentInput[]) => void,
+      ) => () => void
       // BO-7: structured composer `/`-command picker catalog + native-command bridge
       getAgentCatalog: (terminalId: string) => Promise<(AgentCatalog & { live?: boolean }) | null>
       // CAPP-120 (STT-1): push-to-talk dictation (Parakeet/sherpa-onnx utility process)

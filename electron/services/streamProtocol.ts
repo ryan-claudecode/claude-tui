@@ -330,6 +330,28 @@ export function agentMessageFromInput(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Queued input (CAPP-130) — messages typed while the foreground turn is busy are
+// ENQUEUED per terminal and auto-flushed FIFO, one per turn, when the foreground
+// goes truly idle. The queue holds the RAW composer payload (NOT a built
+// AgentUserMessage) so a flushed item routes through the EXACT same submit path a
+// fresh send does — slash-command classification and message-building included.
+// ---------------------------------------------------------------------------
+
+/** One queued composer submission awaiting flush. `id` is a per-item uuid (the
+ *  remove key + the stable React key for the chip); `text`/`attachments` are the
+ *  raw composer payload; `queuedAt` is the epoch-ms it was enqueued. */
+export interface QueuedAgentInput {
+  id: string
+  text?: string
+  attachments?: string[]
+  queuedAt: number
+}
+
+/** Renderer push channel: a terminal's queued-input list changed. Payload is
+ *  `(terminalId, QueuedAgentInput[])` — the full FIFO snapshot after the change. */
+export const AGENT_QUEUE_CHANGED_CHANNEL = "terminal:agent-queue-changed" as const
+
+// ---------------------------------------------------------------------------
 // Permission contract — FINALIZED in BO-3 against the REAL wire shape captured
 // live (see docs/spikes/bo3-permission-prompt.md + permissionWire.fixtures.ts).
 //
