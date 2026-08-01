@@ -3,6 +3,7 @@ import { homedir } from "node:os"
 import { readFileSync } from "node:fs"
 import { loadVersioned, saveVersioned, type Migration } from "./persist"
 import { DEFAULT_MODEL, MODEL_ALIASES } from "./services/streamProtocol"
+import { tuiPath } from "./paths"
 
 export interface ThemeConfig {
   fontFamily?: string
@@ -371,7 +372,7 @@ export function claudeDefaultEffort(): string | undefined {
   }
 }
 
-const CONFIG_FILE = join(homedir(), ".claude-tui", "config.json")
+const CONFIG_FILE = tuiPath("config.json")
 
 const DEFAULT_CONFIG: TuiConfig = {
   workspaceScanPaths: [

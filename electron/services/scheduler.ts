@@ -1,9 +1,9 @@
 import { readdirSync, rmSync } from "fs"
 import { join } from "path"
-import { homedir } from "os"
 import { logWarn } from "../log"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
 import { computeNextRun, isDue, type Recurrence } from "./scheduleMath"
+import { tuiPath } from "../paths"
 
 export type { Recurrence } from "./scheduleMath"
 
@@ -206,7 +206,7 @@ export class SchedulerService {
 
   constructor(deps: SchedulerDeps, opts: { dir?: string; now?: () => number; maxConcurrent?: number } = {}) {
     this.deps = deps
-    this.dir = opts.dir ?? join(homedir(), ".claude-tui", "schedules")
+    this.dir = opts.dir ?? tuiPath("schedules")
     this.now = opts.now ?? (() => Date.now())
     this.maxConcurrent = opts.maxConcurrent ?? MAX_CONCURRENT_SCHEDULED
     this.loadAll()

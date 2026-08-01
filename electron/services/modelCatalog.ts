@@ -3,6 +3,7 @@ import { homedir } from "os"
 import { join } from "path"
 import { loadVersioned, saveVersioned } from "../persist"
 import { logWarn } from "../log"
+import { tuiPath } from "../paths"
 
 // ---------------------------------------------------------------------------
 // CAPP-133 — the DYNAMIC model catalog.
@@ -53,7 +54,7 @@ export interface ModelCatalog {
   models: CatalogModel[]
 }
 
-const CATALOG_FILE = join(homedir(), ".claude-tui", "model-catalog.json")
+const CATALOG_FILE = tuiPath("model-catalog.json")
 const SCHEMA_VERSION = 1
 
 /** Default staleness window before a background refresh is attempted (6h). */

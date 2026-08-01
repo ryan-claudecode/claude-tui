@@ -1,11 +1,11 @@
 import { spawn } from "child_process"
 import { join, isAbsolute } from "node:path"
-import { homedir } from "node:os"
 import { existsSync, statSync, writeFileSync } from "node:fs"
 import { discoverWorkspaces, canonSeedDir, type DiscoveredManifest, type WorkspaceRepo } from "../workspace/discovery"
 import type { TerminalService, TerminalInfo } from "./terminals"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
 import { logWarn } from "../log"
+import { tuiPath } from "../paths"
 
 /**
  * The durable workspace MODEL (WS-A; single-folder model as of WS-H).
@@ -196,7 +196,7 @@ export class WorkspaceService {
     } = {},
   ) {
     this.sessionService = sessionService
-    this.file = opts.file ?? join(homedir(), ".claude-tui", "workspaces.json")
+    this.file = opts.file ?? tuiPath("workspaces.json")
     this.now = opts.now ?? (() => Date.now())
     this.notify = opts.notify
     this.loadAll()

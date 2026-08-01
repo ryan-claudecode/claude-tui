@@ -6,6 +6,7 @@ Cross-platform desktop app for managing multiple Claude Code sessions. Electron 
 
 ```bash
 npm run dev                # build + launch
+npm run dev:isolated       # HOT-RELOAD dev instance, safe to run ALONGSIDE the packaged app
 npm run build              # build only
 npm test                   # Vitest unit/integration suite — hermetic, fast. THE gate.
 npm run e2e                # Playwright Electron smoke suite (builds first; separate from npm test)
@@ -13,6 +14,8 @@ npm run package            # electron-builder --win dir → dist/win-unpacked (f
 npm run package:desktop    # package + deploy the unpacked app to Desktop\ClaudeTUI (what "build the app" means)
 npm run package:installer  # NSIS installer
 ```
+
+**Iterating without closing your working copy (CAPP-134):** `npm run dev:isolated` re-roots the dev instance's entire durable state to `~/.claude-tui-dev` via `CLAUDE_TUI_HOME` (resolved by `electron/paths.ts` — `tuiHome()`/`tuiPath()`), so it can run at the same time as the packaged app. Renderer edits hot-reload; main-process edits auto-restart only the dev instance. `package:desktop` is then a release step, not part of every iteration. Two instances sharing one root is the thing to avoid — they fight over config/sessions AND over the MCP config handed to spawned agents, which is now written per-instance as `mcp-config-<port>.json` under the instance root (before, a single fixed path meant one app's agents could silently drive the other app's UI).
 
 ## Reference docs — load on demand
 

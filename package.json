@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsc -b && electron-vite build && electron .",
     "dev:watch": "electron-vite dev",
+    "dev:isolated": "node scripts/dev-isolated.mjs",
     "build": "tsc -b && electron-vite build",
     "typecheck": "tsc -b",
     "start": "electron .",

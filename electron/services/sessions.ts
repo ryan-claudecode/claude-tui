@@ -20,6 +20,7 @@ import {
 import type { RenderingEngine } from "../config"
 import { logWarn } from "../log"
 import { loadVersioned, saveVersioned, type Migration } from "../persist"
+import { tuiPath } from "../paths"
 
 /**
  * BO-11 (CAPP-50) — the deny message {@link SessionService.interruptAgent} settles a
@@ -370,7 +371,7 @@ export class SessionService {
   private getModelCatalog: () => readonly { id: string; xhigh: boolean }[]
 
   constructor(opts: SessionServiceOpts = {}) {
-    this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
+    this.dir = opts.dir ?? tuiPath("sessions")
     this.now = opts.now ?? (() => Date.now())
     this.getActiveWorkspaceId = opts.getActiveWorkspaceId ?? (() => undefined)
     this.getActiveWorkspaceDir = opts.getActiveWorkspaceDir ?? (() => undefined)

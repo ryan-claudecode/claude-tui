@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { homedir } from "node:os"
+import { tuiPath } from "./paths"
 
 // Crash-visibility logger for the main process. Appends timestamped lines to
 // ~/.claude-tui/logs/main.log and mirrors them to the console, so a failure
@@ -13,7 +13,7 @@ import { homedir } from "node:os"
 // (the most recent failures are what matter for diagnosing live issues).
 const MAX_LOG_BYTES = 1024 * 1024
 
-let logDir = join(homedir(), ".claude-tui", "logs")
+let logDir = tuiPath("logs")
 
 // Injectable for tests so they never write to the real ~/.claude-tui.
 export function setLogDir(dir: string): void {

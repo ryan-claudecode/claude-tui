@@ -37,6 +37,7 @@ import { resolveSttEnabled, resolveSttHotwords, resolveSchedulerMaxConcurrent } 
 import { syncWindowSchedulePanels } from "./services/schedulePanelSync"
 import { deriveHotwords } from "./stt/hotwords"
 import { collectWorkspaceNames } from "./stt/runtime"
+import { tuiPath } from "./paths"
 
 export const sessionService = new TerminalService()
 export const workspaceService = new WorkspaceService(sessionService)
@@ -146,8 +147,8 @@ export const schedulerService = new SchedulerService({
 // bundle lands beside this one at `out/main/sttWorker.js` (a second electron-vite entry).
 export const sttService = new SttService(
   createSttRuntimeDeps({
-    modelDir: join(homedir(), ".claude-tui", "stt", MODEL_DIRNAME),
-    sttRoot: join(homedir(), ".claude-tui", "stt"),
+    modelDir: tuiPath("stt", MODEL_DIRNAME),
+    sttRoot: tuiPath("stt"),
     workerPath: join(__dirname, "sttWorker.js"),
     logWarn: (m) => logWarn("stt", m),
   }),

@@ -175,14 +175,26 @@ export async function startMcpServer(
   // failure or an invalid bound port so the caller can surface it to the user.
   const port = await listenOnLoopback(httpServer)
 
-  // Write MCP config file for spawned Claude sessions to auto-connect
+  // Write the MCP config file spawned Claude sessions auto-connect through
+  // (`--mcp-config <path>`).
+  //
+  // CAPP-134 — this path MUST be instance-scoped. It used to be a single fixed
+  // `%TEMP%/claudetui/mcp-config.json`, which made two concurrently-running
+  // instances actively DANGEROUS rather than merely messy: whichever booted last
+  // overwrote the file, so sessions spawned by the FIRST instance were handed the
+  // SECOND instance's SSE url — an agent in one app would silently drive the other
+  // app's UI (show panels, focus terminals, post outputs). Living under
+  // {@link tuiHome} makes it fall out of the same CLAUDE_TUI_HOME re-rooting that
+  // isolates the rest of the instance's state, so a dev build can run alongside
+  // the packaged app safely. The port is appended as a belt-and-braces guard for
+  // two instances that somehow share one root.
   const { writeFileSync, mkdirSync } = await import("fs")
   const { join } = await import("path")
-  const { tmpdir } = await import("os")
+  const { tuiHome } = await import("../paths")
 
-  const configDir = join(tmpdir(), "claudetui")
+  const configDir = tuiHome()
   mkdirSync(configDir, { recursive: true })
-  const configPath = join(configDir, "mcp-config.json")
+  const configPath = join(configDir, `mcp-config-${port}.json`)
 
   writeFileSync(
     configPath,
