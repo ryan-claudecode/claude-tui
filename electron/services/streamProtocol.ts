@@ -86,6 +86,7 @@ export const DEFAULT_MODEL = "opus"
 export function resolveModelOptions(
   aliases: readonly string[],
   models?: { extra?: unknown; hidden?: unknown } | null,
+  discovered?: readonly string[] | null,
 ): string[] {
   const clean = (v: unknown): string[] =>
     Array.isArray(v)
@@ -95,7 +96,13 @@ export function resolveModelOptions(
   const hidden = new Set(clean(models?.hidden))
   const out: string[] = []
   const seen = new Set<string>()
-  for (const raw of [...aliases, ...extra]) {
+  // CAPP-133 — order is ALIASES → DISCOVERED (live `/v1/models`, newest-first) →
+  // config `extra`. Aliases stay first because they're the stable, tier-resolving
+  // choice most switches want; discovered ids follow so a NEW model (e.g. a fresh
+  // `claude-opus-5`) is pickable the first time the app sees it, with no code edit
+  // and no config edit. `hidden` still trumps everything, so a user can suppress a
+  // discovered id exactly like a built-in alias.
+  for (const raw of [...aliases, ...clean(discovered), ...extra]) {
     const v = typeof raw === "string" ? raw.trim() : ""
     if (!v || seen.has(v) || hidden.has(v)) continue
     seen.add(v)
@@ -172,9 +179,30 @@ const XHIGH_ID_FAMILIES: readonly string[] = ["opus-4", "fable"]
  *      an ADDITIVE escape hatch so a NEW xhigh-capable model is honored with no code
  *      edit. Empty/absent override changes nothing (byte-identical to the alias-only
  *      behavior), so existing callers/tests are unaffected.
+ *
+ * CAPP-133 — a 4th strategy runs FIRST when a live catalog is supplied: an EXACT id
+ * match in `GET /v1/models` is AUTHORITATIVE, short-circuiting the heuristics in both
+ * directions. This is what makes the gate self-maintaining. The prefix/substring
+ * heuristics are structurally incapable of keeping up:
+ *   - false NEGATIVE — `claude-opus-5` starts with "claude-", not "opus", and does not
+ *     contain "opus-4", so both heuristics missed it and the ultracode toggle was
+ *     hidden for the newest model. (Same for `claude-sonnet-5`.)
+ *   - false POSITIVE — `claude-opus-4-6` contains "opus-4" so it was treated as
+ *     xhigh-capable, but the API reports xhigh as UNSUPPORTED on 4.6.
+ * The catalog fixes both. Aliases (`opus`, `best`) are never in the API's list, so a
+ * catalog MISS is `undefined` ("unknown"), not `false` — it falls through to the
+ * heuristics rather than wrongly reporting no support.
  */
-export function modelSupportsXhigh(model?: string, extraXhigh?: readonly string[]): boolean {
+export function modelSupportsXhigh(
+  model?: string,
+  extraXhigh?: readonly string[],
+  catalog?: readonly { id: string; xhigh: boolean }[] | null,
+): boolean {
   const m = (model && model.trim() ? model : DEFAULT_MODEL).trim().toLowerCase()
+  if (Array.isArray(catalog)) {
+    const hit = catalog.find((c) => typeof c?.id === "string" && c.id.trim().toLowerCase() === m)
+    if (hit) return hit.xhigh === true
+  }
   const extra = Array.isArray(extraXhigh)
     ? extraXhigh.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim().toLowerCase())
     : []

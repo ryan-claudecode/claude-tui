@@ -46,6 +46,12 @@ interface Props {
   modelOptions?: string[]
   /** CAPP-113 — the ADDITIVE config models.xhigh list for each pane's ultracode gate. */
   extraXhigh?: string[]
+
+  /** CAPP-133 — the live `/v1/models` catalog; an exact id match is authoritative
+
+   *  over the xhigh prefix heuristics. Absent -> heuristics only (today's behavior). */
+
+  modelCatalog?: { id: string; xhigh: boolean }[]
   themeMode?: string
   fontFamily?: string
   fontSize?: number
@@ -71,6 +77,8 @@ function PaneContent({
   busy,
   modelOptions,
   extraXhigh,
+
+  modelCatalog,
   themeMode,
   fontFamily,
   fontSize,
@@ -85,6 +93,12 @@ function PaneContent({
   busy?: boolean
   modelOptions?: string[]
   extraXhigh?: string[]
+
+  /** CAPP-133 — the live `/v1/models` catalog; an exact id match is authoritative
+
+   *  over the xhigh prefix heuristics. Absent -> heuristics only (today's behavior). */
+
+  modelCatalog?: { id: string; xhigh: boolean }[]
   themeMode?: string
   fontFamily?: string
   fontSize?: number
@@ -101,6 +115,8 @@ function PaneContent({
         modelOptions={modelOptions}
         resolvedModel={term.resolvedModel}
         extraXhigh={extraXhigh}
+
+        modelCatalog={modelCatalog}
         ccConversationId={term.ccConversationId}
         transcriptCache={transcriptCache}
         transcriptStore={transcriptStore}
@@ -135,6 +151,8 @@ export default function SplitView({
   isTerminalBusy,
   modelOptions,
   extraXhigh,
+
+  modelCatalog,
   themeMode,
   fontFamily,
   fontSize,
@@ -159,6 +177,8 @@ export default function SplitView({
           busy={isTerminalBusy?.(leftId) ?? false}
           modelOptions={modelOptions}
           extraXhigh={extraXhigh}
+
+          modelCatalog={modelCatalog}
           themeMode={themeMode}
           fontFamily={fontFamily}
           fontSize={fontSize}
@@ -180,6 +200,8 @@ export default function SplitView({
           busy={isTerminalBusy?.(rightId) ?? false}
           modelOptions={modelOptions}
           extraXhigh={extraXhigh}
+
+          modelCatalog={modelCatalog}
           themeMode={themeMode}
           fontFamily={fontFamily}
           fontSize={fontSize}

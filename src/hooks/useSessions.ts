@@ -106,6 +106,11 @@ export function useSessions(
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
   const [config, setConfig] = useState<any>(null)
+  // CAPP-133 — the DYNAMIC model catalog (`GET /v1/models`), fetched once on mount
+  // alongside config and kept fresh by the `models:catalog-changed` push. Defaults to
+  // [] so every consumer degrades to the static aliases + heuristics (today's
+  // behavior) when discovery is unavailable.
+  const [modelCatalog, setModelCatalog] = useState<{ id: string; xhigh: boolean }[]>([])
   // CAPP-80 — the transient "RESUMING" section. `resumingSeeds` are the immutable
   // restore seeds (one per startup-restored terminal: stable `${sessionId}::${id}`
   // token + the pre-reopen display name, captured BEFORE reopen mints new live ids).
@@ -128,6 +133,11 @@ export function useSessions(
   // this hook no longer fetches them.)
   useEffect(() => {
     window.api.getConfig().then(setConfig)
+    // Best-effort: a missing/failed catalog leaves the [] default (never blocks mount).
+    window.api
+      .listModels?.()
+      .then((m: any) => setModelCatalog(Array.isArray(m) ? m : []))
+      .catch(() => {})
     window.api.listWorkSessions().then(async (list: WorkSession[]) => {
       setSessions(list)
       if (list.length) {
@@ -223,12 +233,21 @@ export function useSessions(
       setConfig((prev: any) => ({ ...(prev ?? {}), models }))
     })
 
+    // CAPP-133 — push: the model catalog refreshed (boot background fetch, or a
+    // user-triggered "Refresh models"). Same live-update contract as the config
+    // models block: fold it into state so modelOptions recomputes and every mounted
+    // picker + ultracode toggle sees the new models without an app restart.
+    window.api.onModelCatalogChanged?.((models: any) => {
+      setModelCatalog(Array.isArray(models) ? models : [])
+    })
+
     return () => {
       window.api.removeAllListeners("worksession:updated")
       window.api.removeAllListeners("worksession:removed")
       window.api.removeAllListeners("terminal:focus")
       window.api.removeAllListeners("terminal:renamed")
       window.api.removeAllListeners("config:models-changed")
+      window.api.removeAllListeners("models:catalog-changed")
     }
   }, [])
 
@@ -434,6 +453,7 @@ export function useSessions(
     activeTerminalId,
     setActiveTerminalId,
     config,
+    modelCatalog,
     activeSession,
     activeTerminals,
     activeTerminal,

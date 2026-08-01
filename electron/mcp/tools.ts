@@ -13,6 +13,7 @@ import type { SchedulerService } from "../services/scheduler"
 import type { SessionService } from "../services/sessions"
 import type { AttentionService } from "../services/attention"
 import type { ContextInspectorService } from "../services/contextInspector"
+import type { ModelCatalogService } from "../services/modelCatalog"
 import { registerSessionTools } from "./tools/sessions"
 import { registerWorkSessionTools } from "./tools/worksessions"
 import { registerPanelTools } from "./tools/panels"
@@ -49,6 +50,9 @@ export function registerTools(
   contextInspector: ContextInspectorService,
   scheduler: SchedulerService,
   identity: TerminalIdentity = {},
+  // CAPP-133 — the dynamic model catalog backing `list_models`. Optional so the
+  // existing call shape stays valid for callers/tests that don't supply it.
+  modelCatalog?: ModelCatalogService,
 ) {
   registerSessionTools(server, sessions, attention, workSessions, workspaces, identity)
   registerWorkSessionTools(server, workSessions, panels, sessions, identity)
@@ -67,6 +71,7 @@ export function registerTools(
     clipboard,
     shellService,
     identity,
+    modelCatalog,
   )
   registerUiTools(server, ui)
 }

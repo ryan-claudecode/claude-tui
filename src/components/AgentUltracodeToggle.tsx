@@ -12,6 +12,12 @@ interface Props {
   /** CAPP-113 — the ADDITIVE config `models.xhigh` list, threaded into the visibility
    *  gate so a config-declared xhigh model also shows the toggle. Absent → built-ins only. */
   extraXhigh?: string[]
+
+  /** CAPP-133 — the live `/v1/models` catalog; an exact id match is authoritative
+
+   *  over the xhigh prefix heuristics. Absent -> heuristics only (today's behavior). */
+
+  modelCatalog?: { id: string; xhigh: boolean }[]
   /** CAPP-117 — the terminal's current `--effort`. Ultracode forces xhigh, so the
    *  toggle also HIDES when an explicit non-xhigh effort is selected (they'd fight)
    *  — but ONLY while ultracode is OFF. An ACTIVE ultracode always renders (there
@@ -57,6 +63,8 @@ export default function AgentUltracodeToggle({
   terminalId,
   model,
   extraXhigh,
+
+  modelCatalog,
   effort,
   ultracode,
   variant = "composer",
@@ -85,7 +93,11 @@ export default function AgentUltracodeToggle({
   // (a persisted ultracode:true ref whose preserved effort is non-xhigh) must always
   // render, or the user couldn't see or turn off the active state. The hooks above
   // ALWAYS run (rules-of-hooks); only the render output is gated.
-  if (!modelSupportsXhigh(model, extraXhigh)) return null
+  // CAPP-133 — the live catalog is consulted FIRST: an exact id match decides in BOTH
+  // directions, so a model released after this build (`claude-opus-5`) correctly shows
+  // the toggle, and one the API reports as lacking xhigh (`claude-opus-4-6`) correctly
+  // hides it. Aliases miss the catalog and fall through to the heuristics as before.
+  if (!modelSupportsXhigh(model, extraXhigh, modelCatalog)) return null
   if (effort && effort !== "xhigh" && !on) return null
 
   return (

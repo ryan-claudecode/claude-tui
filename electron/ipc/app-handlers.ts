@@ -4,6 +4,7 @@ import type { TerminalService } from "../services/terminals"
 import type { WorkspaceService } from "../services/workspaces"
 import type { AppService } from "../services/app"
 import type { ShellService } from "../services/shell"
+import type { ModelCatalogService } from "../services/modelCatalog"
 import {
   getThemeMode,
   setThemeMode,
@@ -21,6 +22,7 @@ export function registerAppHandlers(deps: {
   workspaceService: WorkspaceService
   appService: AppService
   shellService: ShellService
+  modelCatalogService?: ModelCatalogService
 }) {
   const {
     config,
@@ -28,6 +30,7 @@ export function registerAppHandlers(deps: {
     workspaceService,
     appService,
     shellService,
+    modelCatalogService,
   } = deps
 
   // Workspace IPC. Now backed by the durable registry (WS-A): the renderer
@@ -87,6 +90,27 @@ export function registerAppHandlers(deps: {
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send("config:models-changed", config.models)
     }
+  })
+
+  // CAPP-133 — the DYNAMIC model catalog (`GET /v1/models`).
+  //   models:list    — synchronous read of the already-loaded catalog. The renderer
+  //                    calls this once on mount, alongside config:get.
+  //   models:refresh — user-triggered re-fetch. On success it BROADCASTS
+  //                    `models:catalog-changed` to every window (the theme:changed /
+  //                    config:models-changed pattern) so open pickers update live.
+  // Both degrade to an empty list when the service is absent (hermetic tests) — the
+  // renderer then falls back to the static aliases, i.e. exactly today's behavior.
+  ipcMain.handle("models:list", () => modelCatalogService?.list() ?? [])
+  ipcMain.handle("models:refresh", async () => {
+    if (!modelCatalogService) return { ok: false, count: 0, reason: "no-credential" }
+    const res = await modelCatalogService.refresh()
+    if (res.ok) {
+      const models = modelCatalogService.list()
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send("models:catalog-changed", models)
+      }
+    }
+    return res
   })
 
   // App testing tools

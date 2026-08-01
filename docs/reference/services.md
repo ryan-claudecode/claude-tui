@@ -49,6 +49,21 @@ On-device scheduled/recurring Claude runs (the fable-watch script as a feature):
 
 Pure recurrence math (zero Electron imports): `computeNextRun` (interval anchored to last fire, window clipping incl. WRAP-AROUND midnight-straddling windows like 22:00–06:00, days filter, once→null), `isDue`, `describeNext` — the sidebar countdown derives from the same module as the ticker so they can't drift.
 
+## ModelCatalogService (`electron/services/modelCatalog.ts`) — CAPP-133
+
+Dynamic model discovery, replacing the hand-maintained list as the source of truth for concrete model ids. Fetches `GET /v1/models` (which returns every model the account can reach, plus a per-model capability tree) and caches it to `~/.claude-tui/model-catalog.json` via the standard `persist.ts` versioned envelope.
+
+**Auth** (`resolveModelsAuth`, best-effort, read-only, never logged): `ANTHROPIC_API_KEY` → `x-api-key`; otherwise Claude Code's own OAuth grant from `~/.claude/.credentials.json` (`claudeAiOauth.accessToken`) → `Authorization: Bearer` + the `oauth-2025-04-20` beta header that grant requires. The OAuth path is what makes discovery work with ZERO setup for a subscription user — the same posture as `claudeDefaultModel()` already reading `~/.claude/settings.json`. A **known-expired** grant is skipped rather than spending a guaranteed 401; the service NEVER refreshes or rewrites the token (Claude Code owns that).
+
+**Three invariants** — every design choice follows from these, and they're each pinned by a test:
+1. **NEVER BLOCK** — `load()` is a synchronous local read so the picker has ids on the first frame; the network `refresh()` is fire-and-forget from `setupIpc`, never awaited on boot.
+2. **NEVER SHRINK** — the catalog and cache are replaced ONLY on a successful, non-empty parse. Auth failure / HTTP error / empty payload / offline all keep the previous catalog, and the static `MODEL_ALIASES` floor is always present. Worst case is exactly the pre-CAPP-133 behavior, never worse.
+3. **NEVER THROW** — any read/parse/network/shape miss degrades to "no catalog".
+
+**Capability over heuristic.** `modelSupportsXhigh` consults the catalog FIRST; an exact id match is authoritative in *both* directions. This is what makes the ultracode gate self-maintaining — the prefix/substring heuristics were structurally unable to keep up, and were wrong in both directions at the time of writing: `claude-opus-5` (no `opus` prefix, no `opus-4` substring) was a false NEGATIVE that silently hid the toggle for the newest model, and `claude-opus-4-6` (matches `opus-4`) was a false POSITIVE the API contradicts. A catalog MISS returns `undefined`, NOT `false` — aliases (`opus`, `best`) are never in the API's list, so collapsing "unknown" to "unsupported" would hide the toggle for every alias.
+
+**Wiring:** `ipc.ts` constructs it (constructor touches neither disk nor network), calls `load()` then `maybeRefresh()` (6h TTL), and broadcasts `models:catalog-changed` on success. Threaded into `SessionService` via the `modelCatalog` getter (read fresh, so a refresh is honored without a restart) for the model-switch keepUltra decision, and into the renderer via `models:list` / `models:refresh` for the picker options and the ultracode toggle. MCP: `list_models`.
+
 ## SttService (`electron/services/stt.ts`) — CAPP-120
 
 Push-to-talk dictation: Parakeet-TDT-0.6b-v2 int8 via `sherpa-onnx-node` in an Electron **utility process** (`electron/stt/sttWorker.ts`, warm recognizer, ~270ms per utterance CPU-only), deps-injected (fork/download/extract/fs are fakes in tests). Model (~680MB, CC-BY-4.0) downloads on first enable to `~/.claude-tui/stt/` — sha256+byte-pinned, cancel/retry/force-re-download, abortable extract, temp-dir cleanup. RPC watchdogs (init 60s / transcribe 30s → teardown+respawn), 3-strike worker-fail ledger surfaced in `status()`. Composer 🎤 (`useDictation` + pure `src/lib/micInteraction.ts`): hold=push-to-talk, click=toggle, Ctrl+M, Esc discards (owns Esc over the agent-interrupt via `dictationEsc.ts`), 5-min cap, insert-at-cursor, never auto-submits. NO MCP tool. Whisper.cpp sidecar = documented fallback only.

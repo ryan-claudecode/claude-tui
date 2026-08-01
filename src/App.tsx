@@ -238,6 +238,11 @@ declare global {
       // CAPP-113 — push: the config models block changed (custom model persisted);
       // useSessions folds it into config state so the pickers refresh live.
       onConfigModelsChanged: (callback: (models: any) => void) => void
+      // CAPP-133 — the DYNAMIC model catalog (`GET /v1/models`): read the loaded
+      // catalog, force a re-fetch, and subscribe to refresh pushes.
+      listModels: () => Promise<{ id: string; xhigh: boolean }[]>
+      refreshModels: () => Promise<{ ok: boolean; count: number; reason?: string }>
+      onModelCatalogChanged: (callback: (models: any) => void) => void
       // Agent Rail (v1) — persist the rail's open/collapsed pref (GLOBAL).
       setAgentRailOpen: (open: boolean) => Promise<void>
       // CAPP-132 — the Agent Rail OUTPUTS feed (per work session): pull the current FIFO
@@ -287,6 +292,7 @@ export default function App() {
     activeTerminalId,
     setActiveTerminalId,
     config,
+    modelCatalog,
     activeSession,
     activeTerminals,
     handleNewSession,
@@ -561,9 +567,12 @@ export default function App() {
   // aliases ∪ config models.extra − hidden), derived once and threaded to every model
   // picker so the list stays in lockstep. `extraXhigh` (config models.xhigh) feeds the
   // ultracode toggle's visibility gate. Both degrade to built-ins when config is absent.
+  // CAPP-133 — discovered ids from the live `/v1/models` catalog join the list, so a
+  // model released AFTER this build (e.g. `claude-opus-5`) is pickable with no code
+  // edit and no config edit. Aliases stay first; `hidden` still suppresses either.
   const modelOptions = useMemo(
-    () => resolveModelOptions(MODEL_ALIASES, config?.models),
-    [config?.models],
+    () => resolveModelOptions(MODEL_ALIASES, config?.models, modelCatalog.map((m) => m.id)),
+    [config?.models, modelCatalog],
   )
   const extraXhigh: string[] | undefined = config?.models?.xhigh
 
@@ -1208,6 +1217,8 @@ export default function App() {
               isTerminalBusy={isTerminalBusy}
               modelOptions={modelOptions}
               extraXhigh={extraXhigh}
+
+              modelCatalog={modelCatalog}
               themeMode={themeMode}
               fontFamily={config?.fontFamily}
               fontSize={config?.fontSize}
@@ -1232,6 +1243,8 @@ export default function App() {
                     modelOptions={modelOptions}
                     resolvedModel={t.resolvedModel}
                     extraXhigh={extraXhigh}
+
+                    modelCatalog={modelCatalog}
                     ccConversationId={t.ccConversationId}
                     transcriptCache={transcriptCacheRef.current}
                     transcriptStore={transcriptStoreRef.current}

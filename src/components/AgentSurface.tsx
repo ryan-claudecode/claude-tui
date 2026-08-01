@@ -25,6 +25,12 @@ interface Props {
   resolvedModel?: string
   /** CAPP-113 — the ADDITIVE config models.xhigh list for the ultracode visibility gate. */
   extraXhigh?: string[]
+
+  /** CAPP-133 — the live `/v1/models` catalog; an exact id match is authoritative
+
+   *  over the xhigh prefix heuristics. Absent -> heuristics only (today's behavior). */
+
+  modelCatalog?: { id: string; xhigh: boolean }[]
   /** BO-12 — the terminal's Claude Code conversation id (for transcript rehydrate). */
   ccConversationId?: string
   /** BO-12 — the shared, cross-pane transcript cache. */
@@ -72,6 +78,8 @@ export default function AgentSurface({
   modelOptions,
   resolvedModel,
   extraXhigh,
+
+  modelCatalog,
   ccConversationId,
   transcriptCache,
   transcriptStore,
@@ -158,6 +166,8 @@ export default function AgentSurface({
         modelOptions={modelOptions}
         resolvedModel={resolvedModel}
         extraXhigh={extraXhigh}
+
+        modelCatalog={modelCatalog}
         busy={busy}
         switching={switching}
         rawViewDisabled={!sessionId || busy || switching}

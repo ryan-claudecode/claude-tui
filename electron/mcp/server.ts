@@ -12,6 +12,7 @@ import type { ShellService } from "../services/shell"
 import type { FileService } from "../services/files"
 import type { UiService } from "../services/ui"
 import type { SchedulerService } from "../services/scheduler"
+import type { ModelCatalogService } from "../services/modelCatalog"
 import type { SessionService } from "../services/sessions"
 import type { AttentionService } from "../services/attention"
 import type { ContextInspectorService } from "../services/contextInspector"
@@ -35,7 +36,7 @@ PILLAR 2 — AGENT-RENDERED UI (you drive the app back, routing the user's atten
 - Asking the user a question — the native AskUserQuestion tool is NOT available in this environment; use ask_user to ask an interactive question. It BLOCKS until the user answers and raises their attention: pass a question plus optional options (2-8 click-to-select choices), multi_select, and/or allow_free_text; it returns their chosen label(s) and any free text.
 - Attention & handoff — notify (a toast that surfaces even when this terminal isn't focused — announce completion, request input, report errors), request_attention (put yourself on the user's attention queue when you need them) / get_attention_queue (see if the human is already backed up before raising another checkpoint), write_clipboard / read_clipboard (hand the user a finished artifact / read what they copied), open_external (open a URL in their browser), reveal_path (show a file in their OS file manager).
 - Deliverables to the rail — post_output adds a DELIVERABLE to your work session's OUTPUTS feed in the Agent Rail: a link (the PR you opened), a file (the report you wrote), or a short findings note. It's for ARTIFACTS the user will open or keep — NOT progress chatter (that's set_terminal_activity). Ids default to your own terminal; kind='link' needs url, 'file' needs an absolute path, 'note' needs text. Stream-produced files/links are captured automatically, so use post_output to give the important ones a proper title.
-- App UI control — drive the same view actions the user can: set_focus_mode, open_command_palette, show_keyboard_shortcuts, open_history_search, export_session_log, get_config.
+- App UI control — drive the same view actions the user can: set_focus_mode, open_command_palette, show_keyboard_shortcuts, open_history_search, export_session_log, get_config. list_models reports the models this machine can ACTUALLY run (discovered live from the Anthropic models API, so it includes models released after this build) with each one's context window, output cap, and capability flags — consult it instead of guessing a --model id.
 
 PILLAR 3 — ORCHESTRATION (durable goals, code-level supervision):
 - Sessions & panes — create_session, kill_session, focus_session, rename_session, list_sessions, trigger_handoff, split_panes / close_split.
@@ -89,6 +90,9 @@ export async function startMcpServer(
   attentionService: AttentionService,
   contextInspectorService: ContextInspectorService,
   schedulerService: SchedulerService,
+  // CAPP-133 — the dynamic model catalog backing the `list_models` tool. Optional so
+  // existing callers (and the e2e/unit harnesses) construct the server unchanged.
+  modelCatalogService?: ModelCatalogService,
 ): Promise<{ port: number; configPath: string }> {
   // A single McpServer can only be bound to one transport at a time, so we
   // build a fresh server (with all tools registered) PER SSE connection. The
@@ -120,6 +124,7 @@ export async function startMcpServer(
       contextInspectorService,
       schedulerService,
       identity,
+      modelCatalogService,
     )
     return server
   }

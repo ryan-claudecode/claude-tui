@@ -237,6 +237,15 @@ export interface SessionServiceOpts {
    * unaffected). `ipc.ts` wires it to `resolveXhighModels(loadConfig())`.
    */
   xhighModels?: () => string[]
+  /**
+   * CAPP-133 — the live model catalog seam (`GET /v1/models`). A getter returning the
+   * discovered models, threaded into {@link modelSupportsXhigh} where an EXACT id match
+   * is authoritative over the prefix heuristics. Read FRESH each call so a background
+   * catalog refresh is honored without a restart. ABSENT → `() => []`: byte-identical
+   * to the heuristic-only classification (existing tests unaffected).
+   * `ipc.ts` wires it to `modelCatalogService.list()`.
+   */
+  modelCatalog?: () => readonly { id: string; xhigh: boolean }[]
 }
 
 /** Persistence schema version. v1 = today's WorkSession shape verbatim. */
@@ -357,6 +366,8 @@ export class SessionService {
   private ccProjectsRoot: string
   /** CAPP-113 — extra xhigh-capable models (config `models.xhigh`), read fresh. */
   private getXhighModels: () => string[]
+  /** CAPP-133 — the live `/v1/models` catalog, read fresh. */
+  private getModelCatalog: () => readonly { id: string; xhigh: boolean }[]
 
   constructor(opts: SessionServiceOpts = {}) {
     this.dir = opts.dir ?? join(homedir(), ".claude-tui", "sessions")
@@ -365,6 +376,7 @@ export class SessionService {
     this.getActiveWorkspaceDir = opts.getActiveWorkspaceDir ?? (() => undefined)
     this.ccProjectsRoot = opts.ccProjectsRoot ?? join(homedir(), ".claude", "projects")
     this.getXhighModels = opts.xhighModels ?? (() => [])
+    this.getModelCatalog = opts.modelCatalog ?? (() => [])
   }
 
   attachTerminals(terminals: TerminalLike): void {
@@ -919,7 +931,12 @@ export class SessionService {
     // restores the saved --effort (no longer suppressed).
     // CAPP-113 — thread config `models.xhigh` (read fresh) so switching to a
     // config-declared xhigh model preserves ultracode too; absent → byte-identical.
-    const keepUltra = modelSupportsXhigh(model.trim(), this.getXhighModels()) ? ref.ultracode : false
+    // CAPP-133 — the live catalog wins over the prefix heuristics on an exact id, so
+    // switching to a brand-new xhigh-capable model (e.g. `claude-opus-5`, which no
+    // heuristic matches) now PRESERVES ultracode instead of force-clearing it.
+    const keepUltra = modelSupportsXhigh(model.trim(), this.getXhighModels(), this.getModelCatalog())
+      ? ref.ultracode
+      : false
     const info = this.respawnHeadlessRef(s, ref, model.trim(), ref.effort, keepUltra)
     this.logEvent(s, "spawn", `Model → ${info.model ?? model.trim()} (respawned "${ref.name}")`, info.id)
     this.persist(s)

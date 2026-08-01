@@ -82,6 +82,7 @@ Core facts every session needs:
 | `electron/services/ui.ts` | **UiService** — bridges renderer-only view actions to MCP via `ui:*` events |
 | `electron/services/attention.ts` | **AttentionService** — the tiered "who needs me?" queue |
 | `electron/services/scheduler.ts` | **SchedulerService** — on-device scheduled/recurring Claude runs |
+| `electron/services/modelCatalog.ts` | **ModelCatalogService** — dynamic model discovery (`GET /v1/models`, cached); authoritative model capabilities |
 | `electron/services/scheduleMath.ts` | Pure recurrence math (zero Electron imports) |
 | `electron/services/stt.ts` | **SttService** — push-to-talk dictation (Parakeet in a utility process) + hotwords |
 | `electron/mcp/server.ts` | MCP HTTP/SSE server lifecycle + `SERVER_INSTRUCTIONS` |

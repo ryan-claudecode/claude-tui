@@ -76,6 +76,12 @@ interface Props {
   resolvedModel?: string
   /** CAPP-113 — the ADDITIVE config models.xhigh list for the ultracode visibility gate. */
   extraXhigh?: string[]
+
+  /** CAPP-133 — the live `/v1/models` catalog; an exact id match is authoritative
+
+   *  over the xhigh prefix heuristics. Absent -> heuristics only (today's behavior). */
+
+  modelCatalog?: { id: string; xhigh: boolean }[]
   /**
    * BO-10 — the agent is generating a turn or parked on a permission prompt. While
    * busy, Send is disabled (writing to a blocked stdin would silently buffer unread
@@ -118,6 +124,8 @@ export default function AgentComposer({
   modelOptions,
   resolvedModel,
   extraXhigh,
+
+  modelCatalog,
   busy = false,
   switching = false,
   rawViewDisabled = false,
@@ -748,6 +756,8 @@ export default function AgentComposer({
             model={model}
             effort={effort}
             extraXhigh={extraXhigh}
+
+            modelCatalog={modelCatalog}
             ultracode={ultracode}
             variant="composer"
             onSwitched={onSwitched}

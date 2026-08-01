@@ -166,6 +166,15 @@ const mainApi = {
   onConfigModelsChanged: (callback: (models: unknown) => void) =>
     ipcRenderer.on("config:models-changed", (_e, models) => callback(models)),
 
+  // CAPP-133 — the DYNAMIC model catalog (`GET /v1/models`). `listModels` reads the
+  // already-loaded catalog (no network); `refreshModels` forces a re-fetch and
+  // resolves with {ok, count, reason?}. `onModelCatalogChanged` is the push that
+  // lands a background/manual refresh in every open picker without a restart.
+  listModels: () => ipcRenderer.invoke("models:list"),
+  refreshModels: () => ipcRenderer.invoke("models:refresh"),
+  onModelCatalogChanged: (callback: (models: unknown) => void) =>
+    ipcRenderer.on("models:catalog-changed", (_e, models) => callback(models)),
+
   // Agent Rail (v1) — persist the rail's open/collapsed preference (GLOBAL). The
   // renderer seeds the rail's collapsed state from config.agentRail on mount and
   // calls this when the user toggles the rail (chevron / shortcut / palette). The

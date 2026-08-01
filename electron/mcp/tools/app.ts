@@ -8,6 +8,7 @@ import type { NotificationService } from "../../services/notifications"
 import type { ClipboardService } from "../../services/clipboard"
 import type { ShellService } from "../../services/shell"
 import { loadConfig } from "../../config"
+import type { ModelCatalogService } from "../../services/modelCatalog"
 import type { TerminalIdentity } from "./shared"
 
 export function registerAppTools(
@@ -20,6 +21,9 @@ export function registerAppTools(
   clipboard: ClipboardService,
   shellService: ShellService,
   identity: TerminalIdentity = {},
+  // CAPP-133 — optional so existing callers/tests construct the tool surface
+  // unchanged; `list_models` reports unavailable when it's absent.
+  modelCatalog?: ModelCatalogService,
 ) {
   // NOTE: the workspace tool group (list_workspaces, get_active_workspace,
   // create/rename/add-dir/remove-dir/delete/set-active/launch) lives in its own
@@ -66,6 +70,60 @@ export function registerAppTools(
     async () => {
       const config = loadConfig()
       return { content: [{ type: "text" as const, text: JSON.stringify(config, null, 2) }] }
+    },
+  )
+
+  // CAPP-133 — the DYNAMIC model catalog. Lets an agent answer "what models can I
+  // actually run?" from the live `GET /v1/models` list instead of a stale hard-coded
+  // set, and check capabilities (xhigh / max effort / adaptive thinking) before
+  // suggesting a `--model`. `refresh: true` forces a re-fetch (otherwise the cached
+  // catalog is returned, which is what the picker is showing).
+  server.tool(
+    "list_models",
+    "List the Claude models this machine can actually run, discovered live from the Anthropic models API, with each model's context window, output cap, and capability flags (xhigh effort, max effort, adaptive thinking). Use this instead of guessing model ids — it includes models released after this build. Pass refresh:true to force a re-fetch.",
+    {
+      refresh: z
+        .boolean()
+        .optional()
+        .describe("Force a live re-fetch instead of returning the cached catalog"),
+    },
+    async ({ refresh }) => {
+      if (!modelCatalog) {
+        return {
+          content: [
+            { type: "text" as const, text: "Model catalog unavailable in this context." },
+          ],
+        }
+      }
+      if (refresh) await modelCatalog.refresh()
+      const models = modelCatalog.list()
+      if (!models.length) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                "No models discovered. The catalog needs either ANTHROPIC_API_KEY or a signed-in Claude Code session (~/.claude/.credentials.json). The app falls back to its built-in aliases (opus, sonnet, haiku, fable, best, opusplan).",
+            },
+          ],
+        }
+      }
+      const fetchedAt = modelCatalog.fetchedAt()
+      const lines = models.map(
+        (m) =>
+          `${m.id}${m.displayName ? ` (${m.displayName})` : ""} — ctx ${m.maxInputTokens ?? "?"}, out ${m.maxTokens ?? "?"}` +
+          `, xhigh: ${m.xhigh}, maxEffort: ${m.effortMax}, adaptiveThinking: ${m.adaptiveThinking}`,
+      )
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              `${models.length} model(s)${fetchedAt ? `, fetched ${new Date(fetchedAt).toISOString()}` : ""}:\n` +
+              lines.join("\n"),
+          },
+        ],
+      }
     },
   )
 

@@ -20,6 +20,7 @@ import { CompanionService } from "./services/companion"
 import { AttentionService } from "./services/attention"
 import { Notification } from "electron"
 import { loadConfig, resolveRenderingEngine, resolveRenderingModel, claudeDefaultModel, resolveRenderingEffort, claudeDefaultEffort, resolveSkipApproval, resolveModelsDefault, resolveXhighModels } from "./config"
+import { ModelCatalogService } from "./services/modelCatalog"
 import { startMcpServer } from "./mcp/server"
 import { registerTerminalHandlers } from "./ipc/terminal-handlers"
 import { registerWorkSessionHandlers } from "./ipc/worksession-handlers"
@@ -48,6 +49,10 @@ export const shellService = new ShellService()
 export const fileService = new FileService()
 export const uiService = new UiService()
 export const companionService = new CompanionService()
+// CAPP-133 — the DYNAMIC model catalog (`GET /v1/models`). Constructed eagerly but
+// INERT until load()/refresh() are called in setupIpc: the constructor touches
+// neither the disk nor the network, so importing this module stays cheap.
+export const modelCatalogService = new ModelCatalogService()
 
 // WS-C — scope work sessions to the active workspace: the durable container is
 // stamped at create() time via this getter (undefined in "All" mode). Same
@@ -60,6 +65,9 @@ export const workSessionService = new SessionService({
   // CAPP-113 — the ADDITIVE config models.xhigh list, read FRESH so a config edit is
   // honored without a restart. Threads into the model-switch keepUltra classification.
   xhighModels: () => resolveXhighModels(loadConfig()),
+  // CAPP-133 — the live catalog, read FRESH so a background refresh is honored
+  // without a restart. An exact id match here is authoritative over the heuristics.
+  modelCatalog: () => modelCatalogService.list(),
 })
 
 // CAPP-98 / I1 — the Context Inspector (READ-ONLY): enumerates the complete launch-time
@@ -311,6 +319,23 @@ export async function setupIpc(win: BrowserWindow) {
   // DEV-velocity choice; a PUBLIC release must NOT ship it (trust thesis: "no
   // runaway you can't stop") — a release-blocker ticket tracks revisiting this.
   sessionService.setSkipApproval(resolveSkipApproval(config))
+  // CAPP-133 — the model catalog. load() is a cheap SYNCHRONOUS read of the on-disk
+  // cache so the picker has discovered ids on the very first frame; the network
+  // refresh is deliberately fire-and-forget (invariant 1: NEVER BLOCK boot). On a
+  // successful refresh we PUSH the new catalog to every window — the same
+  // `config:models-changed` broadcast pattern — so pickers update without a restart.
+  modelCatalogService.load()
+  void modelCatalogService
+    .maybeRefresh()
+    .then((res) => {
+      if (!res?.ok) return
+      for (const w of BrowserWindow.getAllWindows()) {
+        w.webContents.send("models:catalog-changed", modelCatalogService.list())
+      }
+    })
+    .catch(() => {
+      /* invariant 3: a refresh never breaks startup */
+    })
 
   // BO-10 — give TerminalService a user-visible notification seam (the permission
   // guard timeout raises a toast when a prompt goes unanswered). Wired here, after
@@ -401,6 +426,7 @@ export async function setupIpc(win: BrowserWindow) {
       attentionService,
       contextInspectorService,
       schedulerService,
+      modelCatalogService,
     )
     sessionService.setMcpConfigPath(configPath)
     sessionService.setMcpServerUrl(`http://127.0.0.1:${port}/sse`)
@@ -471,6 +497,8 @@ export async function setupIpc(win: BrowserWindow) {
     // CAPP-132 — the OUTPUTS row open/reveal actions wrap the SAME ShellService the
     // open_external / reveal_path MCP tools use (app:open-external / app:reveal-path).
     shellService,
+    // CAPP-133 — the dynamic model catalog, for models:list / models:refresh.
+    modelCatalogService,
   })
 
   // Cleanup
