@@ -15,7 +15,31 @@ npm run package:desktop    # package + deploy the unpacked app to Desktop\Claude
 npm run package:installer  # NSIS installer
 ```
 
-**Iterating without closing your working copy (CAPP-134):** `npm run dev:isolated` re-roots the dev instance's entire durable state to `~/.claude-tui-dev` via `CLAUDE_TUI_HOME` (resolved by `electron/paths.ts` — `tuiHome()`/`tuiPath()`), so it can run at the same time as the packaged app. Renderer edits hot-reload; main-process edits auto-restart only the dev instance. `package:desktop` is then a release step, not part of every iteration. Two instances sharing one root is the thing to avoid — they fight over config/sessions AND over the MCP config handed to spawned agents, which is now written per-instance as `mcp-config-<port>.json` under the instance root (before, a single fixed path meant one app's agents could silently drive the other app's UI).
+## Running the app — how the owner actually uses this repo
+
+The owner **runs ClaudeTUI to do his daily work**, and asks agents to build it for him. Getting this wrong wastes his time, so know the layout:
+
+| Thing | Path | Notes |
+|---|---|---|
+| Working copy (what he launches) | `C:\Users\ryguy\Desktop\ClaudeTUI` | Desktop shortcut **`ClaudeTUI (app)`** |
+| Build output | `<repo>\dist\win-unpacked` | Old shortcut **`ClaudeTUI (dev)`** points here — the historical EBUSY cause |
+| His deploy button | Desktop **`ClaudeTUI - Deploy`** → `scripts/deploy.cmd` | Waits for close → deploys → relaunches |
+
+⚠️ **`C:\Users\ryguy\Desktop` is NOT the visible desktop** — his real one is `C:\Users\ryguy\OneDrive\Desktop`. Binaries live in the local folder on purpose (a few-hundred-MB Electron tree must not sync to OneDrive); only `.lnk` shortcuts go on the real desktop. Never write files to `%USERPROFILE%\Desktop` expecting him to see them; resolve the real path via `[Environment]::GetFolderPath('Desktop')`.
+
+**The update loop:**
+
+1. Agents commit → work is merged
+2. An agent runs **`npm run package`** — this **works with the app open** (it only writes `dist/`), so never ask him to close the app just to build
+3. He closes the app and double-clicks **`ClaudeTUI - Deploy`**, which relaunches it for him
+
+So an agent's job normally ends at `npm run package` — tell him to hit the deploy shortcut rather than running `package:desktop` yourself. `scripts/deploy-check.mjs` gates that shortcut: it compares the packaged exe's mtime against the newest source under `electron/` + `src/` and forces a confirmation before shipping a build older than the code, which is the one otherwise-silent failure (deploy an old build → "the fix didn't work").
+
+Only the **deploy** half needs the app closed. If you do run `package:desktop` directly, it will fail with EBUSY while the app is open.
+
+**Iterating without touching his working copy at all (CAPP-134):** `npm run dev:isolated` re-roots the dev instance's entire durable state to `~/.claude-tui-dev` via `CLAUDE_TUI_HOME` (resolved by `electron/paths.ts` — `tuiHome()`/`tuiPath()`), so it runs at the same time as the packaged app. Renderer edits hot-reload; main-process edits auto-restart only the dev instance. Two instances sharing one root is the thing to avoid — they fight over config/sessions AND over the MCP config handed to spawned agents, which is now written per-instance as `mcp-config-<port>.json` under the instance root (before, a single fixed path meant one app's agents could silently drive the other app's UI).
+
+**"Build the app" = bump `package.json` version + commit, then package.** The sidebar build stamp (version · git hash · build time) bakes hash and time automatically; only the version is manual.
 
 ## Reference docs — load on demand
 
