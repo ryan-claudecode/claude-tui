@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process"
 import { join, dirname, isAbsolute } from "node:path"
 import { homedir } from "node:os"
 import type { WorkspaceService } from "./workspaces"
-import { encodeProjectDir } from "./terminals"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 
 /**
  * CAPP-98 (Slice I1) — the Context Inspector backend (READ-ONLY).

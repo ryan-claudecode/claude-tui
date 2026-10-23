@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { TranscriptAssigner } from "./transcripts"
-import { encodeProjectDir } from "./terminals"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 
 /** Make a fresh fake ~/.claude/projects root and the encoded dir for `cwd`. */
 function fakeRoot(cwd: string): { root: string; dir: string } {

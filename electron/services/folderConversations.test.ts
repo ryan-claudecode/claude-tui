@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { encodeProjectDir } from "./terminals"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 import {
   listFolderConversations,
   previewText,

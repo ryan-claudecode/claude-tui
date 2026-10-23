@@ -51,15 +51,7 @@ import {
   UI_SLASH_COMMAND_CHANNEL,
   type UiSlashCommandPayload,
 } from "@ryanhartwig/claude-agent-kit/protocol"
-
-/**
- * Encode an absolute cwd into the directory name Claude Code uses under
- * ~/.claude/projects/. CC replaces every path separator and the drive colon
- * with "-": "C:\\Users\\ryguy\\app" -> "C--Users-ryguy-app".
- */
-export function encodeProjectDir(cwd: string): string {
-  return cwd.replace(/[:/\\]/g, "-")
-}
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 
 /**
  * Snapshot the transcript ids (`.jsonl` basenames) already present in

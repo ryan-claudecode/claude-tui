@@ -29,7 +29,7 @@
 
 import { readdirSync, readFileSync, existsSync } from "fs"
 import { join } from "path"
-import { encodeProjectDir } from "./terminals"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 import type { StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 
 function isObj(v: unknown): v is Record<string, unknown> {

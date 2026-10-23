@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { parseTranscriptLine, readTranscriptEvents } from "./transcriptHistory"
-import { encodeProjectDir } from "./terminals"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 import { foldTranscript } from "../../src/lib/agentTranscript"
 import {
   REAL_TRANSCRIPT_LINES,

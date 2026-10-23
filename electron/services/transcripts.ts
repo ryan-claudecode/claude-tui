@@ -1,6 +1,6 @@
 import { readdirSync, statSync } from "fs"
 import { join } from "path"
-import { encodeProjectDir } from "./terminals"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 
 /**
  * A pending request to bind a freshly-spawned terminal to the Claude Code

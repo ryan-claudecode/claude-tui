@@ -11,7 +11,7 @@ import {
   type ContextSource,
 } from "./contextInspector"
 import { WorkspaceService } from "./workspaces"
-import { encodeProjectDir } from "./terminals"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 import type { TerminalService, TerminalInfo } from "./terminals"
 
 /**

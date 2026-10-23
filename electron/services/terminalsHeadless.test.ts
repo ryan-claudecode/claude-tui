@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from "vitest"
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 import {
   TerminalService,
-  encodeProjectDir,
   parseActivityLine,
   projectStreamEvent,
   addAllowRule,

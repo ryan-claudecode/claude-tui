@@ -16,7 +16,7 @@
 
 import { readdirSync, readFileSync, statSync } from "fs"
 import { join } from "path"
-import { encodeProjectDir } from "./terminals"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 
 /**
  * The PUBLIC summary of one discoverable conversation transcript. `id` is the

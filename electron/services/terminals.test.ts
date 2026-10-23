@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 import {
   TerminalService,
-  encodeProjectDir,
   resumeArgs,
   type PtyLike,
   type SpawnPty,
@@ -9,6 +8,7 @@ import {
   type SpawnProc,
   type TerminalEvent,
 } from "./terminals"
+import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
 
 /**
  * A fake PTY: conforms to `PtyLike` but has NO real process behind it. Records
