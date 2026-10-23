@@ -20,7 +20,7 @@ import {
   MODEL_ARCHIVE_BYTES,
   type SttFromWorker,
   type SttWorkerLike,
-} from "./protocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 
 // Re-export so ipc.ts can share the ONE bounded-walk impl for its hotword regen.
 export { collectWorkspaceNames }

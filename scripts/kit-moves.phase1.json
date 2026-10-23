@@ -1,3 +1,5 @@
 {
-  "electron/services/streamProtocol": "@ryanhartwig/claude-agent-kit/protocol"
+  "electron/services/streamProtocol": "@ryanhartwig/claude-agent-kit/protocol",
+  "electron/services/slashCommands": "@ryanhartwig/claude-agent-kit/protocol",
+  "electron/stt/protocol": "@ryanhartwig/claude-agent-kit/protocol"
 }

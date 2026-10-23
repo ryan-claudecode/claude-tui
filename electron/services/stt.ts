@@ -11,7 +11,7 @@ import {
   type SttStatus,
   type SttProgress,
   type SttTranscription,
-} from "../stt/protocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * CAPP-120 (STT-1) — the push-to-talk dictation engine seam.

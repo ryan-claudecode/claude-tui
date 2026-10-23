@@ -10,7 +10,7 @@ import {
   type SttToWorker,
   type SttWorkerLike,
   type SttProgress,
-} from "../stt/protocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * CAPP-120 (STT-1) — the SttService is PURE (every effect injected), so this exercises

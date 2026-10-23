@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { downsampleTo16kMono, mergeFloat32 } from "../lib/audioCapture"
 import { recordingTick, MAX_RECORDING_MS } from "../lib/micInteraction"
-import type { SttProgress, SttStatus } from "../../electron/stt/protocol"
+import type { SttProgress, SttStatus } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * CAPP-120 (STT-1) — the push-to-talk dictation capture engine (renderer side).

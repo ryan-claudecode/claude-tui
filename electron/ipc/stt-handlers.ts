@@ -1,6 +1,6 @@
 import { ipcMain } from "electron"
 import type { SttService } from "../services/stt"
-import type { SttStatus, SttStatusSnapshot, SttTranscription } from "../stt/protocol"
+import type { SttStatus, SttStatusSnapshot, SttTranscription } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * CAPP-120 (STT-1) — thin one-line wrappers over SttService (mirrors schedule-handlers.ts).

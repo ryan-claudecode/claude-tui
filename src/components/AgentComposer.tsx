@@ -18,7 +18,7 @@ import {
 } from "../lib/micInteraction"
 import { registerDictationEscHandler } from "../lib/dictationEsc"
 import { toast } from "../lib/toast"
-import type { SttProgress } from "../../electron/stt/protocol"
+import type { SttProgress } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /** CAPP-120 — MB (1 dp) for the download progress label. */
 function formatMB(bytes: number): string {

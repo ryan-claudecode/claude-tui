@@ -1,4 +1,4 @@
-import type { SttStatus } from "../../electron/stt/protocol"
+import type { SttStatus } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * CAPP-120 (STT-1, review finding 10) — the dictation mic's interaction DECISIONS as

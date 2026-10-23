@@ -35,6 +35,9 @@ import {
   type PermissionRequest,
   type PermissionDecision,
   type RailOutputDraft,
+  type ProcLike,
+  type SpawnProc,
+  type SpawnProcOptions,
 } from "@ryanhartwig/claude-agent-kit/protocol"
 import {
   newTurnBuffer,
@@ -47,7 +50,7 @@ import {
   classifySlashInput,
   UI_SLASH_COMMAND_CHANNEL,
   type UiSlashCommandPayload,
-} from "./slashCommands"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * Encode an absolute cwd into the directory name Claude Code uses under
@@ -411,48 +414,12 @@ export type SpawnPty = (file: string, args: string[], options: SpawnPtyOptions) 
 const realSpawnPty: SpawnPty = (file, args, options) => pty.spawn(file, args, options)
 
 /**
- * The minimal slice of a `child_process.ChildProcess` the HEADLESS (BO-1)
- * transport uses. Distinct from `PtyLike` on purpose: the headless stream-json
- * protocol wants a clean byte stream (piped stdio, no PTY echo / ANSI / terminal
- * control), and stdin is a structured-message sink rather than keystrokes.
- * Declaring our own surface is what makes the headless spawn path testable: a
- * test injects a `FakeStreamProc` with no OS process behind it.
+ * The headless (BO-1) process abstraction — `ProcLike` / `SpawnProcOptions` /
+ * `SpawnProc` — lives in the kit's `/protocol` entry (it is the seam the hermetic
+ * fakes and the future HeadlessAgentEngine share). Re-exported here so existing
+ * `import { type ProcLike, type SpawnProc } from "./terminals"` sites keep compiling.
  */
-export interface ProcLike {
-  readonly pid: number
-  /** stdout `data` (decoded to a string). */
-  onStdout(cb: (data: string) => void): void
-  /** stderr `data` (decoded to a string). */
-  onStderr(cb: (data: string) => void): void
-  /** Process exit. `code` is null when the process was killed by a signal. */
-  onExit(cb: (e: { code: number | null }) => void): void
-  /**
-   * Async spawn failure (e.g. an invalid `cwd` → ENOENT). OPTIONAL on the
-   * contract so the hermetic fakes (FakeStreamProc, fakeStreamProc) need not
-   * implement it; the real `realSpawnProc` always wires it. When a spawn fails
-   * `error` fires INSTEAD of `exit` (Node never emits `exit` for a process that
-   * never started), so the consumer must tear down on `error` too — otherwise an
-   * unhandled `error` on a ChildProcess crashes the main process.
-   */
-  onError?(cb: (err: Error) => void): void
-  /** Write to the child's stdin (the structured user-message sink). */
-  write(data: string): void
-  kill(signal?: string): void
-}
-
-/** The subset of child_process spawn options the headless path passes. */
-export interface SpawnProcOptions {
-  cwd: string
-  env: Record<string, string>
-}
-
-/**
- * The injectable HEADLESS spawn seam (spawn path B). Production passes
- * `realSpawnProc` (child_process.spawn with piped stdio); tests pass a fake that
- * records args + drives stdout/stderr/exit by hand — so `npm test` never
- * launches a real `claude` on the headless path either.
- */
-export type SpawnProc = (file: string, args: string[], options: SpawnProcOptions) => ProcLike
+export type { ProcLike, SpawnProc, SpawnProcOptions }
 
 /**
  * The default headless spawn seam: `child_process.spawn` with fully piped stdio.

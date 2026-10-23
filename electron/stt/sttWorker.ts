@@ -14,7 +14,7 @@
  * encoder/decoder/joiner, featureDim 80 @ 16 kHz, numThreads 4.
  */
 import { join } from "node:path"
-import { HOTWORDS_DECODING, type SttToWorker, type SttFromWorker } from "./protocol"
+import { HOTWORDS_DECODING, type SttToWorker, type SttFromWorker } from "@ryanhartwig/claude-agent-kit/protocol"
 
 // `process.parentPort` is the utility-process side of the parent<->child channel
 // (typed by electron.d.ts's augmentation of NodeJS.Process).

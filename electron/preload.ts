@@ -11,7 +11,7 @@ import {
   type QueuedAgentInput,
   type RailOutput,
 } from "@ryanhartwig/claude-agent-kit/protocol"
-import type { SttProgress } from "./stt/protocol"
+import type { SttProgress } from "@ryanhartwig/claude-agent-kit/protocol"
 
 // CAPP-106 / S1 — capture the exposed object in a const so its INFERRED shape can be
 // exported (`MainApi`) and structurally checked against `PanelApi` by the parity GATE
