@@ -1,4 +1,8 @@
 /**
+ * DUPLICATED (claude-agent-kit phase 1): this file exists in BOTH claude-tui-app/electron/services/
+ * AND claude-agent-kit/src/engine/ until Phase 4 moves streamEvents.ts into the kit. Keep the two
+ * byte-identical — electron/services/streamEventsFixturesSync.test.ts fails the moment they differ.
+ *
  * Captured REAL Claude Code headless stream-json event lines (BO-1 de-risk).
  *
  * Produced by a live run on Windows of:

@@ -14,7 +14,7 @@
     "package:desktop": "npm run package && npm run deploy:desktop",
     "deploy:desktop": "node scripts/deploy-desktop.mjs",
     "package:installer": "npm run build && electron-builder --win nsis",
-    "test": "vitest run",
+    "test": "npm run kit:build && vitest run",
     "test:watch": "vitest",
     "e2e": "npm run build && playwright test",
     "kit:build": "npm --prefix ../claude-agent-kit run build"
