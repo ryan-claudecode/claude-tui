@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { downsampleTo16kMono, mergeFloat32 } from "../lib/audioCapture"
-import { recordingTick, MAX_RECORDING_MS } from "../lib/micInteraction"
+import { recordingTick, MAX_RECORDING_MS } from "@ryanhartwig/claude-agent-kit/core"
 import type { SttProgress, SttStatus } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**

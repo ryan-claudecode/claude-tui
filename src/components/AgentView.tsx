@@ -7,8 +7,8 @@ import {
   useCallback,
   useSyncExternalStore,
 } from "react"
-import { contextMeterFromBlocks, type ContextMeter } from "../lib/contextMeter"
-import type { TranscriptStore } from "../lib/transcriptStore"
+import { contextMeterFromBlocks, type ContextMeter } from "@ryanhartwig/claude-agent-kit/core"
+import type { TranscriptStore } from "@ryanhartwig/claude-agent-kit/core"
 import {
   reduceTranscript,
   emptyTranscript,
@@ -25,15 +25,15 @@ import {
   type ModelErrorBlock,
   type NeedsAuthBlock,
   type AssistantTextBlock,
-} from "../lib/agentTranscript"
-import { nextScrollTop, scrollFollowBehavior, shouldStick } from "../lib/scrollStick"
-import { initialHiddenCount, revealEarlier, visibleBlocks, LOAD_EARLIER_PAGE } from "../lib/transcriptWindow"
+} from "@ryanhartwig/claude-agent-kit/core"
+import { nextScrollTop, scrollFollowBehavior, shouldStick } from "@ryanhartwig/claude-agent-kit/core"
+import { initialHiddenCount, revealEarlier, visibleBlocks, LOAD_EARLIER_PAGE } from "@ryanhartwig/claude-agent-kit/core"
 import {
   groupToolRuns,
   summarizeToolGroup,
   activeToolLabel,
   type ToolGroupItem,
-} from "../lib/toolGroups"
+} from "@ryanhartwig/claude-agent-kit/core"
 import { useSmoothReveal } from "../hooks/useSmoothReveal"
 import { prefersReducedMotion } from "../lib/reducedMotion"
 import AgentModelPicker from "./AgentModelPicker"

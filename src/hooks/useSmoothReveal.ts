@@ -4,7 +4,7 @@ import {
   RevealClock,
   revealedWordEnd,
   type RevealConfig,
-} from "../lib/smoothReveal"
+} from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * A tiny immediate head start (chars) revealed the instant the buffer activates,

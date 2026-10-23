@@ -2,7 +2,7 @@ import { useCallback } from "react"
 import TerminalPane from "./TerminalPane"
 import AgentSurface from "./AgentSurface"
 import type { TranscriptCache } from "./AgentView"
-import type { TranscriptStore } from "../lib/transcriptStore"
+import type { TranscriptStore } from "@ryanhartwig/claude-agent-kit/core"
 
 interface PaneTerminal {
   id: string

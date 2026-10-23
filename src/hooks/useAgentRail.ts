@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { effectiveRailOpen, RAIL_WIDTH_FLOOR } from "../lib/agentRail"
+import { effectiveRailOpen, RAIL_WIDTH_FLOOR } from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * Agent Rail (v1) — owns the rail's open/collapsed state across three inputs:

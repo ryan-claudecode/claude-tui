@@ -8,8 +8,8 @@ import type {
   ResultBlock,
   UserBlock,
   InjectedBlock,
-} from "../lib/agentTranscript"
-import type { ToolGroupItem } from "../lib/toolGroups"
+} from "@ryanhartwig/claude-agent-kit/core"
+import type { ToolGroupItem } from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * BO-8 — the structured chat must render assistant + result PROSE as markdown

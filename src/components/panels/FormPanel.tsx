@@ -2,7 +2,7 @@ import { useState } from "react"
 // CAPP-107 (review MINOR 1) — the QuestionForm↔ask_user payload contract is pinned in
 // ONE shared pure module; the tool's parser (electron/mcp/tools/panels.ts) imports the
 // same file, so the submit keys can never drift between the two sides.
-import { buildQuestionSubmit, buildQuestionCancel } from "../../lib/questionSubmit"
+import { buildQuestionSubmit, buildQuestionCancel } from "@ryanhartwig/claude-agent-kit/core"
 
 interface Field {
   name: string

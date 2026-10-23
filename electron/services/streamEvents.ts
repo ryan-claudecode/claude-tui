@@ -24,7 +24,7 @@
 
 import { logWarn } from "../log"
 import type { StreamEvent, McpServerStatus } from "@ryanhartwig/claude-agent-kit/protocol"
-import { backgroundStartId, isTaskNotification, taskNotificationIds } from "./backgroundTasks"
+import { backgroundStartId, isTaskNotification, taskNotificationIds } from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * Reassembles newline-delimited JSON from a byte/character stream that arrives

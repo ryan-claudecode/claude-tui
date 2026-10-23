@@ -1,4 +1,4 @@
-import type { CatalogEntry } from "../lib/slashCatalog"
+import type { CatalogEntry } from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * BO-7 (CAPP-41) — the `/`-command autocomplete dropdown for the structured

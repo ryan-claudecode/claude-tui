@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { workingRowState } from "./AgentView"
-import type { TranscriptBlock } from "../lib/agentTranscript"
+import type { TranscriptBlock } from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * WS1 — the branded "working" row exists for ONE job: cover the DEAD-AIR gap between

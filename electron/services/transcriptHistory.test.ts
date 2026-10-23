@@ -4,7 +4,7 @@ import { join } from "path"
 import { tmpdir } from "os"
 import { parseTranscriptLine, readTranscriptEvents } from "./transcriptHistory"
 import { encodeProjectDir } from "@ryanhartwig/claude-agent-kit/engine"
-import { foldTranscript } from "../../src/lib/agentTranscript"
+import { foldTranscript } from "@ryanhartwig/claude-agent-kit/core"
 import {
   REAL_TRANSCRIPT_LINES,
   REAL_TRANSCRIPT_JSONL,

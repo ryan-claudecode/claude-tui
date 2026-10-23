@@ -7,7 +7,7 @@ import {
   revealedWordEnd,
   snapToWordBoundary,
   type RevealConfig,
-} from "../lib/smoothReveal"
+} from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * CAPP-74 — the rAF SMOOTHING-BUFFER hook (useSmoothReveal) drain, exercised via its

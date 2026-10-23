@@ -6,7 +6,7 @@ import {
   isCatalogStale,
   slashQuery,
   type CatalogEntry,
-} from "../lib/slashCatalog"
+} from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * BO-7 (CAPP-41) — the `/`-command autocomplete state for the structured composer.

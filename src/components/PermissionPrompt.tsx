@@ -1,5 +1,5 @@
 import type { PermissionRequest, PermissionDecision } from "@ryanhartwig/claude-agent-kit/protocol"
-import { describePermission } from "../lib/permissionView"
+import { describePermission } from "@ryanhartwig/claude-agent-kit/core"
 
 interface Props {
   requests: PermissionRequest[]

@@ -2,8 +2,8 @@ import { useCallback, useState } from "react"
 import AgentView, { type TranscriptCache } from "./AgentView"
 import AgentComposer from "./AgentComposer"
 import ContextMeterBar from "./ContextMeterBar"
-import type { ContextMeter } from "../lib/contextMeter"
-import type { TranscriptStore } from "../lib/transcriptStore"
+import type { ContextMeter } from "@ryanhartwig/claude-agent-kit/core"
+import type { TranscriptStore } from "@ryanhartwig/claude-agent-kit/core"
 import { toast } from "../lib/toast"
 
 interface Props {

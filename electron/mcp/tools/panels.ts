@@ -7,7 +7,7 @@ import { resolveCwd, type TerminalIdentity } from "./shared"
 // CAPP-107 (review MINOR 1) — the QuestionForm↔ask_user payload contract lives in ONE
 // shared pure module (renderer-safe, no node imports) so the submit keys can never
 // drift between the renderer's builder and this parser. See src/lib/questionSubmit.ts.
-import { normalizeQuestionOptions, parseQuestionAnswer } from "../../../src/lib/questionSubmit"
+import { normalizeQuestionOptions, parseQuestionAnswer } from "@ryanhartwig/claude-agent-kit/core"
 
 export function registerPanelTools(
   server: McpServer,

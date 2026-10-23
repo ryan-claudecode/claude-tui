@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import type { ContextMeter } from "../lib/contextMeter"
+import type { ContextMeter } from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * CAPP-127 — the live context-meter bar: a slim, statically-visible segmented bar

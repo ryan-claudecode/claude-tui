@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react"
-import { formatCost, deriveNow, formatElapsed, type RailCost } from "../lib/agentRail"
+import { formatCost, deriveNow, formatElapsed, type RailCost } from "@ryanhartwig/claude-agent-kit/core"
 import {
   shouldPinToNewest,
   outputGlyph,
   outputRowAction,
   formatOutputTime,
-} from "../lib/agentRailOutputs"
+} from "@ryanhartwig/claude-agent-kit/core"
 import type { RailOutput } from "@ryanhartwig/claude-agent-kit/protocol"
 
 interface Props {

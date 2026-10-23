@@ -1,5 +1,22 @@
 {
   "electron/services/streamProtocol": "@ryanhartwig/claude-agent-kit/protocol",
   "electron/services/slashCommands": "@ryanhartwig/claude-agent-kit/protocol",
-  "electron/stt/protocol": "@ryanhartwig/claude-agent-kit/protocol"
+  "electron/stt/protocol": "@ryanhartwig/claude-agent-kit/protocol",
+  "electron/services/backgroundTasks": "@ryanhartwig/claude-agent-kit/core",
+  "electron/services/outputDerivation": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/agentTranscript": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/transcriptStore": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/transcriptWindow": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/smoothReveal": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/scrollStick": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/toolGroups": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/contextMeter": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/slashCatalog": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/micInteraction": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/agentRail": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/agentRailOutputs": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/questionSubmit": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/permissionView": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/insertAtCursor": "@ryanhartwig/claude-agent-kit/core",
+  "src/lib/dictationEsc": "@ryanhartwig/claude-agent-kit/core"
 }

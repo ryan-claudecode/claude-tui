@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { streamingCaretId } from "./AgentView"
-import type { TranscriptBlock } from "../lib/agentTranscript"
+import type { TranscriptBlock } from "@ryanhartwig/claude-agent-kit/core"
 
 /**
  * WS5 — the STREAMING CARET marks the live-typing position at the end of the

@@ -17,7 +17,7 @@ import { readTranscriptEvents } from "./transcriptHistory"
 // main build already imports from src/lib at runtime (electron/mcp/tools/panels.ts →
 // questionSubmit; transcriptHistory folds through agentTranscript), so this is an
 // established cross-boundary import, not a new one.
-import { extractCost, toPerTurnCost } from "../../src/lib/agentTranscript"
+import { extractCost, toPerTurnCost } from "@ryanhartwig/claude-agent-kit/core"
 import {
   HEADLESS_FLAGS,
   DEFAULT_MODEL,
@@ -45,7 +45,7 @@ import {
   suppressDerived,
   flushTurn,
   type TurnOutputBuffer,
-} from "./outputDerivation"
+} from "@ryanhartwig/claude-agent-kit/core"
 import {
   classifySlashInput,
   UI_SLASH_COMMAND_CHANNEL,

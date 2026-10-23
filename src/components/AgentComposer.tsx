@@ -7,7 +7,7 @@ import AgentModelPicker from "./AgentModelPicker"
 import AgentEffortPicker from "./AgentEffortPicker"
 import AgentUltracodeToggle from "./AgentUltracodeToggle"
 import { useDictation } from "../hooks/useDictation"
-import { spliceWithSpacing } from "../lib/insertAtCursor"
+import { spliceWithSpacing } from "@ryanhartwig/claude-agent-kit/core"
 import { formatElapsed } from "../lib/audioCapture"
 import {
   HOLD_THRESHOLD_MS,
@@ -15,8 +15,8 @@ import {
   micPointerUpAction,
   micPointerCancelAction,
   isDictationShortcut,
-} from "../lib/micInteraction"
-import { registerDictationEscHandler } from "../lib/dictationEsc"
+} from "@ryanhartwig/claude-agent-kit/core"
+import { registerDictationEscHandler } from "@ryanhartwig/claude-agent-kit/core"
 import { toast } from "../lib/toast"
 import type { SttProgress } from "@ryanhartwig/claude-agent-kit/protocol"
 
