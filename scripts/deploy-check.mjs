@@ -11,7 +11,7 @@ import { statSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 
 const EXE = "dist/win-unpacked/ClaudeTUI.exe"
-const SRC_DIRS = ["electron", "src"]
+const SRC_DIRS = ["electron", "src", "../claude-agent-kit/src"]
 const SRC_EXT = /\.(ts|tsx|js|jsx|css|html)$/
 const SKIP = new Set(["node_modules", "out", "dist", ".git"])
 

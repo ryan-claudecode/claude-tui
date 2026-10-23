@@ -89,6 +89,7 @@ Core facts every session needs:
 - **Panels are modal-by-default in the main window** (`ModalHost`), pop-out to the companion window; both render through the ONE shared `PanelContent` switch over the parity-gated `PanelApi`. Detail: `docs/reference/panels.md`.
 - **Durable knowledge is Claude-NATIVE** (CLAUDE.md / CLAUDE.local.md / auto-memory) — the app's parallel knowledge system was retrenched in R3a; the Context Inspector reads native context (READ-ONLY), R3b adds the edit surface. See `docs/roadmap/retrenchment-plan-2026-07.md`.
 - **MCP server:** HTTP/SSE on a random localhost port; spawned sessions auto-connect via `--mcp-config`; tools map 1:1 to service methods. **Keep `SERVER_INSTRUCTIONS` (`electron/mcp/server.ts`) in sync when adding tool groups.** Catalog: `docs/reference/mcp.md`.
+- **`@ryanhartwig/claude-agent-kit` (private, `C:\Users\ryguy\projects\claude-agent-kit`, sibling checkout, linked via `file:`):** the stream protocol (`/protocol`), the transcript model + agent lib set (`/core`), and `encodeProjectDir` (`/engine`) live THERE, not here. The app imports only those three entry points. The kit is bundled by electron-vite, so it is a devDependency and packaging is unchanged. **npm does NOT build a `file:` link** — `npm run build`/`dev`/`typecheck` run `kit:build` first; while editing the kit (or when using `dev:isolated`, which skips `kit:build`) run its `npm run dev` (tsc --watch). To move more modules use `node scripts/rewrite-kit-imports.mjs <map.json>` (see `scripts/kit-moves.phase1.json`). Design + remaining phases: `docs/superpowers/specs/2026-10-23-claude-agent-kit-extraction-design.md`.
 
 ## Key Files
 
@@ -116,6 +117,8 @@ Core facts every session needs:
 | `electron/mcp/tools.ts` | MCP tool definitions — calls services |
 | `electron/config.ts` | Loads `~/.claude-tui/config.json`, theme mode read/write |
 | `electron/workspace/discovery.ts` | Scans for workspace.json files |
+
+Stream protocol, slash routing, STT protocol types, and the transcript model: now in the kit (`@ryanhartwig/claude-agent-kit` `/protocol` + `/core`), not under `electron/` or `src/lib/`.
 
 Deep dives on every service (invariants, gotchas, design-doc links): `docs/reference/services.md`.
 
