@@ -27,6 +27,14 @@ ClaudeTUI itself becomes the first consumer. Copying the code out without migrat
 
 Architectural: new project + extraction from a working app. The library's one hard precondition, documented in its README: **Claude Code CLI installed and signed in** on the consuming machine. The engine spawns `claude -p` and never holds a token.
 
+## Downstream consumer: a multi-agent orchestrator
+
+The next app the owner plans is one where the user talks ONLY to an orchestrator agent, which spawns role-based agents (technical grounding, reviewer, QA, designer, architectural analysis, …). That app is out of scope here, but it is the reason the library exists, so it imposes three constraints on the engine and the React layer. None of them change behavior in ClaudeTUI.
+
+1. **N agents, no privileged terminal.** `HeadlessAgentEngine` keeps per-agent state keyed by id (busy, queue, pending permission, catalog) and has no concept of "the foreground terminal" or of a renderer. `emit` is just a sink; a consumer may route one agent's events into another agent's stdin instead of a UI. Today's `TerminalService` already works this way for N headless terminals; the extraction must not fold any single-terminal assumption back in.
+2. **Per-agent spawn options as an object, not positionals.** `engine.create(opts: SpawnAgentOptions)` where `SpawnAgentOptions = { name?, cwd?, sessionId?, resumeConversationId?, allowedTools?, model?, effort?, ultracode?, appendSystemPrompt?, extraArgs? }`. The first eight are today's `createHeadless` positionals. `appendSystemPrompt` maps to `--append-system-prompt` and `extraArgs` is passed through verbatim after the pinned flags; together they are what a role-based spawn needs and they cost nothing in ClaudeTUI (unused = flags omitted, spawn byte-identical). The `TerminalService` façade keeps its positional `createHeadless` signature and builds the object.
+3. **UI components take an agent id, never a global.** Every `./react` component already renders one terminal id and reads its transcript through the injected store, so the orchestrator app can mount one `AgentSurface` for the orchestrator and, optionally, read-only `AgentView`s for the role agents. The host-API slices are the full contract a non-Electron host (or an Electron host with a different preload) must satisfy.
+
 ## Survey findings that shaped the design
 
 | Area | State today | What it needs |
