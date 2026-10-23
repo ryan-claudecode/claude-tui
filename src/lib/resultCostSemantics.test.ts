@@ -7,7 +7,7 @@ import {
   type ResultCost,
   type TranscriptBlock,
 } from "./agentTranscript"
-import type { StreamEvent } from "../../electron/services/streamProtocol"
+import type { StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 import {
   P1_TURN1_RESULT_RAW,
   P1_TURN2_RESULT_RAW,

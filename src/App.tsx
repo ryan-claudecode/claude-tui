@@ -8,10 +8,10 @@ import type {
   StreamEvent,
   QueuedAgentInput,
   RailOutput,
-} from "../electron/services/streamProtocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 // CAPP-113 — the config-extensible model option derivation (pure, zero-dep) + the
 // built-in alias list, shared with the picker so the effective list can't drift.
-import { MODEL_ALIASES, resolveModelOptions } from "../electron/services/streamProtocol"
+import { MODEL_ALIASES, resolveModelOptions } from "@ryanhartwig/claude-agent-kit/protocol"
 // CAPP-120 (STT-1) — dictation status/progress/transcription contract (zero-dep types).
 import type { SttStatusSnapshot, SttProgress, SttTranscription } from "../electron/stt/protocol"
 import Sidebar from "./components/Sidebar"

@@ -23,7 +23,7 @@
  */
 
 import { logWarn } from "../log"
-import type { StreamEvent, McpServerStatus } from "./streamProtocol"
+import type { StreamEvent, McpServerStatus } from "@ryanhartwig/claude-agent-kit/protocol"
 import { backgroundStartId, isTaskNotification, taskNotificationIds } from "./backgroundTasks"
 
 /**

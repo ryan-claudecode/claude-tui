@@ -30,7 +30,7 @@
 import { readdirSync, readFileSync, existsSync } from "fs"
 import { join } from "path"
 import { encodeProjectDir } from "./terminals"
-import type { StreamEvent } from "./streamProtocol"
+import type { StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null

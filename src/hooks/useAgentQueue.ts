@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import type { QueuedAgentInput } from "../../electron/services/streamProtocol"
+import type { QueuedAgentInput } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * CAPP-130 — the composer's queued-message list for ONE structured terminal.

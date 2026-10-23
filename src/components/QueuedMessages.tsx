@@ -1,4 +1,4 @@
-import type { QueuedAgentInput } from "../../electron/services/streamProtocol"
+import type { QueuedAgentInput } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /** Max characters shown in a queued-message chip before an ellipsis. */
 const CHIP_PREVIEW_MAX = 48

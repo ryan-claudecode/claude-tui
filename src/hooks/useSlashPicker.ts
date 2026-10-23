@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import type { AgentCatalog } from "../../electron/services/streamProtocol"
+import type { AgentCatalog } from "@ryanhartwig/claude-agent-kit/protocol"
 import {
   buildPickerEntries,
   filterCatalogEntries,

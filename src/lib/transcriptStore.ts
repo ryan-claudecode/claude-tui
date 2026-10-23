@@ -18,7 +18,7 @@
  * Framework-free + dependency-free (only the pure `agentTranscript` reducer): unit-
  * testable without React or Electron, the same seam pattern as transcriptWindow.ts.
  */
-import type { StreamEvent } from "../../electron/services/streamProtocol"
+import type { StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 import {
   emptyTranscript,
   reduceTranscript,

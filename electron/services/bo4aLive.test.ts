@@ -26,7 +26,7 @@ import type { Server } from "http"
 import { TerminalService, type TerminalEvent } from "./terminals"
 import { AttentionService, type AttentionDeps } from "./attention"
 import { startMcpServer } from "../mcp/server"
-import { agentMessageFromInput, type StreamEvent } from "./streamProtocol"
+import { agentMessageFromInput, type StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 
 const LIVE = process.env.BO4A_LIVE === "1"
 

@@ -4,11 +4,11 @@
   "description": "Cross-platform terminal multiplexer for Claude Code sessions",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "tsc -b && electron-vite build && electron .",
+    "dev": "npm run kit:build && tsc -b && electron-vite build && electron .",
     "dev:watch": "electron-vite dev",
     "dev:isolated": "node scripts/dev-isolated.mjs",
-    "build": "tsc -b && electron-vite build",
-    "typecheck": "tsc -b",
+    "build": "npm run kit:build && tsc -b && electron-vite build",
+    "typecheck": "npm run kit:build && tsc -b",
     "start": "electron .",
     "package": "npm run build && electron-builder --win dir",
     "package:desktop": "npm run package && npm run deploy:desktop",
@@ -16,7 +16,8 @@
     "package:installer": "npm run build && electron-builder --win nsis",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "npm run build && playwright test"
+    "e2e": "npm run build && playwright test",
+    "kit:build": "npm --prefix ../claude-agent-kit run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -35,11 +36,12 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
+    "@ryanhartwig/claude-agent-kit": "file:../claude-agent-kit",
     "@types/diff": "^5.2.3",
-    "@types/tar-stream": "^3.1.4",
     "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",
     "@types/semver": "^7.7.1",
+    "@types/tar-stream": "^3.1.4",
     "@vitejs/plugin-react": "^6.0.2",
     "electron": "^42.3.3",
     "electron-builder": "^26.15.3",

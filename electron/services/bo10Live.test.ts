@@ -33,7 +33,7 @@ import { TerminalService, type TerminalEvent } from "./terminals"
 import { SessionService } from "./sessions"
 import { AttentionService, type AttentionDeps } from "./attention"
 import { startMcpServer } from "../mcp/server"
-import { agentMessageFromInput, type StreamEvent } from "./streamProtocol"
+import { agentMessageFromInput, type StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 
 const LIVE = process.env.BO10_LIVE === "1"
 

@@ -1,4 +1,4 @@
-import type { PermissionRequest, PermissionDecision } from "../../electron/services/streamProtocol"
+import type { PermissionRequest, PermissionDecision } from "@ryanhartwig/claude-agent-kit/protocol"
 import { describePermission } from "../lib/permissionView"
 
 interface Props {

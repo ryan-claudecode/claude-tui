@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import type {
   PermissionRequest,
   PermissionDecision,
-} from "../../electron/services/streamProtocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * BO-11 (CAPP-50) — pure: keep only requests whose terminal still exists in the live

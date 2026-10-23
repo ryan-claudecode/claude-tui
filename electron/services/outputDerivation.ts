@@ -12,7 +12,7 @@
  * `post_output` posts record a suppress key so a matching DERIVED draft is
  * dropped at flush — explicit beats derived (the agent's title wins).
  */
-import type { RailOutputDraft } from "./streamProtocol"
+import type { RailOutputDraft } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /** Deliverables, not a play-by-play — a turn's derived file/link drafts are capped. */
 export const MAX_FILES_PER_TURN = 10

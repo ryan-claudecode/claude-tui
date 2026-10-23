@@ -5,7 +5,7 @@ import {
   TERMINAL_STREAM_CHANNEL,
   type TerminalStreamPayload,
   type PermissionDecision,
-} from "../services/streamProtocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 
 export function registerTerminalHandlers(deps: {
   sessionService: TerminalService

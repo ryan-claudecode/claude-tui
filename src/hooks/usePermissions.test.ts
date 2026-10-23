@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { pruneOrphanedRequests } from "./usePermissions"
-import type { PermissionRequest } from "../../electron/services/streamProtocol"
+import type { PermissionRequest } from "@ryanhartwig/claude-agent-kit/protocol"
 
 // Pure logic test — no DOM/jsdom required. Locks in the BO-11 (CAPP-50) self-heal
 // that clears a permission card belonging to a terminal that no longer exists (the

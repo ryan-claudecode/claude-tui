@@ -2,7 +2,7 @@ import { join } from "node:path"
 import { homedir } from "node:os"
 import { readFileSync } from "node:fs"
 import { loadVersioned, saveVersioned, type Migration } from "./persist"
-import { DEFAULT_MODEL, MODEL_ALIASES } from "./services/streamProtocol"
+import { DEFAULT_MODEL, MODEL_ALIASES } from "@ryanhartwig/claude-agent-kit/protocol"
 import { tuiPath } from "./paths"
 
 export interface ThemeConfig {

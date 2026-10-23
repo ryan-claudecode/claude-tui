@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import type { StreamEvent } from "../../electron/services/streamProtocol"
+import type { StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 import {
   createTranscriptStore,
   mergeSeededHistory,

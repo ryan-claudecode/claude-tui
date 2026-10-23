@@ -3,7 +3,7 @@ import { z } from "zod"
 import type { SessionService } from "../../services/sessions"
 import type { PanelService } from "../../services/panels"
 import type { TerminalService } from "../../services/terminals"
-import type { RailOutputDraft } from "../../services/streamProtocol"
+import type { RailOutputDraft } from "@ryanhartwig/claude-agent-kit/protocol"
 import type { TerminalIdentity } from "./shared"
 
 export function registerWorkSessionTools(

@@ -4,7 +4,7 @@ import {
   classifySlashInput,
   NATIVE_SLASH_COMMANDS,
 } from "./slashCommands"
-import { agentMessageFromInput } from "./streamProtocol"
+import { agentMessageFromInput } from "@ryanhartwig/claude-agent-kit/protocol"
 
 describe("parseSlashCommand — the command token", () => {
   it("extracts the lowercased command name after a leading slash", () => {

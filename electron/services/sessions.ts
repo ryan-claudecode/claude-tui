@@ -12,7 +12,7 @@ import {
   type AgentCatalog,
   type RailOutput,
   type RailOutputDraft,
-} from "./streamProtocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 import {
   listFolderConversations as listFolderConversationsRaw,
   type FolderConversation,
@@ -322,13 +322,13 @@ export interface TerminalLike {
   /** CAPP-130 — the current queued-composer-input snapshot (empty when none). The
    *  respawn seam snapshots it BEFORE kill (kill drops the queue) so it can be carried
    *  onto the fresh id. Optional so test mocks that don't model queuing can omit it. */
-  getAgentQueue?(id: string): import("./streamProtocol").QueuedAgentInput[]
+  getAgentQueue?(id: string): import("@ryanhartwig/claude-agent-kit/protocol").QueuedAgentInput[]
   /** CAPP-130 — carry a terminal's queue across a respawn re-point onto the fresh id
    *  (queued messages survive interrupt/restart/switch/handoff). `carried` is an
    *  optional pre-kill snapshot for the kill-before-spawn seam. Optional for test mocks. */
-  transferAgentQueue?(oldId: string, newId: string, carried?: import("./streamProtocol").QueuedAgentInput[]): void
+  transferAgentQueue?(oldId: string, newId: string, carried?: import("@ryanhartwig/claude-agent-kit/protocol").QueuedAgentInput[]): void
   getOutput(id: string, maxChars?: number): string | null
-  onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo" | "renamed" | "stream" | "background" | "cost" | "output"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string; name?: string; event?: unknown; costUsd?: number; totalTokens?: number; outputs?: import("./streamProtocol").RailOutputDraft[] }) => void): () => void
+  onEvent(cb: (e: { type: "created" | "state" | "exit" | "convo" | "renamed" | "stream" | "background" | "cost" | "output"; id?: string; state?: "active" | "idle" | "dead"; info?: { id: string }; ccConversationId?: string; name?: string; event?: unknown; costUsd?: number; totalTokens?: number; outputs?: import("@ryanhartwig/claude-agent-kit/protocol").RailOutputDraft[] }) => void): () => void
 }
 
 interface MainWinLike {

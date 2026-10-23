@@ -10,7 +10,7 @@ import {
 // The canned fake reply (CAPP-119 review finding 4 — the e2e↔gate linking pin).
 // Import-safe from a src test: fakeStream's only ./terminals import is type-only.
 import { REPLY_TEXT } from "../../electron/services/fakeStream"
-import type { StreamEvent } from "../../electron/services/streamProtocol"
+import type { StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 import {
   foldTranscript,
   reduceTranscript,

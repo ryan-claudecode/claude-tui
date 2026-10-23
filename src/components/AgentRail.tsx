@@ -6,7 +6,7 @@ import {
   outputRowAction,
   formatOutputTime,
 } from "../lib/agentRailOutputs"
-import type { RailOutput } from "../../electron/services/streamProtocol"
+import type { RailOutput } from "@ryanhartwig/claude-agent-kit/protocol"
 
 interface Props {
   /** Effective open/collapsed (from useAgentRail → effectiveRailOpen). Open = full

@@ -10,7 +10,7 @@ import {
   type PermissionDecision,
   type QueuedAgentInput,
   type RailOutput,
-} from "./services/streamProtocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 import type { SttProgress } from "./stt/protocol"
 
 // CAPP-106 / S1 — capture the exposed object in a const so its INFERRED shape can be

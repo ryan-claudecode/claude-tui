@@ -19,7 +19,7 @@ import {
 import { AttentionService, type AttentionDeps } from "./attention"
 import type { PanelService } from "./panels"
 import type { NotificationService } from "./notifications"
-import { HEADLESS_FLAGS, DEFAULT_MODEL, EFFORT_LEVELS, ULTRACODE_SETTINGS, modelSupportsXhigh, PERMISSION_PROMPT_TOOL, userMessage, type StreamEvent } from "./streamProtocol"
+import { HEADLESS_FLAGS, DEFAULT_MODEL, EFFORT_LEVELS, ULTRACODE_SETTINGS, modelSupportsXhigh, PERMISSION_PROMPT_TOOL, userMessage, type StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 import * as fx from "./streamEvents.fixtures"
 
 // Keep the headless stderr warning out of the real log dir.

@@ -8,7 +8,7 @@
  * helpers (kind glyph, action label, compact time).
  */
 import { shouldStick, type ScrollMetrics } from "./scrollStick"
-import type { RailOutput } from "../../electron/services/streamProtocol"
+import type { RailOutput } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * Whether the OUTPUTS list should PIN to the newest entry (follow new content).

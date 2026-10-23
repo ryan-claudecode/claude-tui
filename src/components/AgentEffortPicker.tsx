@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react"
-import { EFFORT_LEVELS } from "../../electron/services/streamProtocol"
+import { EFFORT_LEVELS } from "@ryanhartwig/claude-agent-kit/protocol"
 
 interface Props {
   /** The work-session container the terminal belongs to (needed to respawn). */

@@ -7,7 +7,7 @@ import AgentComposer, {
   composerSubmitDisabled,
 } from "./AgentComposer"
 import QueuedMessages, { queuedChipPreview } from "./QueuedMessages"
-import type { QueuedAgentInput } from "../../electron/services/streamProtocol"
+import type { QueuedAgentInput } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * BO-10 — the composer must be HONEST about a busy agent. While the structured

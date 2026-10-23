@@ -10,7 +10,7 @@
  * single unified namespace, so the two arrays are merged and de-duplicated.
  */
 
-import type { AgentCatalog } from "../../electron/services/streamProtocol"
+import type { AgentCatalog } from "@ryanhartwig/claude-agent-kit/protocol"
 
 export interface CatalogEntry {
   /** The invokable name WITHOUT the leading slash (e.g. "clear", "chrome-live"). */

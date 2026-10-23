@@ -5,7 +5,7 @@ import {
   PERMISSION_TOOL_NAME,
   buildPermissionResult,
   type PermissionDecision,
-} from "../../services/streamProtocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 import type { TerminalIdentity } from "./shared"
 import type { NotificationLevel } from "../../services/notifications"
 

@@ -10,7 +10,7 @@ import {
   ModelCatalogService,
   type CatalogModel,
 } from "./modelCatalog"
-import { modelSupportsXhigh, resolveModelOptions, MODEL_ALIASES } from "./streamProtocol"
+import { modelSupportsXhigh, resolveModelOptions, MODEL_ALIASES } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /** A trimmed but SHAPE-FAITHFUL `GET /v1/models` payload (captured from a live call). */
 const PAYLOAD = {

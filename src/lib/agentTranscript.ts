@@ -20,7 +20,7 @@
  * any Electron/node runtime dependency.
  */
 
-import type { StreamEvent } from "../../electron/services/streamProtocol"
+import type { StreamEvent } from "@ryanhartwig/claude-agent-kit/protocol"
 
 export type ToolStatus = "running" | "done" | "error"
 

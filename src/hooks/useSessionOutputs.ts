@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import type { RailOutput } from "../../electron/services/streamProtocol"
+import type { RailOutput } from "@ryanhartwig/claude-agent-kit/protocol"
 
 /**
  * CAPP-132 — the Agent Rail OUTPUTS feed for ONE work session (the durable FIFO

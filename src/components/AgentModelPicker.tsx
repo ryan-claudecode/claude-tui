@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react"
-import { MODEL_ALIASES, DEFAULT_MODEL } from "../../electron/services/streamProtocol"
+import { MODEL_ALIASES, DEFAULT_MODEL } from "@ryanhartwig/claude-agent-kit/protocol"
 
 interface Props {
   /** The work-session container the terminal belongs to (needed to respawn). */

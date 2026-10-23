@@ -35,7 +35,7 @@ import {
   type PermissionRequest,
   type PermissionDecision,
   type RailOutputDraft,
-} from "./streamProtocol"
+} from "@ryanhartwig/claude-agent-kit/protocol"
 import {
   newTurnBuffer,
   addFileTouch,
